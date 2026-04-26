@@ -11,6 +11,7 @@ repository = "https://github.com/PIInuts/gaze-lens"
 async-trait = "0.1"
 gaze = { path = "../../../../Workspace/bets/Gaze/crates/gaze" }
 gaze-recognizers = { path = "../../../../Workspace/bets/Gaze/crates/gaze-recognizers" }
+rusqlite = "0.32"
 schemars = { version = "0.8", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -22,3 +23,6 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ulid = { version = "1", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
