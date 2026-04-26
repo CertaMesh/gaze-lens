@@ -33,9 +33,7 @@ pub enum SourceSpec {
     },
     SshLog {
         host: String,
-        path: PathBuf,
-        #[serde(default)]
-        ssh_host: Option<String>,
+        path: String,
     },
 }
 
@@ -182,12 +180,10 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
             SourceSpec::SshLog {
                 host: user_host,
                 path: user_path,
-                ssh_host: user_ssh_host,
             },
             SourceSpec::SshLog {
                 host: project_host,
                 path: project_path,
-                ssh_host: project_ssh_host,
             },
         ) => SourceSpec::SshLog {
             host: if user_host.is_empty() {
@@ -195,12 +191,11 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
             } else {
                 user_host.clone()
             },
-            path: if user_path.as_os_str().is_empty() {
+            path: if user_path.is_empty() {
                 project_path.clone()
             } else {
                 user_path.clone()
             },
-            ssh_host: user_ssh_host.clone().or_else(|| project_ssh_host.clone()),
         },
         (_, project) => project.clone(),
     }

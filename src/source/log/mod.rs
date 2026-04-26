@@ -1,1 +1,80 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
+use crate::errors::LensError;
+use crate::session::ToolCall;
+use crate::source::{Source, SourceOutput};
+
 pub mod ssh_log;
+
+use ssh_log::SshLogSource;
+
+pub struct SshLogSourceWrapper {
+    inner: Arc<SshLogSource>,
+}
+
+impl SshLogSourceWrapper {
+    pub fn new(inner: Arc<SshLogSource>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl Source for SshLogSourceWrapper {
+    async fn dispatch(&self, call: &ToolCall) -> Result<SourceOutput, LensError> {
+        match call.tool_name.as_str() {
+            "log_tail" => {
+                let args: LogTailArgs = serde_json::from_value(call.args.0.clone())
+                    .map_err(|err| source_error(self.inner.profile_name(), err.to_string()))?;
+                let lines = args.lines.unwrap_or(100);
+                self.inner
+                    .tail(lines)
+                    .await
+                    .map(|lines| SourceOutput::Text(lines.join("\n")))
+            }
+            "log_grep" => {
+                let args: LogGrepArgs =
+                    serde_json::from_value(call.args.0.clone()).map_err(|_| {
+                        source_error(
+                            self.inner.profile_name(),
+                            "invalid log_grep args".to_string(),
+                        )
+                    })?;
+                self.inner
+                    .grep(
+                        &args.pattern,
+                        args.level.as_deref(),
+                        args.limit.unwrap_or(100),
+                    )
+                    .await
+                    .map(|lines| SourceOutput::Text(lines.join("\n")))
+            }
+            other => Err(source_error(
+                self.inner.profile_name(),
+                format!("unsupported tool {other} on log source"),
+            )),
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LogTailArgs {
+    lines: Option<usize>,
+}
+
+#[derive(serde::Deserialize)]
+struct LogGrepArgs {
+    pattern: String,
+    level: Option<String>,
+    limit: Option<usize>,
+}
+
+fn source_error(profile_name: &str, detail: String) -> LensError {
+    LensError::SourceError {
+        source_name: profile_name.to_string(),
+        detail,
+        sql: None,
+        stderr: None,
+    }
+}

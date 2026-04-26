@@ -162,3 +162,60 @@ fn absent_files_load_empty_profiles() {
     .expect("profiles");
     assert!(profiles.is_empty());
 }
+
+#[test]
+fn ssh_log_profile_parses_host_and_exact_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "prod-log"
+            source = { kind = "ssh_log", host = "app-prod", path = "/var/log/app.log" }
+        "#,
+    );
+
+    let profile = load_profile("prod-log", Some(&project), None).expect("profile");
+
+    match profile.source {
+        SourceSpec::SshLog { host, path } => {
+            assert_eq!(host, "app-prod");
+            assert_eq!(path, "/var/log/app.log");
+        }
+        SourceSpec::Mysql { .. } => panic!("expected ssh_log"),
+    }
+}
+
+#[test]
+fn ssh_log_two_file_merge_user_transport_wins() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    let user = temp.path().join("user.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "prod-log"
+            source = { kind = "ssh_log", host = "project-host", path = "/var/log/project.log" }
+        "#,
+    );
+    write(
+        &user,
+        r#"
+            [[profiles]]
+            name = "prod-log"
+            source = { kind = "ssh_log", host = "user-host", path = "/var/log/user.log" }
+        "#,
+    );
+
+    let profile = load_profile("prod-log", Some(&project), Some(&user)).expect("profile");
+
+    match profile.source {
+        SourceSpec::SshLog { host, path } => {
+            assert_eq!(host, "user-host");
+            assert_eq!(path, "/var/log/user.log");
+        }
+        SourceSpec::Mysql { .. } => panic!("expected ssh_log"),
+    }
+}
