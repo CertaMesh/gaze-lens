@@ -25,21 +25,46 @@ Developer mid-incident. AI agent (Claude Code, Cursor, Codex, custom) running on
 - **`gaze-lens` owns connections + creds.** Reads from existing tooling (`.env`, Doppler, Vault, `~/.ssh/config`). Agent never sees raw connection strings.
 - **Powered by Gaze engine** (closed-source dependency) for pseudonymization, audit log, restore manifest.
 - **Pluggable spine** — source trait + frontend trait + shared session/manifest core. v1 fills DB+log sources behind an MCP frontend; v1.x adds new sources/frontends additively.
+- v1 manifest is a **gaze-lens-local SQLite manifest**, distinct from Gaze's metadata-only redaction log. Snapshot blobs (`gaze::SensitiveSnapshot`) are stored as out-of-row 0600 files referenced from the manifest. (D9)
 
 ### Key v1 design constraint
 
 Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets v1.x add a long-running daemon mode (for SDK push ingest) without rewriting session/audit/restore.
 
+## Threat model
+
+### In scope (gaze-lens defends against)
+
+- Raw production data reaching the LLM through any retrieval path. Mitigation: every retrieval routes through `gaze::Pipeline::redact` before manifest write or output return.
+- Misconfigured queries leaking data via SQL string-injection or vendor side effects. Mitigation: canned structured queries only at v1; no raw SQL string accepted.
+- Remote command injection through SSH log/tail tooling. Mitigation: validated host arguments (reject `-`-prefixed); fixed `ssh -- <host> -- tail -n N -- <quoted_path>` form; no shell-string interpolation.
+- Operator-error retrieval bypass. Mitigation: human CLI `query` uses the same audit/redaction path as MCP. (D4)
+- Schema-name leak (`customer_email_unhashed` etc.). Mitigation: tokenize column/table names with session-stable mapping + explicit allowlist policy. (D2)
+
+### Out of scope (operator responsibility)
+
+- **Laptop disk compromise.** Snapshot files contain raw token mappings; a laptop with unencrypted disk leaks them on physical theft. Operators MUST run FileVault (macOS) or LUKS (Linux) on the laptop running gaze-lens. v1 does not implement per-snapshot encryption-at-rest; this is a v1.x hardening tracked against gaze upstream feedback.
+- **Same-uid attacker after process compromise.** Snapshot files are 0600 in a 0700 directory; this protects against other-user attackers but not against root or same-uid compromise.
+- **SSH-side credential compromise.** gaze-lens reuses `~/.ssh/config` and the SSH agent; auth is the operator's responsibility.
+- **Database write privilege.** gaze-lens never writes; the DB user MUST be configured read-only at the database side.
+- **Backups.** Snapshot files are not auto-uploaded; operator is responsible for excluding `~/.gaze-lens/` from cloud backups if their threat model requires it.
+
+### v1 stop-gates
+
+(See ARCHITECTURE.md §Stop-gates for the implementer-facing list.)
+
 ## v1 sources (cut tight)
 
-1. **DB queries** — sqlx-backed (MySQL / Postgres / SQLite). Read-only (SELECT / EXPLAIN). MCP tools: `query`, `schema`, `list_tables`.
-2. **App logs** — plain file tail / grep over SSH. `gaze-lens` shells out to `ssh user@host tail -n 500 /var/log/app.log` (or `grep`), streams stdout, pseudonymizes per Gaze policy. MCP tools: `log_tail`, `log_grep`.
+1. **DB queries** — sqlx-backed (MySQL / Postgres / SQLite). Read-only. v1 query is a **canned structured shape** (`{table, columns?, where?, order_by?, limit?}`) compiled to safe parameterized SQL by gaze-lens. **No raw SQL strings in v1.** Raw SQL behind opt-in profile flag is a v1.x candidate. MCP tools: `query`, `schema`, `list_tables`. (D5, D1)
+2. **App logs** — plain file tail / grep over SSH. `gaze-lens` shells out to `ssh user@host tail -n 500 /var/log/app.log` (or `grep`), streams stdout, pseudonymizes per Gaze policy. Remote tail/grep is implemented as gaze-lens-local SSH command construction with strict shell-quoting and `--`-separated host arguments — not as a lift of debug-proxy code. (D16) MCP tools: `log_tail`, `log_grep`.
 
 ## Audit + restore
 
-- Every MCP call writes to a local SQLite manifest (Gaze audit schema v2).
-- Human-only `gaze-lens replay <session>` walks the log and restores tokens to real values for after-the-fact review.
-- No write path for the agent. Restore is operator-only, gated behind CLI invocation on the engineer's machine.
+- Every MCP and CLI retrieval call writes to a **gaze-lens-local SQLite manifest** (D9). Manifest schema is gaze-lens's own; it coexists with Gaze's metadata-only redaction log but is not the same data plane (per Codex r1 unique insight).
+- **Whole-session replay only at v1.** `gaze-lens replay <session_ulid>` walks the manifest call history and restores tokens via `gaze::Session::import(snapshot)`. Per-call replay is v1.x stop-gated on Gaze feedback for redaction-row correlation. (D8)
+- Default Gaze session scope is `Scope::Conversation(<lens_session_id>)`; gaze-lens rejects `Scope::Ephemeral` at session construction because `Session::export()` rejects it. (D10)
+- Tool args (SQL `where` AST, grep patterns, table/column names) are tokenized via the same `Pipeline::redact` path as result data **before** manifest write. Manifest never stores raw args. Raw args are reconstructable on operator replay via the session snapshot. (D7)
+- Schema metadata (table/column names) flows through Gaze with a `schema_metadata` source class. Default-deny posture; allowlist common safe names via `[schema] allow_columns = [...]`. Tokens are session-stable. (D2)
 
 ## Anti-features (locked)
 
@@ -48,6 +73,7 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 - Not a credential vault. Reuses existing secret tooling.
 - Not an ACL replacement. Assumes the DB user is already scoped read-only at the database level.
 - No mutations at v1.
+- No raw SQL queries at v1 — canned structured query shape only (D5).
 - No server-side install required at v1. Standard SSH + DB conn from laptop.
 
 ## v1.x roadmap (not v1)
@@ -77,16 +103,15 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 - **Wire-protocol proxy** (mysql_proxy / pgbouncer-style). Different product, different tech, not the moat.
 - **Server-side adapter inside `gaze-lens`.** This was the v1.x roadmap item before the 2026-04-26 product split — server-side is now its own future product, not a feature of `gaze-lens`.
 
-## Open questions
+## Locked decisions and v1.x candidates
 
-1. **Profile config shape.** Per-project file (`.gaze-lens.toml`, checked in, secrets via env) or per-user (`~/.gaze-lens/profiles.toml`) or both? Recommend: both, project file wins.
-2. **Schema introspection privacy.** Does `gaze-lens schema` itself need pseudonymization? Column names like `customer_email_unhashed` can leak business model intel.
-3. **Default Gaze policy.** Does `gaze-lens` ship with a sensible PII policy out of the box, or force adopters to author `policy.toml` before first use?
-4. **SSH access model.** Reuse `~/.ssh/config` + SSH agent (zero net-new) or own connection profile with explicit auth? Recommend: reuse SSH config.
-5. **DML path (v2).** When writes land — agents see-then-write tokens (auto-restore on write) or write tokens that get rejected by Gaze guardrails?
-6. **Pluggable transport API.** v1 ships laptop-only, but design needs an extension point for the future server-side companion product. Lock the trait shape now or defer?
-7. **Pricing / licensing model.** Defer-decided 2026-04-26. Build OSS-shaped, monetize later (likely paid hosted audit log + team features).
-8. **Reuse vs rewrite from `reference/debug-proxy/`.** `debug-proxy` has working MCP + sqlx + Gaze integration for MySQL. Mine specific pieces (MCP server scaffolding, sqlx + Gaze redaction loop) vs design fresh against the pluggable spine. Decide before v1 implementation kicks off.
+- Snapshot encryption-at-rest is deferred to v1.x. v1 mitigation is the disk-encryption prerequisite in the threat model above.
+- Per-call replay is deferred to v1.x and stop-gated on Gaze redaction-row correlation feedback.
+- Raw SQL mode is a v1.x candidate behind explicit opt-in controls; v1 accepts only canned structured queries. (D5)
+- Wider schema policy defaults remain ongoing as adopters report real schemas. (D2)
+- Default Gaze policy remains product work, but does not block PR1's spine/audit contract.
+- DML/write paths remain out of v1 and are future-product design work.
+- Pricing and licensing remain deferred.
 
 ## Provenance
 
@@ -94,3 +119,4 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 - Spec authored via `/interview-me` + `/grill-me` sessions 2026-04-26 with Krishan.
 - Renamed from "Glance" to `gaze-lens` 2026-04-26 after gaze-X family naming convention agreed with Markus.
 - Architectural decisions mirrored to MemPalace under `wing_architect` and `wing_glance` (legacy) / `wing_gaze-lens`.
+- Counselors r1 multi-voice review folded into plan rev 2 (scratchpad 488); decisions D1-D16 locked in scratchpad 477.
