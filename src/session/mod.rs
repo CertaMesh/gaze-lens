@@ -320,7 +320,7 @@ impl Session {
                     insert_capped_cell(
                         &mut out,
                         key,
-                        redacted.clone(),
+                        gaze_value_to_json(redacted.clone()),
                         &mut truncated_at,
                         self.inner.caps.cell_bytes,
                     )?;
@@ -483,6 +483,13 @@ fn lens_value_to_json(value: LensValue) -> Result<serde_json::Value, LensError> 
                 detail: err.to_string(),
             })
         }),
+    }
+}
+
+fn gaze_value_to_json(value: gaze::Value) -> serde_json::Value {
+    match value {
+        gaze::Value::String(value) => serde_json::Value::String(value),
+        gaze::Value::I64(value) => serde_json::json!(value),
     }
 }
 
