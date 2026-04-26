@@ -37,7 +37,7 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 
 - Raw production data reaching the LLM through any retrieval path. Mitigation: every retrieval routes through `gaze::Pipeline::redact` before manifest write or output return.
 - Misconfigured queries leaking data via SQL string-injection or vendor side effects. Mitigation: canned structured queries only at v1; no raw SQL string accepted.
-- Remote command injection through SSH log/tail tooling. Mitigation: validated host arguments (reject `-`-prefixed); fixed `ssh -- <host> -- tail -n N -- <quoted_path>` form; no shell-string interpolation.
+- Remote command injection through SSH log/tail tooling. Mitigation: validated host arguments (reject `-`-prefixed); fixed `ssh -- <host> tail -n N -- <quoted_path>` form (a second `--` between host and `tail` would be sent to the remote shell as a literal command and cause `--: command not found`); no shell-string interpolation.
 - Operator-error retrieval bypass. Mitigation: human CLI `query` uses the same audit/redaction path as MCP. (D4)
 - Schema-name leak (`customer_email_unhashed` etc.). Mitigation: tokenize column/table names with session-stable mapping + explicit allowlist policy. (D2)
 
