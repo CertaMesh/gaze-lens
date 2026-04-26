@@ -17,6 +17,32 @@ pub trait FakeSource: Send + Sync {
     async fn invoke(&self, args: &ToolArgs) -> Result<SourceOutput, LensError>;
 }
 
+#[derive(Debug, Clone)]
+pub struct InMemoryFakeSource {
+    output: SourceOutput,
+}
+
+impl InMemoryFakeSource {
+    pub fn rows(rows: Vec<LensRow>) -> Self {
+        Self {
+            output: SourceOutput::Rows(rows),
+        }
+    }
+
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            output: SourceOutput::Text(text.into()),
+        }
+    }
+}
+
+#[async_trait]
+impl FakeSource for InMemoryFakeSource {
+    async fn invoke(&self, _args: &ToolArgs) -> Result<SourceOutput, LensError> {
+        Ok(self.output.clone())
+    }
+}
+
 #[cfg(test)]
 pub mod test_support {
     use std::sync::{Arc, Mutex};
