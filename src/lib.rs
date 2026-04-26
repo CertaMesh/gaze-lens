@@ -1,4 +1,5 @@
 pub mod errors;
+pub mod frontend;
 pub mod policy;
 pub mod profile;
 pub mod session;

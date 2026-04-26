@@ -23,7 +23,7 @@ pub struct ColumnInfo {
     pub allowed: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, JsonSchema)]
 pub struct CannedQuery {
     pub table: String,
     pub columns: Option<Vec<String>>,
@@ -37,7 +37,7 @@ pub struct CannedQuery {
     pub limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, JsonSchema)]
 pub struct WhereClause {
     pub col: String,
     pub op: WhereOp,
@@ -45,7 +45,7 @@ pub struct WhereClause {
     pub val: Option<ScalarOrList>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, serde::Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WhereOp {
     Eq,
@@ -60,34 +60,34 @@ pub enum WhereOp {
     IsNotNull,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, serde::Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WhereCombinator {
     And,
     Or,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, JsonSchema)]
 pub struct OrderBy {
     pub col: String,
     pub dir: OrderDir,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, serde::Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderDir {
     Asc,
     Desc,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(untagged)]
 pub enum ScalarOrList {
     Scalar(ScalarValue),
     List(Vec<ScalarValue>),
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(untagged)]
 pub enum ScalarValue {
     String(String),
