@@ -39,6 +39,12 @@ pub enum LensError {
     ScopeRejected { scope: String },
     #[error("conversion failed: {0}")]
     ConvertError(#[from] LowerError),
+    #[error("profile environment variable missing: {env}")]
+    ProfileEnvMissing { env: String },
+    #[error("profile error: {detail}")]
+    Profile { detail: String },
+    #[error("feature deferred: {0}")]
+    FeatureDeferred(String),
     #[error("output truncated at {0:?}")]
     Truncated(TruncatedAt),
     #[error("internal error: {detail}")]
@@ -64,6 +70,11 @@ pub fn sanitize_error(err: &LensError) -> String {
             }
             LowerError::Unsupported(_) => "ConvertError: unsupported source type".to_string(),
         },
+        LensError::ProfileEnvMissing { env } => {
+            format!("ProfileEnvMissing: missing environment variable {env}")
+        }
+        LensError::Profile { .. } => "Profile: profile error".to_string(),
+        LensError::FeatureDeferred(feature) => format!("FeatureDeferred: {feature}"),
         LensError::Truncated(reason) => format!("Truncated: {reason:?}"),
         LensError::Internal { .. } => "Internal: internal error".to_string(),
     }
