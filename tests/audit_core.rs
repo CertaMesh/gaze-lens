@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use gaze_lens::errors::LensError;
 use gaze_lens::session::manifest::{ManifestStore, ManifestWriter, SnapshotRef};
 use gaze_lens::session::{
-    CleanOutput, OutputCaps, RedactedToolArgs, ResultSummary, Session, ToolCall,
+    CleanOutput, OutputCaps, RedactedToolArgs, ResultSummary, Session, ToolCall, TruncatedAt,
 };
 use gaze_lens::source::{FakeSource, SourceOutput, ToolArgs};
 use gaze_lens::value::{LensRow, LensValue};
@@ -98,6 +98,37 @@ impl FakeSource for RecordingSource {
         self.events.lock().expect("events").push("source");
         Ok(SourceOutput::Rows(self.rows.clone()))
     }
+}
+
+struct TextSource {
+    text: String,
+}
+
+#[async_trait]
+impl FakeSource for TextSource {
+    async fn invoke(&self, _args: &ToolArgs) -> Result<SourceOutput, LensError> {
+        Ok(SourceOutput::Text(self.text.clone()))
+    }
+}
+
+struct SlowSource;
+
+#[async_trait]
+impl FakeSource for SlowSource {
+    async fn invoke(&self, _args: &ToolArgs) -> Result<SourceOutput, LensError> {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        Ok(SourceOutput::Rows(vec![row_with_email(
+            "alice@example.com",
+        )]))
+    }
+}
+
+fn manifest_summary(path: &std::path::Path) -> serde_json::Value {
+    let summary: String = Connection::open(path)
+        .expect("manifest")
+        .query_row("SELECT result_summary FROM calls", [], |row| row.get(0))
+        .expect("summary");
+    serde_json::from_str(&summary).expect("summary json")
 }
 
 #[tokio::test]
@@ -292,16 +323,260 @@ async fn output_caps_truncate_rows_and_manifest_summary_records_it() {
     match result.clean {
         CleanOutput::Rows { rows, truncated_at } => {
             assert_eq!(rows.len(), 5);
-            assert_eq!(truncated_at.as_deref(), Some("rows"));
+            assert_eq!(truncated_at, vec![TruncatedAt::Rows]);
         }
-        CleanOutput::Text(_) => panic!("expected rows"),
+        CleanOutput::Text { .. } => panic!("expected rows"),
     }
 
-    let summary: String = Connection::open(&manifest_path)
+    let summary = manifest_summary(&manifest_path);
+    assert_eq!(summary["truncated_at"], serde_json::json!(["Rows"]));
+}
+
+#[tokio::test]
+async fn output_caps_truncate_total_bytes_and_manifest_summary_records_it() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest_path = temp.path().join("manifest.sqlite");
+    let snapshot_dir = temp.path().join("snapshots");
+    let manifest =
+        ManifestWriter::new(&manifest_path, ulid::Ulid::new(), "test-audit").expect("manifest");
+    let mut session = Session::new_with_manifest_for_tests(
+        &policy(gaze::SessionScope::Conversation),
+        Arc::new(manifest),
+        &snapshot_dir,
+        OutputCaps {
+            bytes: 100,
+            ..OutputCaps::default()
+        },
+    )
+    .expect("session");
+    let rows = (0..50)
+        .map(|index| {
+            BTreeMap::from([(
+                "value".to_string(),
+                LensValue::String(format!("abcdefghij{index}")),
+            )])
+        })
+        .collect::<Vec<_>>();
+    session.register_fake_source(
+        "fake",
+        Box::new(RecordingSource {
+            events: Arc::new(Mutex::new(Vec::new())),
+            rows,
+        }),
+    );
+
+    let result = session
+        .dispatch_tool(call(serde_json::json!({})))
+        .await
+        .expect("dispatch");
+
+    match result.clean {
+        CleanOutput::Rows { rows, truncated_at } => {
+            assert!(rows.len() < 50);
+            assert!(truncated_at.contains(&TruncatedAt::Bytes));
+        }
+        CleanOutput::Text { .. } => panic!("expected rows"),
+    }
+    let summary = manifest_summary(&manifest_path);
+    assert_eq!(summary["truncated_at"], serde_json::json!(["Bytes"]));
+}
+
+#[tokio::test]
+async fn output_caps_replace_large_cells_and_manifest_summary_records_it() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest_path = temp.path().join("manifest.sqlite");
+    let snapshot_dir = temp.path().join("snapshots");
+    let manifest =
+        ManifestWriter::new(&manifest_path, ulid::Ulid::new(), "test-audit").expect("manifest");
+    let mut session = Session::new_with_manifest_for_tests(
+        &policy(gaze::SessionScope::Conversation),
+        Arc::new(manifest),
+        &snapshot_dir,
+        OutputCaps {
+            cell_bytes: 20,
+            ..OutputCaps::default()
+        },
+    )
+    .expect("session");
+    session.register_fake_source(
+        "fake",
+        Box::new(RecordingSource {
+            events: Arc::new(Mutex::new(Vec::new())),
+            rows: vec![BTreeMap::from([(
+                "value".to_string(),
+                LensValue::String("x".repeat(200)),
+            )])],
+        }),
+    );
+
+    let result = session
+        .dispatch_tool(call(serde_json::json!({})))
+        .await
+        .expect("dispatch");
+
+    match result.clean {
+        CleanOutput::Rows { rows, truncated_at } => {
+            assert_eq!(rows[0]["value"], "<TRUNCATED:cell_bytes>");
+            assert!(truncated_at.contains(&TruncatedAt::CellBytes));
+        }
+        CleanOutput::Text { .. } => panic!("expected rows"),
+    }
+    let summary = manifest_summary(&manifest_path);
+    assert_eq!(summary["truncated_at"], serde_json::json!(["CellBytes"]));
+}
+
+#[tokio::test]
+async fn output_caps_truncate_text_lines_and_manifest_summary_records_it() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest_path = temp.path().join("manifest.sqlite");
+    let snapshot_dir = temp.path().join("snapshots");
+    let manifest =
+        ManifestWriter::new(&manifest_path, ulid::Ulid::new(), "test-audit").expect("manifest");
+    let mut session = Session::new_with_manifest_for_tests(
+        &policy(gaze::SessionScope::Conversation),
+        Arc::new(manifest),
+        &snapshot_dir,
+        OutputCaps {
+            line_bytes: 50,
+            ..OutputCaps::default()
+        },
+    )
+    .expect("session");
+    session.register_fake_source(
+        "fake",
+        Box::new(TextSource {
+            text: "x".repeat(500),
+        }),
+    );
+
+    let result = session
+        .dispatch_tool(call(serde_json::json!({})))
+        .await
+        .expect("dispatch");
+
+    match result.clean {
+        CleanOutput::Text { text, truncated_at } => {
+            assert_eq!(text.len(), 50);
+            assert!(truncated_at.contains(&TruncatedAt::LineBytes));
+        }
+        CleanOutput::Rows { .. } => panic!("expected text"),
+    }
+    let summary = manifest_summary(&manifest_path);
+    assert_eq!(summary["truncated_at"], serde_json::json!(["LineBytes"]));
+}
+
+#[tokio::test]
+async fn output_caps_timeout_records_manifest_without_raw_values() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest_path = temp.path().join("manifest.sqlite");
+    let snapshot_dir = temp.path().join("snapshots");
+    let manifest =
+        ManifestWriter::new(&manifest_path, ulid::Ulid::new(), "test-audit").expect("manifest");
+    let mut session = Session::new_with_manifest_for_tests(
+        &policy(gaze::SessionScope::Conversation),
+        Arc::new(manifest),
+        &snapshot_dir,
+        OutputCaps {
+            timeout: std::time::Duration::from_millis(100),
+            ..OutputCaps::default()
+        },
+    )
+    .expect("session");
+    session.register_fake_source("fake", Box::new(SlowSource));
+
+    let err = session
+        .dispatch_tool(call(serde_json::json!({"email": "arg@example.com"})))
+        .await
+        .expect_err("dispatch should timeout");
+
+    assert!(matches!(err, LensError::Truncated(TruncatedAt::Timeout)));
+    let summary = manifest_summary(&manifest_path);
+    assert_eq!(summary["truncated_at"], serde_json::json!(["Timeout"]));
+    let stored: String = Connection::open(&manifest_path)
         .expect("manifest")
-        .query_row("SELECT result_summary FROM calls", [], |row| row.get(0))
-        .expect("summary");
-    assert!(summary.contains("\"truncated_at\":\"rows\""));
+        .query_row(
+            "SELECT redacted_args_json || COALESCE(result_summary, '') FROM calls",
+            [],
+            |row| row.get(0),
+        )
+        .expect("stored");
+    assert!(!stored.contains("arg@example.com"));
+    assert!(!stored.contains("alice@example.com"));
+}
+
+#[tokio::test]
+async fn dispatch_with_nested_json_args_redacted() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest_path = temp.path().join("manifest.sqlite");
+    let snapshot_dir = temp.path().join("snapshots");
+    let mut session = Session::new(
+        &policy(gaze::SessionScope::Conversation),
+        &manifest_path,
+        &snapshot_dir,
+    )
+    .expect("session");
+    session.register_fake_source(
+        "fake",
+        Box::new(RecordingSource {
+            events: Arc::new(Mutex::new(Vec::new())),
+            rows: vec![row_with_email("bob@example.com")],
+        }),
+    );
+
+    session
+        .dispatch_tool(call(serde_json::json!({
+            "filter": { "email": "alice@example.com" }
+        })))
+        .await
+        .expect("dispatch");
+
+    let stored: String = Connection::open(&manifest_path)
+        .expect("manifest")
+        .query_row("SELECT redacted_args_json FROM calls", [], |row| row.get(0))
+        .expect("redacted args");
+    assert!(!stored.contains("alice@example.com"));
+    assert!(stored.contains("<"));
+    assert!(stored.contains(">"));
+}
+
+#[tokio::test]
+async fn dispatch_with_bytes_preserves_base64_metadata() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest_path = temp.path().join("manifest.sqlite");
+    let snapshot_dir = temp.path().join("snapshots");
+    let mut session = Session::new(
+        &policy(gaze::SessionScope::Conversation),
+        &manifest_path,
+        &snapshot_dir,
+    )
+    .expect("session");
+    session.register_fake_source(
+        "fake",
+        Box::new(RecordingSource {
+            events: Arc::new(Mutex::new(Vec::new())),
+            rows: vec![BTreeMap::from([(
+                "payload".to_string(),
+                LensValue::Bytes {
+                    base64: "aGVsbG8=".to_string(),
+                    len: 5,
+                },
+            )])],
+        }),
+    );
+
+    let result = session
+        .dispatch_tool(call(serde_json::json!({})))
+        .await
+        .expect("dispatch");
+
+    match result.clean {
+        CleanOutput::Rows { rows, .. } => {
+            assert_eq!(rows[0]["payload"]["type"], "bytes");
+            assert_eq!(rows[0]["payload"]["base64"], "aGVsbG8=");
+            assert_eq!(rows[0]["payload"]["len"], 5);
+        }
+        CleanOutput::Text { .. } => panic!("expected rows"),
+    }
 }
 
 #[cfg(unix)]

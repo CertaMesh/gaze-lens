@@ -1,4 +1,20 @@
+use gaze::{Action, ClassRule, DefaultRule};
 use gaze_lens::value::{LensValue, LowerError};
+use gaze_recognizers::RegexDetector;
+
+fn redaction_pipeline() -> gaze::Pipeline {
+    gaze::Pipeline::builder()
+        .detector(RegexDetector::emails().expect("email detector"))
+        .rule(ClassRule::new(gaze::PiiClass::Email, Action::Tokenize))
+        .rule(DefaultRule::new(Action::Preserve))
+        .build()
+        .expect("pipeline")
+}
+
+fn gaze_session() -> gaze::Session {
+    gaze::Session::new(gaze::Scope::Conversation(ulid::Ulid::new().to_string()))
+        .expect("gaze session")
+}
 
 fn all_variants() -> Vec<LensValue> {
     vec![
@@ -93,18 +109,6 @@ fn lowers_i64_for_redaction() {
 }
 
 #[test]
-fn rejects_bytes_until_v1_policy_exists() {
-    let err = LensValue::Bytes {
-        base64: "AQID".to_string(),
-        len: 3,
-    }
-    .lower_for_redaction()
-    .expect_err("bytes should be unsupported");
-
-    assert!(matches!(err, LowerError::Unsupported(_)));
-}
-
-#[test]
 fn rejects_corrupt_decimal_instead_of_silent_fallback() {
     let err = LensValue::Decimal {
         value: "not-a-number".to_string(),
@@ -121,4 +125,57 @@ fn rejects_corrupt_decimal_instead_of_silent_fallback() {
             ..
         }
     ));
+}
+
+#[test]
+fn nested_json_redaction_canary() {
+    let mut value = LensValue::Json(serde_json::json!({
+        "nested": "alice@example.com",
+        "level2": { "deep": "bob@example.com" }
+    }));
+    let session = gaze_session();
+    let pipeline = redaction_pipeline();
+
+    value.redact_with(&session, &pipeline).expect("redact");
+
+    let encoded = serde_json::to_string(&value).expect("serialize");
+    assert!(!encoded.contains("alice@example.com"));
+    assert!(!encoded.contains("bob@example.com"));
+    assert!(encoded.contains("<"));
+    assert!(encoded.contains(">"));
+}
+
+#[test]
+fn json_array_redaction_canary() {
+    let mut value = LensValue::Json(serde_json::json!([
+        "alice@example.com",
+        { "deep": "bob@example.com" }
+    ]));
+    let session = gaze_session();
+    let pipeline = redaction_pipeline();
+
+    value.redact_with(&session, &pipeline).expect("redact");
+
+    let encoded = serde_json::to_string(&value).expect("serialize");
+    assert!(!encoded.contains("alice@example.com"));
+    assert!(!encoded.contains("bob@example.com"));
+    assert!(encoded.contains("<"));
+    assert!(encoded.contains(">"));
+}
+
+#[test]
+fn bytes_passthrough() {
+    let mut value = LensValue::Bytes {
+        base64: "aGVsbG8=".to_string(),
+        len: 5,
+    };
+    assert!(value.lower_for_redaction().expect("lower").is_none());
+
+    let session = gaze_session();
+    let pipeline = redaction_pipeline();
+    value.redact_with(&session, &pipeline).expect("redact");
+
+    let encoded = serde_json::to_value(value).expect("serialize");
+    assert_eq!(encoded["Bytes"]["base64"], "aGVsbG8=");
+    assert_eq!(encoded["Bytes"]["len"], 5);
 }

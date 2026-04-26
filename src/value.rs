@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
+use gaze::{CleanDocument, RawDocument};
 use thiserror::Error;
+
+use crate::errors::LensError;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LensValue {
@@ -37,8 +40,8 @@ impl LensValue {
     ///
     /// String-like values lower to `gaze::Value::String`, `I64` lowers to
     /// `gaze::Value::I64`, and non-string typed values pass through unchanged
-    /// by returning `Ok(None)`. Decode failures and unsupported byte values are
-    /// explicit errors so upstream row conversion can reject the row.
+    /// by returning `Ok(None)`. Decode failures are explicit errors so upstream
+    /// row conversion can reject the row.
     pub fn lower_for_redaction(&self) -> Result<Option<gaze::Value>, LowerError> {
         match self {
             Self::Null
@@ -57,10 +60,68 @@ impl LensValue {
                 serde_json::Value::String(text) => Ok(Some(gaze::Value::String(text.clone()))),
                 _ => Ok(None),
             },
-            Self::Bytes { .. } => Err(LowerError::Unsupported(
-                "bytes require an explicit redaction policy in v1".to_string(),
-            )),
+            Self::Bytes { .. } => Ok(None),
         }
+    }
+
+    pub fn redact_with(
+        &mut self,
+        gaze_session: &gaze::Session,
+        pipeline: &gaze::Pipeline,
+    ) -> Result<(), LensError> {
+        match self {
+            Self::String(text) => {
+                *text = redact_text(gaze_session, pipeline, text.clone())?;
+                Ok(())
+            }
+            Self::Json(value) => redact_json_value(value, gaze_session, pipeline),
+            _ => {
+                self.lower_for_redaction()?;
+                Ok(())
+            }
+        }
+    }
+}
+
+fn redact_json_value(
+    value: &mut serde_json::Value,
+    gaze_session: &gaze::Session,
+    pipeline: &gaze::Pipeline,
+) -> Result<(), LensError> {
+    match value {
+        serde_json::Value::String(text) => {
+            *text = redact_text(gaze_session, pipeline, text.clone())?;
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                redact_json_value(value, gaze_session, pipeline)?;
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values_mut() {
+                redact_json_value(value, gaze_session, pipeline)?;
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
+    Ok(())
+}
+
+fn redact_text(
+    gaze_session: &gaze::Session,
+    pipeline: &gaze::Pipeline,
+    text: String,
+) -> Result<String, LensError> {
+    let clean = pipeline
+        .redact(gaze_session, RawDocument::Text(text))
+        .map_err(|err| LensError::RedactionFailed {
+            detail: err.to_string(),
+        })?;
+    match clean {
+        CleanDocument::Text(text) => Ok(text),
+        CleanDocument::Structured(_) => Err(LensError::RedactionFailed {
+            detail: "text value produced structured output".to_string(),
+        }),
     }
 }
 
@@ -237,13 +298,13 @@ mod tests {
     }
 
     #[test]
-    fn bytes_are_rejected_for_v1() {
-        let err = LensValue::Bytes {
+    fn bytes_pass_through_redaction_lowering() {
+        let lowered = LensValue::Bytes {
             base64: "AQID".to_string(),
             len: 3,
         }
         .lower_for_redaction()
-        .expect_err("bytes must fail");
-        assert!(matches!(err, LowerError::Unsupported(_)));
+        .expect("lower");
+        assert!(lowered.is_none());
     }
 }

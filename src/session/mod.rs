@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use gaze::{Action, ClassRule, CleanDocument, DefaultRule, RawDocument};
 use gaze_recognizers::RegexDetector;
 
 use crate::errors::LensError;
 use crate::source::{FakeSource, SourceOutput, ToolArgs};
-use crate::value::{LensRow, LowerError};
+use crate::value::{LensRow, LensValue, LowerError};
 
 pub mod manifest;
 pub mod restore;
@@ -51,16 +52,28 @@ pub struct ToolResult {
 pub enum CleanOutput {
     Rows {
         rows: Vec<serde_json::Map<String, serde_json::Value>>,
-        truncated_at: Option<String>,
+        truncated_at: Vec<TruncatedAt>,
     },
-    Text(String),
+    Text {
+        text: String,
+        truncated_at: Vec<TruncatedAt>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ResultSummary {
-    pub rows: usize,
-    pub bytes: usize,
-    pub truncated_at: Option<String>,
+    pub rows: u32,
+    pub bytes: u64,
+    pub truncated_at: Vec<TruncatedAt>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TruncatedAt {
+    Rows,
+    Bytes,
+    CellBytes,
+    LineBytes,
+    Timeout,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +82,7 @@ pub struct OutputCaps {
     pub bytes: usize,
     pub cell_bytes: usize,
     pub line_bytes: usize,
+    pub timeout: Duration,
 }
 
 impl Default for OutputCaps {
@@ -78,6 +92,7 @@ impl Default for OutputCaps {
             bytes: 1024 * 1024,
             cell_bytes: 32 * 1024,
             line_bytes: 8 * 1024,
+            timeout: Duration::from_secs(30),
         }
     }
 }
@@ -150,10 +165,29 @@ impl Session {
         let redacted_args = self.redact_args(&call.args)?;
         self.inner.manifest.begin_call(&call, &redacted_args)?;
 
-        let raw_result = self.invoke_source(&call).await.inspect_err(|err| {
-            let _ = self.inner.manifest.fail_call(&call.call_id, err);
-        })?;
-        let clean = self.redact_result(raw_result)?;
+        let raw_result =
+            match tokio::time::timeout(self.inner.caps.timeout, self.invoke_source(&call)).await {
+                Ok(result) => result.inspect_err(|err| {
+                    let _ = self.inner.manifest.fail_call(&call.call_id, err);
+                })?,
+                Err(_) => {
+                    let err = LensError::Truncated(TruncatedAt::Timeout);
+                    self.finish_truncated_call(&call.call_id, TruncatedAt::Timeout)?;
+                    return Err(err);
+                }
+            };
+        let clean = match tokio::time::timeout(self.inner.caps.timeout, async {
+            self.redact_result(raw_result)
+        })
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                let err = LensError::Truncated(TruncatedAt::Timeout);
+                self.finish_truncated_call(&call.call_id, TruncatedAt::Timeout)?;
+                return Err(err);
+            }
+        };
         let snapshot_ref = self.persist_snapshot()?;
         let summary = clean.summary();
         self.inner
@@ -217,11 +251,17 @@ impl Session {
     }
 
     fn redact_rows(&self, rows: Vec<LensRow>) -> Result<CleanOutput, LensError> {
-        let truncated_at = (rows.len() > self.inner.caps.rows).then(|| "rows".to_string());
+        let mut truncated_at = Vec::new();
+        if rows.len() > self.inner.caps.rows {
+            truncated_at.push(TruncatedAt::Rows);
+        }
         let mut clean_rows = Vec::new();
+        let mut total_bytes = 0usize;
         for row in rows.into_iter().take(self.inner.caps.rows) {
             let mut raw_fields = std::collections::BTreeMap::new();
-            for (key, value) in &row {
+            let mut redacted_row = row;
+            for (key, value) in &mut redacted_row {
+                value.redact_with(&self.inner.gaze_session, &self.inner.pipeline)?;
                 if let Some(lowered) = value.lower_for_redaction()? {
                     raw_fields.insert(key.clone(), lowered);
                 }
@@ -245,21 +285,39 @@ impl Session {
                 }
             };
             let mut out = serde_json::Map::new();
-            for (key, value) in row {
+            for (key, value) in redacted_row {
                 if let Some(redacted) = redacted_fields.get(&key) {
-                    out.insert(key, redacted.clone());
-                } else {
-                    out.insert(
+                    insert_capped_cell(
+                        &mut out,
                         key,
-                        serde_json::to_value(value).map_err(|err| {
-                            LensError::ConvertError(LowerError::Decode {
-                                kind: "json",
-                                detail: err.to_string(),
-                            })
-                        })?,
-                    );
+                        redacted.clone(),
+                        &mut truncated_at,
+                        self.inner.caps.cell_bytes,
+                    )?;
+                } else {
+                    let cell = lens_value_to_json(value)?;
+                    insert_capped_cell(
+                        &mut out,
+                        key,
+                        cell,
+                        &mut truncated_at,
+                        self.inner.caps.cell_bytes,
+                    )?;
                 }
             }
+            let row_bytes = serde_json::to_vec(&out)
+                .map_err(|err| {
+                    LensError::ConvertError(LowerError::Decode {
+                        kind: "json",
+                        detail: err.to_string(),
+                    })
+                })?
+                .len();
+            if total_bytes.saturating_add(row_bytes) > self.inner.caps.bytes {
+                push_truncation(&mut truncated_at, TruncatedAt::Bytes);
+                break;
+            }
+            total_bytes += row_bytes;
             clean_rows.push(out);
         }
         Ok(CleanOutput::Rows {
@@ -269,7 +327,11 @@ impl Session {
     }
 
     fn redact_text_output(&self, text: String) -> Result<CleanOutput, LensError> {
-        let capped = cap_string(text, self.inner.caps.line_bytes);
+        let mut truncated_at = Vec::new();
+        let (capped, truncated) = cap_string(text, self.inner.caps.line_bytes);
+        if truncated {
+            truncated_at.push(TruncatedAt::LineBytes);
+        }
         let clean = self
             .inner
             .pipeline
@@ -278,7 +340,7 @@ impl Session {
                 detail: err.to_string(),
             })?;
         match clean {
-            CleanDocument::Text(text) => Ok(CleanOutput::Text(text)),
+            CleanDocument::Text(text) => Ok(CleanOutput::Text { text, truncated_at }),
             CleanDocument::Structured(_) => Err(LensError::RedactionFailed {
                 detail: "text output produced structured output".to_string(),
             }),
@@ -291,6 +353,18 @@ impl Session {
             self.inner.lens_session_id,
             &self.inner.gaze_session,
         )
+    }
+
+    fn finish_truncated_call(&self, call_id: &str, reason: TruncatedAt) -> Result<(), LensError> {
+        let snapshot_ref = self.persist_snapshot()?;
+        let summary = ResultSummary {
+            rows: 0,
+            bytes: 0,
+            truncated_at: vec![reason],
+        };
+        self.inner
+            .manifest
+            .finish_call(call_id, &summary, &snapshot_ref)
     }
 
     #[doc(hidden)]
@@ -317,18 +391,68 @@ impl CleanOutput {
     pub fn summary(&self) -> ResultSummary {
         match self {
             CleanOutput::Rows { rows, truncated_at } => ResultSummary {
-                rows: rows.len(),
+                rows: rows.len().min(u32::MAX as usize) as u32,
                 bytes: serde_json::to_vec(rows)
                     .map(|bytes| bytes.len())
-                    .unwrap_or(0),
+                    .unwrap_or(0)
+                    .min(u64::MAX as usize) as u64,
                 truncated_at: truncated_at.clone(),
             },
-            CleanOutput::Text(text) => ResultSummary {
+            CleanOutput::Text { text, truncated_at } => ResultSummary {
                 rows: 0,
-                bytes: text.len(),
-                truncated_at: None,
+                bytes: text.len() as u64,
+                truncated_at: truncated_at.clone(),
             },
         }
+    }
+}
+
+fn insert_capped_cell(
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    key: String,
+    cell: serde_json::Value,
+    truncated_at: &mut Vec<TruncatedAt>,
+    max_bytes: usize,
+) -> Result<(), LensError> {
+    let cell_bytes = serde_json::to_vec(&cell)
+        .map_err(|err| {
+            LensError::ConvertError(LowerError::Decode {
+                kind: "json",
+                detail: err.to_string(),
+            })
+        })?
+        .len();
+    if cell_bytes > max_bytes {
+        push_truncation(truncated_at, TruncatedAt::CellBytes);
+        row.insert(
+            key,
+            serde_json::Value::String("<TRUNCATED:cell_bytes>".to_string()),
+        );
+    } else {
+        row.insert(key, cell);
+    }
+    Ok(())
+}
+
+fn push_truncation(truncated_at: &mut Vec<TruncatedAt>, reason: TruncatedAt) {
+    if !truncated_at.contains(&reason) {
+        truncated_at.push(reason);
+    }
+}
+
+fn lens_value_to_json(value: LensValue) -> Result<serde_json::Value, LensError> {
+    match value {
+        LensValue::Bytes { base64, len } => Ok(serde_json::json!({
+            "type": "bytes",
+            "base64": base64,
+            "len": len,
+        })),
+        value => serde_json::to_value(value).map_err(|err| {
+            LensError::ConvertError(LowerError::Decode {
+                kind: "json",
+                detail: err.to_string(),
+            })
+        }),
     }
 }
 
@@ -371,15 +495,15 @@ fn persist_snapshot(
     Ok(SnapshotRef { path })
 }
 
-fn cap_string(value: String, max_bytes: usize) -> String {
+fn cap_string(value: String, max_bytes: usize) -> (String, bool) {
     if value.len() <= max_bytes {
-        return value;
+        return (value, false);
     }
     let mut end = max_bytes;
     while !value.is_char_boundary(end) {
         end -= 1;
     }
-    value[..end].to_string()
+    (value[..end].to_string(), true)
 }
 
 #[cfg(unix)]

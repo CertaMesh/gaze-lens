@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::session::TruncatedAt;
 use crate::value::LowerError;
 
 #[derive(Debug, Error)]
@@ -38,6 +39,8 @@ pub enum LensError {
     ScopeRejected { scope: String },
     #[error("conversion failed: {0}")]
     ConvertError(#[from] LowerError),
+    #[error("output truncated at {0:?}")]
+    Truncated(TruncatedAt),
     #[error("internal error: {detail}")]
     Internal { detail: String },
 }
@@ -61,6 +64,7 @@ pub fn sanitize_error(err: &LensError) -> String {
             }
             LowerError::Unsupported(_) => "ConvertError: unsupported source type".to_string(),
         },
+        LensError::Truncated(reason) => format!("Truncated: {reason:?}"),
         LensError::Internal { .. } => "Internal: internal error".to_string(),
     }
 }

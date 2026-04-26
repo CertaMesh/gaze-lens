@@ -209,6 +209,7 @@ pub fn initialize_schema(conn: &Connection) -> rusqlite::Result<()> {
             started_at_ms INTEGER NOT NULL,
             finished_at_ms INTEGER
         );
+        PRAGMA user_version = 2;
         "#,
     )
 }
