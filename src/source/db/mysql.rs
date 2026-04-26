@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
+use time::format_description::well_known::Rfc3339;
+use time::{Date, OffsetDateTime, PrimitiveDateTime, Time};
 
 use crate::errors::LensError;
 use crate::profile::{Profile, SourceSpec};
@@ -252,8 +254,19 @@ fn decode_value(row: &MySqlRow, index: usize, ty: &str) -> Result<LensValue, Len
                 len: bytes.len(),
             })
             .map_err(|err| decode_error(ty, err)),
-        "DATE" | "DATETIME" | "TIMESTAMP" => row
-            .try_get::<String, _>(index)
+        "DATE" => row
+            .try_get::<Date, _>(index)
+            .and_then(|value| format_date(value).map_err(sqlx::Error::Decode))
+            .map(LensValue::DateTime)
+            .map_err(|err| decode_error(ty, err)),
+        "DATETIME" => row
+            .try_get::<PrimitiveDateTime, _>(index)
+            .and_then(|value| format_primitive_datetime(value).map_err(sqlx::Error::Decode))
+            .map(LensValue::DateTime)
+            .map_err(|err| decode_error(ty, err)),
+        "TIMESTAMP" => row
+            .try_get::<OffsetDateTime, _>(index)
+            .and_then(|value| format_offset_datetime(value).map_err(sqlx::Error::Decode))
             .map(LensValue::DateTime)
             .map_err(|err| decode_error(ty, err)),
         "JSON" => row
@@ -319,4 +332,44 @@ fn base64_encode(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+fn format_date(value: Date) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    format_offset_datetime(value.with_time(Time::MIDNIGHT).assume_utc())
+}
+
+fn format_primitive_datetime(
+    value: PrimitiveDateTime,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    format_offset_datetime(value.assume_utc())
+}
+
+fn format_offset_datetime(
+    value: OffsetDateTime,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    Ok(value.format(&Rfc3339)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use time::{Date, Month, PrimitiveDateTime, Time};
+
+    #[test]
+    fn date_formats_as_midnight_utc_rfc3339() {
+        let date = Date::from_calendar_date(2026, Month::April, 26).expect("date");
+        assert_eq!(
+            super::format_date(date).expect("format"),
+            "2026-04-26T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn datetime_formats_as_utc_rfc3339() {
+        let date = Date::from_calendar_date(2026, Month::April, 26).expect("date");
+        let time = Time::from_hms(22, 30, 15).expect("time");
+        assert_eq!(
+            super::format_primitive_datetime(PrimitiveDateTime::new(date, time)).expect("format"),
+            "2026-04-26T22:30:15Z"
+        );
+    }
 }
