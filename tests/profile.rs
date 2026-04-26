@@ -49,7 +49,7 @@ fn two_file_merge_with_pii_policy_collision_project_wins() {
             assert_eq!(username, "project_user");
             assert_eq!(password_env, "PROJECT_DB_PASSWORD");
         }
-        SourceSpec::SshLog { .. } => panic!("expected mysql"),
+        _ => panic!("expected mysql"),
     }
 }
 
@@ -96,7 +96,7 @@ fn two_file_merge_with_transport_collision_user_wins() {
             assert_eq!(username, "project_user");
             assert_eq!(password_env, "PROJECT_DB_PASSWORD");
         }
-        SourceSpec::SshLog { .. } => panic!("expected mysql"),
+        _ => panic!("expected mysql"),
     }
 }
 
@@ -183,7 +183,73 @@ fn ssh_log_profile_parses_host_and_exact_path() {
             assert_eq!(host, "app-prod");
             assert_eq!(path, "/var/log/app.log");
         }
-        SourceSpec::Mysql { .. } => panic!("expected ssh_log"),
+        _ => panic!("expected ssh_log"),
+    }
+}
+
+#[test]
+fn postgres_profile_parses_database_connection_fields() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "prod-pg"
+            source = { kind = "postgres", host = "pg-prod", port = 5432, database = "app", username = "app_user", password_env = "PG_PASSWORD", ssh_host = "bastion", local_port = 15432 }
+        "#,
+    );
+
+    let profile = load_profile("prod-pg", Some(&project), None).expect("profile");
+
+    match profile.source {
+        SourceSpec::Postgres {
+            host,
+            port,
+            database,
+            username,
+            password_env,
+            ssh_host,
+            local_port,
+            readonly_required,
+        } => {
+            assert_eq!(host, "pg-prod");
+            assert_eq!(port, 5432);
+            assert_eq!(database, "app");
+            assert_eq!(username, "app_user");
+            assert_eq!(password_env, "PG_PASSWORD");
+            assert_eq!(ssh_host.as_deref(), Some("bastion"));
+            assert_eq!(local_port, Some(15432));
+            assert!(readonly_required);
+        }
+        _ => panic!("expected postgres"),
+    }
+}
+
+#[test]
+fn sqlite_profile_parses_path_and_readonly_default() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "prod-sqlite"
+            source = { kind = "sqlite", path = "/srv/app/prod.sqlite" }
+        "#,
+    );
+
+    let profile = load_profile("prod-sqlite", Some(&project), None).expect("profile");
+
+    match profile.source {
+        SourceSpec::Sqlite {
+            path,
+            readonly_required,
+        } => {
+            assert_eq!(path, std::path::PathBuf::from("/srv/app/prod.sqlite"));
+            assert!(readonly_required);
+        }
+        _ => panic!("expected sqlite"),
     }
 }
 
@@ -216,6 +282,6 @@ fn ssh_log_two_file_merge_user_transport_wins() {
             assert_eq!(host, "user-host");
             assert_eq!(path, "/var/log/user.log");
         }
-        SourceSpec::Mysql { .. } => panic!("expected ssh_log"),
+        _ => panic!("expected ssh_log"),
     }
 }

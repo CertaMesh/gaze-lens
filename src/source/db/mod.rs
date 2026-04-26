@@ -8,11 +8,15 @@ pub mod query;
 pub use query::{ColumnInfo, TableSchema};
 
 pub mod mysql;
+pub mod postgres;
 pub mod schema;
+pub mod sqlite;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbKind {
     Mysql,
+    Postgres,
+    Sqlite,
 }
 
 #[async_trait]

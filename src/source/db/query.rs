@@ -104,6 +104,13 @@ pub struct CompiledQuery {
     pub binds: Vec<QueryValue>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    Mysql,
+    Postgres,
+    Sqlite,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryValue {
     String(String),
@@ -144,6 +151,14 @@ pub enum QueryError {
 
 impl CannedQuery {
     pub fn compile_to_sql(&self, table_schema: &TableSchema) -> Result<CompiledQuery, QueryError> {
+        self.compile_to_sql_for(table_schema, Dialect::Mysql)
+    }
+
+    pub fn compile_to_sql_for(
+        &self,
+        table_schema: &TableSchema,
+        dialect: Dialect,
+    ) -> Result<CompiledQuery, QueryError> {
         if self.table != table_schema.table {
             return Err(QueryError::TableMismatch {
                 query_table: self.table.clone(),
@@ -170,16 +185,17 @@ impl CannedQuery {
         } else {
             selected_columns
                 .iter()
-                .map(|column| escape_ident(column))
+                .map(|column| escape_ident(column, dialect))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
 
         let mut sql = format!(
             "SELECT {select_list} FROM {}",
-            escape_ident(&table_schema.table)
+            escape_ident(&table_schema.table, dialect)
         );
         let mut binds = Vec::new();
+        let mut placeholders = PlaceholderState::new(dialect);
 
         if let Some(where_clauses) = &self.r#where
             && !where_clauses.is_empty()
@@ -191,7 +207,13 @@ impl CannedQuery {
             let mut parts = Vec::with_capacity(where_clauses.len());
             for clause in where_clauses {
                 let column = validate_column(&clause.col, table_schema)?;
-                parts.push(compile_where_clause(clause, column, &mut binds)?);
+                parts.push(compile_where_clause(
+                    clause,
+                    column,
+                    &mut binds,
+                    &mut placeholders,
+                    dialect,
+                )?);
             }
             sql.push_str(" WHERE ");
             sql.push_str(&parts.join(combinator));
@@ -207,7 +229,7 @@ impl CannedQuery {
                     OrderDir::Asc => "ASC",
                     OrderDir::Desc => "DESC",
                 };
-                parts.push(format!("{} {dir}", escape_ident(&order.col)));
+                parts.push(format!("{} {dir}", escape_ident(&order.col, dialect)));
             }
             sql.push_str(" ORDER BY ");
             sql.push_str(&parts.join(", "));
@@ -215,7 +237,8 @@ impl CannedQuery {
 
         let hard_cap = table_schema.limit_cap.unwrap_or(u32::MAX);
         let limit = self.limit.unwrap_or(hard_cap).min(hard_cap);
-        sql.push_str(" LIMIT ?");
+        sql.push_str(" LIMIT ");
+        sql.push_str(&placeholders.next());
         binds.push(QueryValue::U64(limit as u64));
 
         Ok(CompiledQuery { sql, binds })
@@ -226,6 +249,8 @@ fn compile_where_clause(
     clause: &WhereClause,
     column: &ColumnInfo,
     binds: &mut Vec<QueryValue>,
+    placeholders: &mut PlaceholderState,
+    dialect: Dialect,
 ) -> Result<String, QueryError> {
     if !operator_matches_type(clause.op, &column.data_type) {
         return Err(QueryError::OperatorTypeMismatch {
@@ -235,7 +260,7 @@ fn compile_where_clause(
         });
     }
 
-    let ident = escape_ident(&clause.col);
+    let ident = escape_ident(&clause.col, dialect);
     match clause.op {
         WhereOp::IsNull | WhereOp::IsNotNull => {
             if clause.val.is_some() {
@@ -264,12 +289,11 @@ fn compile_where_clause(
             for value in values {
                 binds.push(query_value(value, clause.op)?);
             }
-            Ok(format!(
-                "{ident} IN ({})",
-                std::iter::repeat_n("?", values.len())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
+            let placeholders = (0..values.len())
+                .map(|_| placeholders.next())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{ident} IN ({placeholders})",))
         }
         WhereOp::Eq
         | WhereOp::Ne
@@ -286,7 +310,11 @@ fn compile_where_clause(
                 None => return Err(QueryError::OperatorRequiresValue(clause.op)),
             };
             binds.push(query_value(value, clause.op)?);
-            Ok(format!("{ident} {} ?", sql_operator(clause.op)))
+            Ok(format!(
+                "{ident} {} {}",
+                sql_operator(clause.op),
+                placeholders.next()
+            ))
         }
     }
 }
@@ -358,8 +386,36 @@ fn is_string_family(data_type: &str) -> bool {
     )
 }
 
-fn escape_ident(ident: &str) -> String {
-    format!("`{}`", ident.replace('`', "``"))
+fn escape_ident(ident: &str, dialect: Dialect) -> String {
+    match dialect {
+        Dialect::Mysql | Dialect::Sqlite => format!("`{}`", ident.replace('`', "``")),
+        Dialect::Postgres => format!("\"{}\"", ident.replace('"', "\"\"")),
+    }
+}
+
+struct PlaceholderState {
+    dialect: Dialect,
+    next_index: usize,
+}
+
+impl PlaceholderState {
+    fn new(dialect: Dialect) -> Self {
+        Self {
+            dialect,
+            next_index: 1,
+        }
+    }
+
+    fn next(&mut self) -> String {
+        match self.dialect {
+            Dialect::Mysql | Dialect::Sqlite => "?".to_string(),
+            Dialect::Postgres => {
+                let placeholder = format!("${}", self.next_index);
+                self.next_index += 1;
+                placeholder
+            }
+        }
+    }
 }
 
 fn default_column_allowed() -> bool {
