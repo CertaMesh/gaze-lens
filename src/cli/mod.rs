@@ -1,0 +1,45 @@
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+
+use crate::errors::LensError;
+
+pub mod serve;
+
+#[derive(Debug, Parser)]
+#[command(name = "gaze-lens")]
+pub struct Cli {
+    #[arg(long, env = "GAZE_LENS_PROJECT_CONFIG")]
+    pub project_config: Option<PathBuf>,
+    #[arg(long, env = "GAZE_LENS_USER_CONFIG")]
+    pub user_config: Option<PathBuf>,
+    #[arg(long)]
+    pub log: Option<String>,
+    #[command(subcommand)]
+    pub cmd: Cmd,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Cmd {
+    Serve(serve::ServeArgs),
+}
+
+pub fn run(cli: Cli) -> Result<(), LensError> {
+    if let Some(log) = &cli.log {
+        unsafe {
+            std::env::set_var("RUST_LOG", log);
+        }
+    }
+    match cli.cmd {
+        Cmd::Serve(args) => {
+            let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
+                detail: err.to_string(),
+            })?;
+            runtime.block_on(serve::run(
+                args,
+                cli.project_config.as_deref(),
+                cli.user_config.as_deref(),
+            ))
+        }
+    }
+}

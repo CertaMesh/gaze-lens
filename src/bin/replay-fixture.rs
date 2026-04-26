@@ -26,7 +26,7 @@ fn main() {
 fn seed() -> Result<(), String> {
     let manifest = required_path("--manifest")?;
     let snapshot_dir = required_path("--snapshot-dir")?;
-    let mut session =
+    let session =
         Session::new(&policy(), &manifest, &snapshot_dir).map_err(|err| err.to_string())?;
     session.register_fake_source("fake", Box::new(CanarySource));
     let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;

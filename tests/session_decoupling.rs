@@ -50,7 +50,7 @@ impl FakeSource for DirectSource {
 async fn session_constructs_and_dispatches_without_frontend() {
     let temp = tempfile::tempdir().expect("tempdir");
     let calls = Arc::new(Mutex::new(0));
-    let mut session = Session::new(
+    let session = Session::new(
         &policy(),
         &temp.path().join("manifest.sqlite"),
         &temp.path().join("snapshots"),
@@ -79,7 +79,7 @@ async fn session_constructs_and_dispatches_without_frontend() {
 async fn dropping_frontend_handle_does_not_drop_session_state() {
     let temp = tempfile::tempdir().expect("tempdir");
     let calls = Arc::new(Mutex::new(0));
-    let mut session = Session::new(
+    let session = Session::new(
         &policy(),
         &temp.path().join("manifest.sqlite"),
         &temp.path().join("snapshots"),

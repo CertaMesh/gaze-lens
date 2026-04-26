@@ -7,7 +7,9 @@ use gaze::{Action, ClassRule, CleanDocument, DefaultRule, RawDocument};
 use gaze_recognizers::RegexDetector;
 
 use crate::errors::LensError;
-use crate::source::{FakeSource, SourceOutput, ToolArgs};
+use crate::source::db::TableSchema;
+use crate::source::db::schema::SchemaTokenizer;
+use crate::source::{FakeSource, FakeSourceAdapter, Source, SourceOutput, ToolArgs};
 use crate::value::{LensRow, LensValue, LowerError};
 
 pub mod manifest;
@@ -26,7 +28,8 @@ struct SessionInner {
     pipeline: Arc<gaze::Pipeline>,
     manifest: Arc<dyn ManifestStore>,
     snapshot_dir: PathBuf,
-    sources: Mutex<HashMap<String, Arc<dyn FakeSource>>>,
+    sources: Mutex<HashMap<String, Arc<dyn Source>>>,
+    schema_tokenizer: SchemaTokenizer,
     caps: OutputCaps,
 }
 
@@ -103,6 +106,15 @@ impl Session {
         manifest_path: &Path,
         snapshot_dir: &Path,
     ) -> Result<Self, LensError> {
+        Self::new_with_pipeline(policy, default_pipeline()?, manifest_path, snapshot_dir)
+    }
+
+    pub fn new_with_pipeline(
+        policy: &gaze::Policy,
+        pipeline: gaze::Pipeline,
+        manifest_path: &Path,
+        snapshot_dir: &Path,
+    ) -> Result<Self, LensError> {
         let lens_session_id = ulid::Ulid::new();
         let gaze_session = Self::build_gaze_session(&lens_session_id, policy)?;
         let manifest = ManifestWriter::new(
@@ -113,7 +125,7 @@ impl Session {
         Ok(Self::from_parts(
             lens_session_id,
             gaze_session,
-            default_pipeline()?,
+            pipeline,
             Arc::new(manifest),
             snapshot_dir.to_path_buf(),
             OutputCaps::default(),
@@ -140,6 +152,7 @@ impl Session {
                 manifest,
                 snapshot_dir,
                 sources: Mutex::new(HashMap::new()),
+                schema_tokenizer: SchemaTokenizer::default(),
                 caps,
             }),
         }
@@ -199,12 +212,40 @@ impl Session {
         })
     }
 
-    pub fn register_fake_source(&mut self, name: &str, source: Box<dyn FakeSource>) {
+    pub fn register_source(&self, name: impl Into<String>, source: Arc<dyn Source>) {
         self.inner
             .sources
             .lock()
             .expect("source map lock")
-            .insert(name.to_string(), Arc::from(source));
+            .insert(name.into(), source);
+    }
+
+    pub fn register_fake_source(&self, name: &str, source: Box<dyn FakeSource>) {
+        self.inner
+            .sources
+            .lock()
+            .expect("source map lock")
+            .insert(name.to_string(), Arc::new(FakeSourceAdapter::new(source)));
+    }
+
+    pub fn tokenize_schema_metadata(
+        &self,
+        schema: &TableSchema,
+        profile_allowlist: Option<&[String]>,
+    ) -> TableSchema {
+        self.inner
+            .schema_tokenizer
+            .tokenize_table_schema(schema, profile_allowlist)
+    }
+
+    pub fn tokenize_table_names(
+        &self,
+        tables: &[String],
+        profile_allowlist: Option<&[String]>,
+    ) -> Vec<String> {
+        self.inner
+            .schema_tokenizer
+            .tokenize_table_names(tables, profile_allowlist)
     }
 
     fn redact_args(&self, args: &ToolArgs) -> Result<RedactedToolArgs, LensError> {
@@ -227,6 +268,12 @@ impl Session {
     }
 
     async fn invoke_source(&self, call: &ToolCall) -> Result<SourceOutput, LensError> {
+        if matches!(call.tool_name.as_str(), "log_tail" | "log_grep") {
+            return Err(LensError::FeatureDeferred(format!(
+                "{} in PR2b",
+                call.tool_name
+            )));
+        }
         let source = self
             .inner
             .sources
@@ -236,11 +283,11 @@ impl Session {
             .cloned()
             .ok_or_else(|| LensError::SourceError {
                 source_name: call.tool_name.clone(),
-                detail: "unknown fake source".to_string(),
+                detail: "unknown source".to_string(),
                 sql: None,
                 stderr: None,
             })?;
-        source.invoke(&call.args).await
+        source.dispatch(call).await
     }
 
     fn redact_result(&self, output: SourceOutput) -> Result<CleanOutput, LensError> {

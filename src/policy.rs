@@ -9,6 +9,8 @@ use gaze_recognizers::{NerDetector, NerOptions, RegexDetector};
 use serde::Deserialize;
 use thiserror::Error;
 
+pub const SCHEMA_METADATA_SOURCE_CLASS: &str = "schema_metadata";
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyFile {
     #[serde(default)]
@@ -105,6 +107,8 @@ pub enum PolicyError {
     InvalidSessionScope(String),
     #[error("pipeline build failed: {0}")]
     Pipeline(#[from] gaze::Error),
+    #[error("recognizer build failed: {0}")]
+    Recognizer(String),
 }
 
 impl PolicyFile {
@@ -138,7 +142,8 @@ impl PolicyFile {
 }
 
 pub fn build_pipeline(policy: &PolicyFile) -> Result<Pipeline, PolicyError> {
-    let mut builder = Pipeline::builder().detector(RegexDetector::emails()?);
+    let mut builder = Pipeline::builder()
+        .detector(RegexDetector::emails().map_err(|err| PolicyError::Recognizer(err.to_string()))?);
 
     if let Some(model_dir) = &policy.ner.model_dir {
         let detector = NerDetector::load_with_options(
@@ -166,11 +171,14 @@ pub fn build_pipeline(policy: &PolicyFile) -> Result<Pipeline, PolicyError> {
 
     if let Some(logs) = &policy.policy.logs {
         for (index, pattern) in logs.strip_patterns.iter().enumerate() {
-            builder = builder.detector(RegexDetector::with_source(
-                pattern,
-                PiiClass::custom("log_strip"),
-                &format!("log-strip-{index}"),
-            )?);
+            builder = builder.detector(
+                RegexDetector::with_source(
+                    pattern,
+                    PiiClass::custom("log_strip"),
+                    &format!("log-strip-{index}"),
+                )
+                .map_err(|err| PolicyError::Recognizer(err.to_string()))?,
+            );
         }
     }
 
