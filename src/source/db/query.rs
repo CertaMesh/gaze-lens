@@ -181,36 +181,36 @@ impl CannedQuery {
         );
         let mut binds = Vec::new();
 
-        if let Some(where_clauses) = &self.r#where {
-            if !where_clauses.is_empty() {
-                let combinator = match self.where_combinator.unwrap_or(WhereCombinator::And) {
-                    WhereCombinator::And => " AND ",
-                    WhereCombinator::Or => " OR ",
-                };
-                let mut parts = Vec::with_capacity(where_clauses.len());
-                for clause in where_clauses {
-                    let column = validate_column(&clause.col, table_schema)?;
-                    parts.push(compile_where_clause(clause, column, &mut binds)?);
-                }
-                sql.push_str(" WHERE ");
-                sql.push_str(&parts.join(combinator));
+        if let Some(where_clauses) = &self.r#where
+            && !where_clauses.is_empty()
+        {
+            let combinator = match self.where_combinator.unwrap_or(WhereCombinator::And) {
+                WhereCombinator::And => " AND ",
+                WhereCombinator::Or => " OR ",
+            };
+            let mut parts = Vec::with_capacity(where_clauses.len());
+            for clause in where_clauses {
+                let column = validate_column(&clause.col, table_schema)?;
+                parts.push(compile_where_clause(clause, column, &mut binds)?);
             }
+            sql.push_str(" WHERE ");
+            sql.push_str(&parts.join(combinator));
         }
 
-        if let Some(order_by) = &self.order_by {
-            if !order_by.is_empty() {
-                let mut parts = Vec::with_capacity(order_by.len());
-                for order in order_by {
-                    validate_column(&order.col, table_schema)?;
-                    let dir = match order.dir {
-                        OrderDir::Asc => "ASC",
-                        OrderDir::Desc => "DESC",
-                    };
-                    parts.push(format!("{} {dir}", escape_ident(&order.col)));
-                }
-                sql.push_str(" ORDER BY ");
-                sql.push_str(&parts.join(", "));
+        if let Some(order_by) = &self.order_by
+            && !order_by.is_empty()
+        {
+            let mut parts = Vec::with_capacity(order_by.len());
+            for order in order_by {
+                validate_column(&order.col, table_schema)?;
+                let dir = match order.dir {
+                    OrderDir::Asc => "ASC",
+                    OrderDir::Desc => "DESC",
+                };
+                parts.push(format!("{} {dir}", escape_ident(&order.col)));
             }
+            sql.push_str(" ORDER BY ");
+            sql.push_str(&parts.join(", "));
         }
 
         let hard_cap = table_schema.limit_cap.unwrap_or(u32::MAX);
