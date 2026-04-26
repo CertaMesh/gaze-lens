@@ -7,6 +7,8 @@ pub mod query;
 
 pub use query::{ColumnInfo, TableSchema};
 
+pub mod mysql;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbKind {
     Mysql,

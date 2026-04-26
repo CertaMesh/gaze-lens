@@ -33,3 +33,7 @@ Exceptions:
 ## Public-surface expansion rule
 
 The 5 SPEC v1 MCP tools (`query`, `schema`, `list_tables`, `log_tail`, `log_grep`) are the locked public surface. Adding a 6th requires a SPEC amendment PR, not an impl PR. Internal helper methods are fine; do not wire them through `frontend::mcp::McpFrontend` without SPEC.
+
+## MySQL integration tests
+
+The standard `cargo test --all-targets` run must not require Docker or a local database. MySQL end-to-end tests belong behind the opt-in `integration-mysql` feature and should be run explicitly in environments that provide a MySQL testcontainer or compatible local service.
