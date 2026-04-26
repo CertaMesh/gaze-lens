@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use crate::errors::LensError;
 use crate::value::LensRow;
 
+pub mod db;
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolArgs(pub serde_json::Value);
 
