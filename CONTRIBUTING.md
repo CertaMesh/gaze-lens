@@ -1,0 +1,35 @@
+# Contributing to gaze-lens
+
+## Dev workflow
+
+1. Anvil worktree per feature: `anvil create gaze-lens/<topic> --base main`.
+2. PR-based; no direct-on-main.
+3. `[agent]` prefix on every commit.
+4. Test suite green before each commit; fix-and-commit-separately on failure.
+5. Stage specific files by name; never `git add -A`.
+
+## sqlx macro policy (banned for production-source queries)
+
+**Do not use `sqlx::query!`, `sqlx::query_as!`, or any compile-time query macro for production-source adapters** (MySQL, Postgres, SQLite reading from operator profiles).
+
+Reasons:
+- Each backend's offline metadata cache is per-DB-version per-CI-pipeline; cost scales with the matrix.
+- Reference adapter at `reference/debug-proxy/src/adapter/mysql.rs:51,114,125,143` already uses dynamic `sqlx::query`/`query_as`; that pattern is the production path.
+
+Exceptions:
+- Internal manifest schema queries against gaze-lens's own SQLite may use compile-time macros, since the DB schema is owned and stable.
+
+## PR review routing
+
+(Per orchestrator-mode skill.)
+
+| PR class | Reviewer |
+|---|---|
+| Code (small-medium scope) | Codex |
+| Spec/prose-heavy code | Claude |
+| Docs-only (`*.md`) | None — orchestrator squash-merges after sanity read |
+| High-stakes (release / security / multi-module) | Dual: Claude + Codex |
+
+## Public-surface expansion rule
+
+The 5 SPEC v1 MCP tools (`query`, `schema`, `list_tables`, `log_tail`, `log_grep`) are the locked public surface. Adding a 6th requires a SPEC amendment PR, not an impl PR. Internal helper methods are fine; do not wire them through `frontend::mcp::McpFrontend` without SPEC.
