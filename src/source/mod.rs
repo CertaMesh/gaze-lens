@@ -7,6 +7,7 @@ use crate::source::db::{DbSource, query::CannedQuery};
 use crate::value::LensRow;
 
 pub mod db;
+pub mod log;
 pub mod ssh_tunnel;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

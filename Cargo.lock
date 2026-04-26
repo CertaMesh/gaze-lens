@@ -865,6 +865,7 @@ dependencies = [
  "clap",
  "gaze",
  "gaze-recognizers",
+ "regex",
  "rmcp",
  "rusqlite",
  "schemars",
