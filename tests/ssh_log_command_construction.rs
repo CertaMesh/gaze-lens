@@ -93,7 +93,10 @@ fn test_remote_command_starts_with_tail_keyword() {
     let argv = tail_argv("ok-host", "/var/log/x.log", 100);
     // After ssh's "--" + host, the next argv element is the remote command's program name.
     // Must be "tail", not "--" (which would make the remote shell execute `--`).
-    let host_idx = argv.iter().position(|arg| arg == "ok-host").expect("host in argv");
+    let host_idx = argv
+        .iter()
+        .position(|arg| arg == "ok-host")
+        .expect("host in argv");
     assert_eq!(
         argv[host_idx + 1],
         "tail",

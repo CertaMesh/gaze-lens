@@ -31,7 +31,10 @@ impl Source for SshLogSourceWrapper {
                 self.inner
                     .tail(lines)
                     .await
-                    .map(|lines| SourceOutput::Text(lines.join("\n")))
+                    .map(|output| SourceOutput::TextWithTruncation {
+                        text: output.lines.join("\n"),
+                        truncated_at: output.truncated_at,
+                    })
             }
             "log_grep" => {
                 let args: LogGrepArgs =
@@ -48,7 +51,10 @@ impl Source for SshLogSourceWrapper {
                         args.limit.unwrap_or(100),
                     )
                     .await
-                    .map(|lines| SourceOutput::Text(lines.join("\n")))
+                    .map(|output| SourceOutput::TextWithTruncation {
+                        text: output.lines.join("\n"),
+                        truncated_at: output.truncated_at,
+                    })
             }
             other => Err(source_error(
                 self.inner.profile_name(),

@@ -29,6 +29,12 @@ pub struct SshLogSource {
     timeout: Duration,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SshLogOutput {
+    pub lines: Vec<String>,
+    pub truncated_at: Vec<TruncatedAt>,
+}
+
 impl SshLogSource {
     pub fn new(
         profile_name: impl Into<String>,
@@ -61,7 +67,7 @@ impl SshLogSource {
         tail_argv(&self.host, &self.path, lines)
     }
 
-    pub async fn tail(&self, lines: usize) -> Result<Vec<String>, LensError> {
+    pub async fn tail(&self, lines: usize) -> Result<SshLogOutput, LensError> {
         let argv = self.tail_argv(lines);
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..]);
@@ -107,8 +113,20 @@ impl SshLogSource {
             ));
         }
 
-        stdout.truncate(self.max_total_bytes);
-        Ok(split_and_cap_lines(&stdout, self.max_line_bytes))
+        let mut truncated_at = Vec::new();
+        if stdout.len() > self.max_total_bytes {
+            truncated_at.push(TruncatedAt::Bytes);
+            stdout.truncate(self.max_total_bytes);
+        }
+        let (lines, line_truncated) =
+            split_and_cap_lines_with_truncation(&stdout, self.max_line_bytes);
+        if line_truncated {
+            truncated_at.push(TruncatedAt::LineBytes);
+        }
+        Ok(SshLogOutput {
+            lines,
+            truncated_at,
+        })
     }
 
     pub async fn grep(
@@ -116,7 +134,7 @@ impl SshLogSource {
         pattern: &str,
         level: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<String>, LensError> {
+    ) -> Result<SshLogOutput, LensError> {
         let re = regex::Regex::new(pattern).map_err(|_| LensError::SourceError {
             source_name: self.profile_name.clone(),
             detail: "invalid log grep regex".to_string(),
@@ -132,14 +150,19 @@ impl SshLogSource {
                 sql: None,
                 stderr: None,
             })?;
-        let lines = self.tail(BOUNDED_TAIL_FOR_GREP).await?;
-        Ok(lines
+        let output = self.tail(BOUNDED_TAIL_FOR_GREP).await?;
+        let lines = output
+            .lines
             .into_iter()
             .filter(|line| {
                 re.is_match(line) && level_re.as_ref().is_none_or(|level| level.is_match(line))
             })
             .take(limit)
-            .collect())
+            .collect();
+        Ok(SshLogOutput {
+            lines,
+            truncated_at: output.truncated_at,
+        })
     }
 }
 
@@ -157,13 +180,24 @@ pub fn tail_argv(host: &str, path: &str, lines: usize) -> Vec<String> {
 }
 
 pub fn split_and_cap_lines(raw: &[u8], max_line_bytes: usize) -> Vec<String> {
-    raw.split(|byte| *byte == b'\n')
+    split_and_cap_lines_with_truncation(raw, max_line_bytes).0
+}
+
+pub fn split_and_cap_lines_with_truncation(
+    raw: &[u8],
+    max_line_bytes: usize,
+) -> (Vec<String>, bool) {
+    let mut truncated = false;
+    let lines = raw
+        .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
         .map(|line| {
+            truncated |= line.len() > max_line_bytes;
             let end = line.len().min(max_line_bytes);
             String::from_utf8_lossy(&line[..end]).into_owned()
         })
-        .collect()
+        .collect::<Vec<_>>();
+    (lines, truncated)
 }
 
 async fn read_capped<R>(reader: R, max_bytes: usize) -> Result<Vec<u8>, std::io::Error>

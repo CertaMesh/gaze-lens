@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::errors::LensError;
-use crate::session::ToolCall;
+use crate::session::{ToolCall, TruncatedAt};
 use crate::source::db::schema::SchemaTokenizer;
 use crate::source::db::{DbSource, query::CannedQuery};
 use crate::value::LensRow;
@@ -17,6 +17,10 @@ pub struct ToolArgs(pub serde_json::Value);
 pub enum SourceOutput {
     Rows(Vec<LensRow>),
     Text(String),
+    TextWithTruncation {
+        text: String,
+        truncated_at: Vec<TruncatedAt>,
+    },
 }
 
 #[async_trait]
