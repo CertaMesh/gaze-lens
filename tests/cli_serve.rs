@@ -1,7 +1,30 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use async_trait::async_trait;
 use clap::Parser;
-use gaze_lens::cli::serve::{ServeArgs, run};
+use gaze_lens::cli::serve::{ServeArgs, run, run_frontend_until_shutdown};
 use gaze_lens::cli::{Cli, Cmd};
 use gaze_lens::errors::LensError;
+use gaze_lens::frontend::{Frontend, FrontendError, ShutdownToken};
+use gaze_lens::session::Session;
+
+struct ShutdownObservingFrontend {
+    observed: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Frontend for ShutdownObservingFrontend {
+    async fn serve(
+        self,
+        _session: Arc<Session>,
+        shutdown: ShutdownToken,
+    ) -> Result<(), FrontendError> {
+        shutdown.cancelled().await;
+        self.observed.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
 
 #[test]
 fn test_serve_is_the_only_subcommand() {
@@ -78,62 +101,47 @@ readonly_required = true
     assert!(matches!(err, LensError::ProfileEnvMissing { env } if env == missing_env));
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn test_serve_shutdown_clean() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let project_config = temp.path().join("project.toml");
-    std::fs::write(
-        &project_config,
-        r#"
-[[profiles]]
-name = "logs"
-
-[profiles.source]
-kind = "ssh_log"
-host = "example.test"
-path = "/var/log/app.log"
-"#,
+    let session = Arc::new(
+        Session::new(
+            &policy(),
+            &temp.path().join("manifest-token.sqlite"),
+            &temp.path().join("snapshots-token"),
+        )
+        .expect("session"),
+    );
+    let observed = Arc::new(AtomicBool::new(false));
+    run_frontend_until_shutdown(
+        ShutdownObservingFrontend {
+            observed: observed.clone(),
+        },
+        session,
+        async {},
     )
-    .expect("write profile");
+    .await
+    .expect("shutdown path");
+    assert!(
+        observed.load(Ordering::SeqCst),
+        "shutdown signal path did not cancel token"
+    );
+}
 
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_gaze-lens"))
-        .arg("--project-config")
-        .arg(&project_config)
-        .arg("--user-config")
-        .arg(temp.path().join("missing-user.toml"))
-        .arg("serve")
-        .arg("--profile")
-        .arg("logs")
-        .arg("--manifest")
-        .arg(temp.path().join("manifest.sqlite"))
-        .arg("--snapshot-dir")
-        .arg(temp.path().join("snapshots"))
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn serve");
-
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-    let kill_status = std::process::Command::new("kill")
-        .arg("-TERM")
-        .arg(child.id().to_string())
-        .status()
-        .expect("send sigterm");
-    assert!(kill_status.success(), "kill failed with {kill_status}");
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("try_wait") {
-            break status;
-        }
-        if std::time::Instant::now() > deadline {
-            let _ = child.kill();
-            panic!("serve did not exit after SIGTERM");
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    };
-
-    assert!(status.success(), "serve exited with {status}");
+fn policy() -> gaze::Policy {
+    gaze::Policy {
+        session: gaze::SessionPolicy {
+            scope: gaze::SessionScope::Conversation,
+            ttl_secs: None,
+        },
+        detectors: Vec::new(),
+        dictionaries: Vec::new(),
+        rules: Vec::new(),
+        ner: None,
+        rulepacks: gaze::RulepackPolicy {
+            bundled: vec!["core".to_string()],
+            paths: Vec::new(),
+        },
+        locale: None,
+    }
 }
