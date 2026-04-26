@@ -143,6 +143,8 @@ fn nested_json_redaction_canary() {
     assert!(!encoded.contains("bob@example.com"));
     assert!(encoded.contains("<"));
     assert!(encoded.contains(">"));
+    let structured = serde_json::to_value(&value).expect("structured json");
+    assert!(structured["Json"]["level2"].is_object());
 }
 
 #[test]
@@ -161,6 +163,8 @@ fn json_array_redaction_canary() {
     assert!(!encoded.contains("bob@example.com"));
     assert!(encoded.contains("<"));
     assert!(encoded.contains(">"));
+    let structured = serde_json::to_value(&value).expect("structured json");
+    assert!(structured["Json"].is_array());
 }
 
 #[test]
