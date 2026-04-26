@@ -4,6 +4,7 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TableSchema {
+    #[serde(skip)]
     pub table: String,
     pub table_token: String,
     pub columns: Vec<ColumnInfo>,
@@ -13,6 +14,7 @@ pub struct TableSchema {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ColumnInfo {
+    #[serde(skip)]
     pub name: String,
     pub name_token: String,
     pub data_type: String,

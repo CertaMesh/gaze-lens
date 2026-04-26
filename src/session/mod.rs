@@ -7,6 +7,8 @@ use gaze::{Action, ClassRule, CleanDocument, DefaultRule, RawDocument};
 use gaze_recognizers::RegexDetector;
 
 use crate::errors::LensError;
+use crate::source::db::TableSchema;
+use crate::source::db::schema::SchemaTokenizer;
 use crate::source::{FakeSource, SourceOutput, ToolArgs};
 use crate::value::{LensRow, LensValue, LowerError};
 
@@ -27,6 +29,7 @@ struct SessionInner {
     manifest: Arc<dyn ManifestStore>,
     snapshot_dir: PathBuf,
     sources: Mutex<HashMap<String, Arc<dyn FakeSource>>>,
+    schema_tokenizer: SchemaTokenizer,
     caps: OutputCaps,
 }
 
@@ -140,6 +143,7 @@ impl Session {
                 manifest,
                 snapshot_dir,
                 sources: Mutex::new(HashMap::new()),
+                schema_tokenizer: SchemaTokenizer::default(),
                 caps,
             }),
         }
@@ -205,6 +209,26 @@ impl Session {
             .lock()
             .expect("source map lock")
             .insert(name.to_string(), Arc::from(source));
+    }
+
+    pub fn tokenize_schema_metadata(
+        &self,
+        schema: &TableSchema,
+        profile_allowlist: Option<&[String]>,
+    ) -> TableSchema {
+        self.inner
+            .schema_tokenizer
+            .tokenize_table_schema(schema, profile_allowlist)
+    }
+
+    pub fn tokenize_table_names(
+        &self,
+        tables: &[String],
+        profile_allowlist: Option<&[String]>,
+    ) -> Vec<String> {
+        self.inner
+            .schema_tokenizer
+            .tokenize_table_names(tables, profile_allowlist)
     }
 
     fn redact_args(&self, args: &ToolArgs) -> Result<RedactedToolArgs, LensError> {
