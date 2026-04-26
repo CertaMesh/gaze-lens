@@ -268,12 +268,6 @@ impl Session {
     }
 
     async fn invoke_source(&self, call: &ToolCall) -> Result<SourceOutput, LensError> {
-        if matches!(call.tool_name.as_str(), "log_tail" | "log_grep") {
-            return Err(LensError::FeatureDeferred(format!(
-                "{} in PR2b",
-                call.tool_name
-            )));
-        }
         let source = self
             .inner
             .sources

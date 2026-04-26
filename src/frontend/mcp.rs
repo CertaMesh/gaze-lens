@@ -39,6 +39,8 @@ pub struct LogTailArgs {
 pub struct LogGrepArgs {
     pub pattern: String,
     #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
     pub limit: Option<u32>,
 }
 
@@ -98,7 +100,7 @@ impl McpFrontend {
             .await
     }
 
-    #[tool(name = "log_tail", description = "Deferred until PR2b.")]
+    #[tool(name = "log_tail", description = "Tail a configured SSH log source.")]
     async fn log_tail(
         &self,
         Parameters(args): Parameters<LogTailArgs>,
@@ -107,7 +109,7 @@ impl McpFrontend {
             .await
     }
 
-    #[tool(name = "log_grep", description = "Deferred until PR2b.")]
+    #[tool(name = "log_grep", description = "Search a configured SSH log source.")]
     async fn log_grep(
         &self,
         Parameters(args): Parameters<LogGrepArgs>,

@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use gaze_lens::frontend::mcp::McpFrontend;
 use gaze_lens::session::manifest::{ManifestStore, SnapshotRef};
 use gaze_lens::session::{OutputCaps, RedactedToolArgs, ResultSummary, Session, ToolCall};
-use gaze_lens::source::InMemoryFakeSource;
+use gaze_lens::source::{FakeSource, InMemoryFakeSource, SourceOutput, ToolArgs};
 use gaze_lens::value::LensValue;
 
 fn policy() -> gaze::Policy {
@@ -51,20 +52,59 @@ fn test_public_tool_set() {
 }
 
 #[tokio::test]
-async fn test_log_tail_stub_returns_deferred() {
+async fn test_log_tail_and_grep_dispatch_through_source() {
     let manifest = Arc::new(RecordingManifest::default());
-    let session = Arc::new(session_with_manifest(manifest.clone()));
-    let frontend = McpFrontend::with_session(session);
+    let session = session_with_manifest(manifest.clone());
+    session.register_fake_source(
+        "log_tail",
+        Box::new(LogSourceFake {
+            lines: vec![
+                "INFO boot ok".to_string(),
+                "ERROR alice@example.com failed".to_string(),
+            ],
+            mode: LogMode::Tail,
+        }),
+    );
+    session.register_fake_source(
+        "log_grep",
+        Box::new(LogSourceFake {
+            lines: vec![
+                "INFO boot ok".to_string(),
+                "ERROR alice@example.com failed".to_string(),
+            ],
+            mode: LogMode::Grep,
+        }),
+    );
+    let frontend = McpFrontend::with_session(Arc::new(session));
 
-    let err = frontend
+    let tail = frontend
         .call_tool_json("log_tail", serde_json::json!({"lines": 10}))
         .await
-        .expect_err("deferred");
+        .expect("log_tail");
+    let tail_text = text_output(&tail);
+    assert!(tail_text.contains("INFO boot ok"));
+    assert!(!tail_text.contains("alice@example.com"));
 
-    assert!(err.contains("FeatureDeferred"));
+    let grep = frontend
+        .call_tool_json(
+            "log_grep",
+            serde_json::json!({"pattern": "alice@example.com", "level": "ERROR", "limit": 5}),
+        )
+        .await
+        .expect("log_grep");
+    let grep_text = text_output(&grep);
+    assert!(grep_text.contains("ERROR"));
+    assert!(!grep_text.contains("alice@example.com"));
+
     assert_eq!(
         manifest.statuses.lock().expect("statuses").as_slice(),
-        ["begin", "fail"]
+        ["begin", "finish", "begin", "finish"]
+    );
+    let redacted_args = manifest.redacted_args.lock().expect("redacted args");
+    assert!(
+        redacted_args
+            .iter()
+            .all(|args| !args.contains("alice@example.com"))
     );
 }
 
@@ -118,6 +158,51 @@ async fn test_query_e2e_pseudonymized() {
 struct RecordingManifest {
     statuses: std::sync::Mutex<Vec<&'static str>>,
     redacted_args: std::sync::Mutex<Vec<String>>,
+}
+
+#[derive(Clone)]
+struct LogSourceFake {
+    lines: Vec<String>,
+    mode: LogMode,
+}
+
+#[derive(Clone)]
+enum LogMode {
+    Tail,
+    Grep,
+}
+
+#[async_trait]
+impl FakeSource for LogSourceFake {
+    async fn invoke(&self, args: &ToolArgs) -> Result<SourceOutput, gaze_lens::errors::LensError> {
+        let lines = match self.mode {
+            LogMode::Tail => self.lines.clone(),
+            LogMode::Grep => {
+                let pattern = args
+                    .0
+                    .get("pattern")
+                    .and_then(|value| value.as_str())
+                    .expect("pattern");
+                let level = args.0.get("level").and_then(|value| value.as_str());
+                let re = regex::Regex::new(pattern).expect("regex");
+                self.lines
+                    .iter()
+                    .filter(|line| re.is_match(line))
+                    .filter(|line| level.is_none_or(|level| line.contains(level)))
+                    .cloned()
+                    .collect()
+            }
+        };
+        Ok(SourceOutput::Text(lines.join("\n")))
+    }
+}
+
+fn text_output(result: &serde_json::Value) -> String {
+    result["clean"]["Text"]["text"]
+        .as_str()
+        .or_else(|| result["clean"]["text"].as_str())
+        .expect("text")
+        .to_string()
 }
 
 impl ManifestStore for RecordingManifest {
