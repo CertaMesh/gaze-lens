@@ -4,9 +4,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use gaze_lens::frontend::mcp::McpFrontend;
 use gaze_lens::session::Session;
-use gaze_lens::source::DbSourceWrapper;
 use gaze_lens::source::db::query::CannedQuery;
 use gaze_lens::source::db::{ColumnInfo, DbKind, DbSource, TableSchema};
+use gaze_lens::source::{DbSourceWrapper, FakeSource, SourceOutput, ToolArgs};
 use gaze_lens::value::{LensRow, LensValue};
 use rmcp::model::CallToolRequestParam;
 use rmcp::{ClientHandler, ServiceExt};
@@ -31,6 +31,20 @@ async fn mcp_duplex_query_roundtrips_manifest_and_snapshot() {
     for tool_name in ["query", "schema", "list_tables"] {
         session.register_source(tool_name, source.clone());
     }
+    session.register_fake_source(
+        "log_tail",
+        Box::new(FakeLogSource {
+            lines: log_lines(),
+            mode: LogMode::Tail,
+        }),
+    );
+    session.register_fake_source(
+        "log_grep",
+        Box::new(FakeLogSource {
+            lines: log_lines(),
+            mode: LogMode::Grep,
+        }),
+    );
 
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let server = McpFrontend::with_session(session);
@@ -76,11 +90,40 @@ async fn mcp_duplex_query_roundtrips_manifest_and_snapshot() {
     let snapshot_path = snapshot_path(result_text);
     assert!(snapshot_path.exists(), "snapshot should exist");
 
+    let tail = client
+        .call_tool(CallToolRequestParam {
+            name: "log_tail".into(),
+            arguments: serde_json::json!({"lines": 10}).as_object().cloned(),
+        })
+        .await
+        .expect("log_tail");
+    let tail_text = tool_result_text(&tail);
+    assert!(tail_text.contains("INFO boot"));
+    assert!(!tail_text.contains("bob@example.com"));
+
+    let grep = client
+        .call_tool(CallToolRequestParam {
+            name: "log_grep".into(),
+            arguments: serde_json::json!({
+                "pattern": "bob@example.com",
+                "level": "ERROR",
+                "limit": 5
+            })
+            .as_object()
+            .cloned(),
+        })
+        .await
+        .expect("log_grep");
+    let grep_text = tool_result_text(&grep);
+    assert!(grep_text.contains("ERROR"));
+    assert!(!grep_text.contains("bob@example.com"));
+    assert!(!grep_text.contains("INFO boot"));
+
     let manifest = rusqlite::Connection::open(temp.path().join("manifest.sqlite")).expect("db");
     let call_count: u32 = manifest
         .query_row("SELECT COUNT(*) FROM calls", [], |row| row.get(0))
         .expect("call count");
-    assert_eq!(call_count, 1);
+    assert_eq!(call_count, 3);
 
     client.cancel().await.expect("client cancel");
     server_handle.await.expect("server task");
@@ -110,6 +153,23 @@ fn snapshot_path(result_text: &str) -> std::path::PathBuf {
         .as_str()
         .expect("snapshot path")
         .into()
+}
+
+fn tool_result_text(result: &rmcp::model::CallToolResult) -> String {
+    result
+        .content
+        .first()
+        .and_then(|content| content.raw.as_text())
+        .map(|text| text.text.as_str())
+        .expect("text result")
+        .to_string()
+}
+
+fn log_lines() -> Vec<String> {
+    vec![
+        "INFO boot complete".to_string(),
+        "ERROR bob@example.com failed checkout".to_string(),
+    ]
 }
 
 struct FakeDbSource;
@@ -151,5 +211,40 @@ impl DbSource for FakeDbSource {
             "email".to_string(),
             LensValue::String("alice@example.com".to_string()),
         )])])
+    }
+}
+
+struct FakeLogSource {
+    lines: Vec<String>,
+    mode: LogMode,
+}
+
+enum LogMode {
+    Tail,
+    Grep,
+}
+
+#[async_trait]
+impl FakeSource for FakeLogSource {
+    async fn invoke(&self, args: &ToolArgs) -> Result<SourceOutput, gaze_lens::errors::LensError> {
+        let lines = match self.mode {
+            LogMode::Tail => self.lines.clone(),
+            LogMode::Grep => {
+                let pattern = args
+                    .0
+                    .get("pattern")
+                    .and_then(|value| value.as_str())
+                    .expect("pattern");
+                let level = args.0.get("level").and_then(|value| value.as_str());
+                let re = regex::Regex::new(pattern).expect("regex");
+                self.lines
+                    .iter()
+                    .filter(|line| re.is_match(line))
+                    .filter(|line| level.is_none_or(|level| line.contains(level)))
+                    .cloned()
+                    .collect()
+            }
+        };
+        Ok(SourceOutput::Text(lines.join("\n")))
     }
 }
