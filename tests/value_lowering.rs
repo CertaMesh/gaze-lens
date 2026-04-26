@@ -114,5 +114,11 @@ fn rejects_corrupt_decimal_instead_of_silent_fallback() {
     .lower_for_redaction()
     .expect_err("corrupt decimal should be rejected");
 
-    assert!(matches!(err, LowerError::Decode { kind: "decimal", .. }));
+    assert!(matches!(
+        err,
+        LowerError::Decode {
+            kind: "decimal",
+            ..
+        }
+    ));
 }

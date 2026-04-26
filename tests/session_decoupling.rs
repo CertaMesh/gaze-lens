@@ -27,6 +27,10 @@ fn policy() -> gaze::Policy {
 
 struct FrontendHandle;
 
+impl Drop for FrontendHandle {
+    fn drop(&mut self) {}
+}
+
 struct DirectSource {
     calls: Arc<Mutex<usize>>,
 }

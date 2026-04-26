@@ -26,7 +26,8 @@ fn main() {
 fn seed() -> Result<(), String> {
     let manifest = required_path("--manifest")?;
     let snapshot_dir = required_path("--snapshot-dir")?;
-    let mut session = Session::new(&policy(), &manifest, &snapshot_dir).map_err(|err| err.to_string())?;
+    let mut session =
+        Session::new(&policy(), &manifest, &snapshot_dir).map_err(|err| err.to_string())?;
     session.register_fake_source("fake", Box::new(CanarySource));
     let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
     runtime
@@ -43,7 +44,8 @@ fn seed() -> Result<(), String> {
 fn restore() -> Result<(), String> {
     let manifest = required_path("--manifest")?;
     let lens_session = required_value("--lens-session")?;
-    let restored = restore_whole_session(&manifest, &lens_session).map_err(|err| err.to_string())?;
+    let restored =
+        restore_whole_session(&manifest, &lens_session).map_err(|err| err.to_string())?;
     let saw_canary = restored
         .calls
         .iter()

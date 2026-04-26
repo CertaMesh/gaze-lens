@@ -150,9 +150,8 @@ impl Session {
         let redacted_args = self.redact_args(&call.args)?;
         self.inner.manifest.begin_call(&call, &redacted_args)?;
 
-        let raw_result = self.invoke_source(&call).await.map_err(|err| {
-            let _ = self.inner.manifest.fail_call(&call.call_id, &err);
-            err
+        let raw_result = self.invoke_source(&call).await.inspect_err(|err| {
+            let _ = self.inner.manifest.fail_call(&call.call_id, err);
         })?;
         let clean = self.redact_result(raw_result)?;
         let snapshot_ref = self.persist_snapshot()?;
@@ -230,7 +229,10 @@ impl Session {
             let redacted = self
                 .inner
                 .pipeline
-                .redact(&self.inner.gaze_session, RawDocument::Structured(raw_fields))
+                .redact(
+                    &self.inner.gaze_session,
+                    RawDocument::Structured(raw_fields),
+                )
                 .map_err(|err| LensError::RedactionFailed {
                     detail: err.to_string(),
                 })?;
@@ -239,7 +241,7 @@ impl Session {
                 CleanDocument::Text(_) => {
                     return Err(LensError::RedactionFailed {
                         detail: "structured rows produced text output".to_string(),
-                    })
+                    });
                 }
             };
             let mut out = serde_json::Map::new();
@@ -249,12 +251,12 @@ impl Session {
                 } else {
                     out.insert(
                         key,
-                        serde_json::to_value(value).map_err(|err| LensError::ConvertError(
-                            LowerError::Decode {
+                        serde_json::to_value(value).map_err(|err| {
+                            LensError::ConvertError(LowerError::Decode {
                                 kind: "json",
                                 detail: err.to_string(),
-                            },
-                        ))?,
+                            })
+                        })?,
                     );
                 }
             }
@@ -316,7 +318,9 @@ impl CleanOutput {
         match self {
             CleanOutput::Rows { rows, truncated_at } => ResultSummary {
                 rows: rows.len(),
-                bytes: serde_json::to_vec(rows).map(|bytes| bytes.len()).unwrap_or(0),
+                bytes: serde_json::to_vec(rows)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(0),
                 truncated_at: truncated_at.clone(),
             },
             CleanOutput::Text(text) => ResultSummary {
@@ -330,9 +334,11 @@ impl CleanOutput {
 
 fn default_pipeline() -> Result<gaze::Pipeline, LensError> {
     gaze::Pipeline::builder()
-        .detector(RegexDetector::emails().map_err(|err| LensError::RedactionFailed {
-            detail: err.to_string(),
-        })?)
+        .detector(
+            RegexDetector::emails().map_err(|err| LensError::RedactionFailed {
+                detail: err.to_string(),
+            })?,
+        )
         .rule(ClassRule::new(gaze::PiiClass::Email, Action::Tokenize))
         .rule(DefaultRule::new(Action::Preserve))
         .build()

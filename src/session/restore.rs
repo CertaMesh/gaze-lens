@@ -72,12 +72,13 @@ pub fn restore_whole_session(
                 lens_session_id: lens_session_id.to_string(),
                 detail: err.to_string(),
             })?;
-        let redacted_args: RedactedToolArgs = serde_json::from_str(&redacted_args_json).map_err(
-            |err| LensError::ReplayUnavailable {
-                lens_session_id: lens_session_id.to_string(),
-                detail: err.to_string(),
-            },
-        )?;
+        let redacted_args: RedactedToolArgs =
+            serde_json::from_str(&redacted_args_json).map_err(|err| {
+                LensError::ReplayUnavailable {
+                    lens_session_id: lens_session_id.to_string(),
+                    detail: err.to_string(),
+                }
+            })?;
         let restored_args_json = restore_tokens(&gaze_session, &redacted_args.json)?;
         calls.push(RestoredCall {
             call_id,
@@ -99,12 +100,13 @@ fn restore_tokens(gaze_session: &gaze::Session, input: &str) -> Result<String, L
     let mut tokens = gaze_session.tokens();
     tokens.sort_by_key(|token| std::cmp::Reverse(token.len()));
     for token in tokens {
-        let raw = gaze_session
-            .restore_strict(&token)
-            .map_err(|err| LensError::ReplayUnavailable {
-                lens_session_id: "unknown".to_string(),
-                detail: err.to_string(),
-            })?;
+        let raw =
+            gaze_session
+                .restore_strict(&token)
+                .map_err(|err| LensError::ReplayUnavailable {
+                    lens_session_id: "unknown".to_string(),
+                    detail: err.to_string(),
+                })?;
         restored = restored.replace(&token, &raw);
     }
     Ok(restored)

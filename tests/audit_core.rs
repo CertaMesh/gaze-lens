@@ -38,10 +38,7 @@ fn call(args: serde_json::Value) -> ToolCall {
 }
 
 fn row_with_email(email: &str) -> LensRow {
-    BTreeMap::from([(
-        "email".to_string(),
-        LensValue::String(email.to_string()),
-    )])
+    BTreeMap::from([("email".to_string(), LensValue::String(email.to_string()))])
 }
 
 struct RecordingManifest {

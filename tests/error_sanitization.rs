@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use gaze_lens::errors::{sanitize_error, LensError};
+use gaze_lens::errors::{LensError, sanitize_error};
 
 fn assert_no_canary_leak(output: &str) {
     for leaked in [
@@ -66,14 +66,13 @@ fn manifest_begin_error_drops_snapshot_path() {
     let err = LensError::ManifestBeginFailed {
         call_id: "call-1".to_string(),
         detail: "failed near alice@example.com".to_string(),
-        path: Some(PathBuf::from("/tmp/gaze-lens/snapshots/alice@example.com.snap")),
+        path: Some(PathBuf::from(
+            "/tmp/gaze-lens/snapshots/alice@example.com.snap",
+        )),
     };
 
     let sanitized = sanitize_error(&err);
-    assert_eq!(
-        sanitized,
-        "ManifestBeginFailed: manifest begin failed"
-    );
+    assert_eq!(sanitized, "ManifestBeginFailed: manifest begin failed");
     assert_no_canary_leak(&sanitized);
 }
 
@@ -82,13 +81,12 @@ fn manifest_finish_error_drops_snapshot_path() {
     let err = LensError::ManifestFinishFailed {
         call_id: "call-1".to_string(),
         detail: "failed near alice@example.com".to_string(),
-        path: Some(PathBuf::from("/tmp/gaze-lens/snapshots/alice@example.com.snap")),
+        path: Some(PathBuf::from(
+            "/tmp/gaze-lens/snapshots/alice@example.com.snap",
+        )),
     };
 
     let sanitized = sanitize_error(&err);
-    assert_eq!(
-        sanitized,
-        "ManifestFinishFailed: manifest finish failed"
-    );
+    assert_eq!(sanitized, "ManifestFinishFailed: manifest finish failed");
     assert_no_canary_leak(&sanitized);
 }

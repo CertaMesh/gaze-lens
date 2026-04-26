@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
-use crate::errors::{sanitize_error, LensError};
+use crate::errors::{LensError, sanitize_error};
 
 use super::{RedactedToolArgs, ResultSummary, ToolCall};
 
@@ -14,8 +14,11 @@ pub struct SnapshotRef {
 }
 
 pub trait ManifestStore: Send + Sync {
-    fn begin_call(&self, call: &ToolCall, redacted_args: &RedactedToolArgs)
-        -> Result<(), LensError>;
+    fn begin_call(
+        &self,
+        call: &ToolCall,
+        redacted_args: &RedactedToolArgs,
+    ) -> Result<(), LensError>;
     fn finish_call(
         &self,
         call_id: &str,

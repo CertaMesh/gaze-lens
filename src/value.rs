@@ -27,10 +27,7 @@ pub enum LensValue {
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum LowerError {
     #[error("decode failure for {kind}: {detail}")]
-    Decode {
-        kind: &'static str,
-        detail: String,
-    },
+    Decode { kind: &'static str, detail: String },
     #[error("unsupported source type: {0}")]
     Unsupported(String),
 }
@@ -230,7 +227,13 @@ mod tests {
         }
         .lower_for_redaction()
         .expect_err("corrupt decimal must fail");
-        assert!(matches!(err, LowerError::Decode { kind: "decimal", .. }));
+        assert!(matches!(
+            err,
+            LowerError::Decode {
+                kind: "decimal",
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -53,9 +53,7 @@ pub fn sanitize_error(err: &LensError) -> String {
         LensError::FrontendError { .. } => "FrontendError: frontend failed".to_string(),
         LensError::SourceError { .. } => "SourceError: source failed".to_string(),
         LensError::RedactionFailed { .. } => "RedactionFailed: redaction failed".to_string(),
-        LensError::ReplayUnavailable { .. } => {
-            "ReplayUnavailable: replay unavailable".to_string()
-        }
+        LensError::ReplayUnavailable { .. } => "ReplayUnavailable: replay unavailable".to_string(),
         LensError::ScopeRejected { .. } => "ScopeRejected: unsupported session scope".to_string(),
         LensError::ConvertError(err) => match err {
             LowerError::Decode { kind, .. } => {

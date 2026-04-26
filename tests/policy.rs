@@ -1,5 +1,5 @@
 use gaze_lens::errors::LensError;
-use gaze_lens::policy::{build_pipeline, PolicyFile};
+use gaze_lens::policy::{PolicyFile, build_pipeline};
 use gaze_lens::session::Session;
 
 #[test]

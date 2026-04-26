@@ -202,7 +202,7 @@ fn parse_class(raw: &str, column: &str) -> Result<PiiClass, PolicyError> {
             return Err(PolicyError::UnknownPiiClass {
                 column: column.to_string(),
                 class: raw.to_string(),
-            })
+            });
         }
     })
 }
