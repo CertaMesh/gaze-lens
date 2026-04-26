@@ -4,6 +4,7 @@ use crate::errors::LensError;
 use crate::value::LensRow;
 
 pub mod db;
+pub mod ssh_tunnel;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolArgs(pub serde_json::Value);
