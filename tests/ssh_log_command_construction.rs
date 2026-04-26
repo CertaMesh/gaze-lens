@@ -79,13 +79,26 @@ fn test_tail_argv_double_dash_present() {
             "ssh",
             "--",
             "app-prod",
-            "--",
             "tail",
             "-n",
             "500",
             "--",
             "/var/log/app.log"
         ]
+    );
+}
+
+#[test]
+fn test_remote_command_starts_with_tail_keyword() {
+    let argv = tail_argv("ok-host", "/var/log/x.log", 100);
+    // After ssh's "--" + host, the next argv element is the remote command's program name.
+    // Must be "tail", not "--" (which would make the remote shell execute `--`).
+    let host_idx = argv.iter().position(|arg| arg == "ok-host").expect("host in argv");
+    assert_eq!(
+        argv[host_idx + 1],
+        "tail",
+        "argv[host+1] must be 'tail' (the remote command), not '{}' - otherwise remote shell receives `-- tail -n N -- path` and fails",
+        argv[host_idx + 1]
     );
 }
 
@@ -99,7 +112,7 @@ fn test_tail_no_shell_string_interpolation() {
 fn test_grep_uses_local_regex() {
     let argv = tail_argv("app-prod", "/var/log/app.log", 10_000);
     assert_eq!(argv[0], "ssh");
-    assert_eq!(argv[4], "tail");
+    assert_eq!(argv[3], "tail");
     assert!(!argv.iter().any(|arg| arg == "grep"));
     assert!(!argv.iter().any(|arg| arg == "awk"));
     assert!(!argv.iter().any(|arg| arg == "sed"));
@@ -112,7 +125,7 @@ fn test_lines_capped_fits_u32() {
         SshLogSource::new("p1", "app-prod", "/var/log/app.log", caps()).expect("valid source");
     let argv = source.tail_argv(usize::MAX);
 
-    assert_eq!(argv[6], HARD_CAP_LINES.to_string());
-    let capped = argv[6].parse::<u32>().expect("u32 lines cap");
+    assert_eq!(argv[5], HARD_CAP_LINES.to_string());
+    let capped = argv[5].parse::<u32>().expect("u32 lines cap");
     assert_eq!(capped, HARD_CAP_LINES as u32);
 }

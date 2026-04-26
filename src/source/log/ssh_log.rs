@@ -148,7 +148,6 @@ pub fn tail_argv(host: &str, path: &str, lines: usize) -> Vec<String> {
         "ssh".to_string(),
         "--".to_string(),
         host.to_string(),
-        "--".to_string(),
         "tail".to_string(),
         "-n".to_string(),
         lines.min(HARD_CAP_LINES).to_string(),
