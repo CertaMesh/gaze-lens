@@ -111,6 +111,21 @@ impl FakeSource for TextSource {
     }
 }
 
+struct TruncatedTextSource {
+    text: String,
+    truncated_at: Vec<TruncatedAt>,
+}
+
+#[async_trait]
+impl FakeSource for TruncatedTextSource {
+    async fn invoke(&self, _args: &ToolArgs) -> Result<SourceOutput, LensError> {
+        Ok(SourceOutput::TextWithTruncation {
+            text: self.text.clone(),
+            truncated_at: self.truncated_at.clone(),
+        })
+    }
+}
+
 struct SlowSource;
 
 #[async_trait]
@@ -426,7 +441,7 @@ async fn output_caps_replace_large_cells_and_manifest_summary_records_it() {
 }
 
 #[tokio::test]
-async fn output_caps_truncate_text_lines_and_manifest_summary_records_it() {
+async fn output_caps_truncate_text_bytes_and_manifest_summary_records_it() {
     let temp = tempfile::tempdir().expect("tempdir");
     let manifest_path = temp.path().join("manifest.sqlite");
     let snapshot_dir = temp.path().join("snapshots");
@@ -437,7 +452,7 @@ async fn output_caps_truncate_text_lines_and_manifest_summary_records_it() {
         Arc::new(manifest),
         &snapshot_dir,
         OutputCaps {
-            line_bytes: 50,
+            bytes: 100,
             ..OutputCaps::default()
         },
     )
@@ -456,13 +471,54 @@ async fn output_caps_truncate_text_lines_and_manifest_summary_records_it() {
 
     match result.clean {
         CleanOutput::Text { text, truncated_at } => {
-            assert_eq!(text.len(), 50);
-            assert!(truncated_at.contains(&TruncatedAt::LineBytes));
+            assert_eq!(text.len(), 100);
+            assert!(truncated_at.contains(&TruncatedAt::Bytes));
         }
         CleanOutput::Rows { .. } => panic!("expected text"),
     }
     let summary = manifest_summary(&manifest_path);
-    assert_eq!(summary["truncated_at"], serde_json::json!(["LineBytes"]));
+    assert_eq!(summary["truncated_at"], serde_json::json!(["Bytes"]));
+}
+
+#[tokio::test]
+async fn source_text_byte_truncation_is_recorded_in_manifest_summary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest_path = temp.path().join("manifest.sqlite");
+    let snapshot_dir = temp.path().join("snapshots");
+    let manifest =
+        ManifestWriter::new(&manifest_path, ulid::Ulid::new(), "test-audit").expect("manifest");
+    let session = Session::new_with_manifest_for_tests(
+        &policy(gaze::SessionScope::Conversation),
+        Arc::new(manifest),
+        &snapshot_dir,
+        OutputCaps {
+            bytes: 100,
+            ..OutputCaps::default()
+        },
+    )
+    .expect("session");
+    session.register_fake_source(
+        "fake",
+        Box::new(TruncatedTextSource {
+            text: "x".repeat(100),
+            truncated_at: vec![TruncatedAt::Bytes],
+        }),
+    );
+
+    let result = session
+        .dispatch_tool(call(serde_json::json!({})))
+        .await
+        .expect("dispatch");
+
+    match result.clean {
+        CleanOutput::Text { text, truncated_at } => {
+            assert_eq!(text.len(), 100);
+            assert!(truncated_at.contains(&TruncatedAt::Bytes));
+        }
+        CleanOutput::Rows { .. } => panic!("expected text"),
+    }
+    let summary = manifest_summary(&manifest_path);
+    assert_eq!(summary["truncated_at"], serde_json::json!(["Bytes"]));
 }
 
 #[tokio::test]

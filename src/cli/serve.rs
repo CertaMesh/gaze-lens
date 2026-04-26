@@ -13,6 +13,8 @@ use crate::profile::{SourceSpec, load_profile};
 use crate::session::{OutputCaps, Session};
 use crate::source::db::DbSource;
 use crate::source::db::mysql::MysqlSource;
+use crate::source::log::SshLogSourceWrapper;
+use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 use crate::source::{DbSourceWrapper, Source};
 
 #[derive(Debug, Args)]
@@ -62,7 +64,23 @@ pub async fn run(
                 session.register_source(tool_name, source.clone());
             }
         }
-        SourceSpec::SshLog { .. } => {}
+        SourceSpec::SshLog { host, path } => {
+            let caps = OutputCaps::default();
+            let log_source = Arc::new(SshLogSource::new(
+                profile.name.clone(),
+                host.clone(),
+                path.clone(),
+                SshLogCaps {
+                    line_bytes: caps.line_bytes,
+                    bytes: caps.bytes,
+                    timeout: caps.timeout,
+                },
+            )?);
+            let source: Arc<dyn Source> = Arc::new(SshLogSourceWrapper::new(log_source));
+            for tool_name in ["log_tail", "log_grep"] {
+                session.register_source(tool_name, source.clone());
+            }
+        }
     }
 
     run_frontend_until_shutdown(McpFrontend::new(), session, wait_for_shutdown_signal()).await

@@ -26,7 +26,9 @@ async fn in_memory_fake_source_returns_canned_rows() {
 
     match output {
         SourceOutput::Rows(rows) => assert_eq!(rows.len(), 1),
-        SourceOutput::Text(_) => panic!("expected rows"),
+        SourceOutput::Text(_) | SourceOutput::TextWithTruncation { .. } => {
+            panic!("expected rows")
+        }
     }
 }
 
@@ -41,7 +43,9 @@ async fn in_memory_fake_source_returns_canned_text() {
 
     match output {
         SourceOutput::Text(text) => assert_eq!(text, "alice@example.com"),
-        SourceOutput::Rows(_) => panic!("expected text"),
+        SourceOutput::Rows(_) | SourceOutput::TextWithTruncation { .. } => {
+            panic!("expected text")
+        }
     }
 }
 
@@ -69,7 +73,9 @@ async fn db_source_wrapper_routes_query_calls() {
                 Some(&LensValue::String("alice@example.com".to_string()))
             );
         }
-        SourceOutput::Text(_) => panic!("expected rows"),
+        SourceOutput::Text(_) | SourceOutput::TextWithTruncation { .. } => {
+            panic!("expected rows")
+        }
     }
 }
 
@@ -91,7 +97,9 @@ async fn db_source_wrapper_tokenizes_schema_metadata() {
             assert!(text.contains("<COL_"));
             assert!(!text.contains("email_address"));
         }
-        SourceOutput::Rows(_) => panic!("expected text"),
+        SourceOutput::Rows(_) | SourceOutput::TextWithTruncation { .. } => {
+            panic!("expected text")
+        }
     }
 }
 

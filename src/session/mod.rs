@@ -268,12 +268,6 @@ impl Session {
     }
 
     async fn invoke_source(&self, call: &ToolCall) -> Result<SourceOutput, LensError> {
-        if matches!(call.tool_name.as_str(), "log_tail" | "log_grep") {
-            return Err(LensError::FeatureDeferred(format!(
-                "{} in PR2b",
-                call.tool_name
-            )));
-        }
         let source = self
             .inner
             .sources
@@ -293,7 +287,10 @@ impl Session {
     fn redact_result(&self, output: SourceOutput) -> Result<CleanOutput, LensError> {
         match output {
             SourceOutput::Rows(rows) => self.redact_rows(rows),
-            SourceOutput::Text(text) => self.redact_text_output(text),
+            SourceOutput::Text(text) => self.redact_text_output(text, Vec::new()),
+            SourceOutput::TextWithTruncation { text, truncated_at } => {
+                self.redact_text_output(text, truncated_at)
+            }
         }
     }
 
@@ -373,11 +370,14 @@ impl Session {
         })
     }
 
-    fn redact_text_output(&self, text: String) -> Result<CleanOutput, LensError> {
-        let mut truncated_at = Vec::new();
-        let (capped, truncated) = cap_string(text, self.inner.caps.line_bytes);
+    fn redact_text_output(
+        &self,
+        text: String,
+        mut truncated_at: Vec<TruncatedAt>,
+    ) -> Result<CleanOutput, LensError> {
+        let (capped, truncated) = cap_string(text, self.inner.caps.bytes);
         if truncated {
-            truncated_at.push(TruncatedAt::LineBytes);
+            push_truncation(&mut truncated_at, TruncatedAt::Bytes);
         }
         let clean = self
             .inner

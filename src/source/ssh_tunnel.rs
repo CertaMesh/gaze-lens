@@ -13,6 +13,8 @@ pub struct TunnelSpec {
 pub enum SshError {
     #[error("invalid ssh host `{host}`: {reason}")]
     InvalidHost { host: String, reason: &'static str },
+    #[error("invalid ssh path `{path}`: {reason}")]
+    InvalidPath { path: String, reason: &'static str },
     #[error("ssh spawn failed: {0}")]
     Spawn(#[from] std::io::Error),
     #[error("ssh exited non-zero: {0}")]
@@ -89,6 +91,47 @@ pub fn validate_ssh_host(host: &str) -> Result<&str, SshError> {
     Ok(host)
 }
 
+pub fn validate_ssh_path(path: &str) -> Result<&str, SshError> {
+    // v1 deliberately accepts only exact ASCII paths. Operators needing
+    // Unicode, globbing, or remote expansion can get those in a later
+    // threat-modeled extension without weakening the default command builder.
+    if path.is_empty() {
+        return Err(invalid_path(path, "empty path"));
+    }
+    if path.len() > 4096 {
+        return Err(invalid_path(path, "path exceeds PATH_MAX"));
+    }
+    if path.bytes().any(|byte| {
+        matches!(
+            byte,
+            b';' | b'|' | b'&' | b'`' | b'$' | b'\n' | b'\r' | b'\0'
+        )
+    }) {
+        return Err(invalid_path(path, "path contains shell metacharacters"));
+    }
+    if path
+        .bytes()
+        .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b']'))
+    {
+        return Err(invalid_path(path, "path contains glob characters"));
+    }
+    if path.split('/').any(|segment| segment == "..") {
+        return Err(invalid_path(path, "path contains traversal segment"));
+    }
+    if path.bytes().any(|byte| {
+        !matches!(
+            byte,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-'
+        )
+    }) {
+        return Err(invalid_path(
+            path,
+            "path may only contain ASCII letters, digits, '/', '.', '_', '-'",
+        ));
+    }
+    Ok(path)
+}
+
 pub fn open_argv(spec: &TunnelSpec) -> Result<Vec<String>, SshError> {
     let host = validate_ssh_host(&spec.ssh_host)?;
     open_argv_for_control_path(spec, host, &SshTunnel::control_path(spec.local_port))
@@ -136,6 +179,13 @@ fn close_argv_for_control_path(host: &str, control_path: &Path) -> Result<Vec<St
 fn invalid_host(host: &str, reason: &'static str) -> SshError {
     SshError::InvalidHost {
         host: host.to_string(),
+        reason,
+    }
+}
+
+fn invalid_path(path: &str, reason: &'static str) -> SshError {
+    SshError::InvalidPath {
+        path: path.to_string(),
         reason,
     }
 }

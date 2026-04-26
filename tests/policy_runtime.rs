@@ -26,8 +26,7 @@ async fn serve_runtime_policy_column_rules_reach_session_pipeline() {
         name: "test".to_string(),
         source: SourceSpec::SshLog {
             host: "example.test".to_string(),
-            path: "/var/log/app.log".into(),
-            ssh_host: None,
+            path: "/var/log/app.log".to_string(),
         },
         policy: Some(policy_path),
         schema_allowlist: None,
