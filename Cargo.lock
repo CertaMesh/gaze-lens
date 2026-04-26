@@ -836,12 +836,11 @@ dependencies = [
 name = "gaze"
 version = "0.4.6"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "base64 0.22.1",
  "dashmap",
  "ed25519-dalek",
- "gaze-recognizers",
- "gaze-types",
  "hex",
  "libc",
  "rand 0.8.6",
@@ -888,7 +887,7 @@ name = "gaze-recognizers"
 version = "0.4.6"
 dependencies = [
  "aho-corasick",
- "gaze-types",
+ "gaze",
  "hex",
  "ndarray 0.16.1",
  "ort",
@@ -901,13 +900,6 @@ dependencies = [
  "tokenizers",
  "tracing",
  "unicode-normalization",
-]
-
-[[package]]
-name = "gaze-types"
-version = "0.4.6"
-dependencies = [
- "serde",
 ]
 
 [[package]]
