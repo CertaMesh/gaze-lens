@@ -1,10 +1,10 @@
-# Glance
+# gaze-lens
 
 PII-safe read-access for live production investigation by AI agents.
 
-Glance lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.com`. The engineer can later replay the agent's session with real values for review.
+`gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.com`. The engineer can later replay the agent's session with real values for review.
 
-Built on the [Gaze](https://github.com/PIInuts) pseudonymization runtime. Part of the [PIInuts](https://github.com/PIInuts) product family.
+Built on the [Gaze](https://github.com/PIInuts) pseudonymization engine. Part of the [PIInuts](https://github.com/PIInuts) product family — every product in the family is named `gaze-X`.
 
 > **Status:** pre-v1. See [SPEC.md](./SPEC.md) for the locked product spec, architecture, anti-features, and roadmap.
 
@@ -15,13 +15,13 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 1. Give the agent raw access — and leak names / emails / addresses to the model provider.
 2. Give the agent nothing — and waste an hour eyeballing psql while the incident burns.
 
-Glance is the third option: **pseudonymized agent access with auditable, reversible token mapping**.
+`gaze-lens` is the third option: **pseudonymized agent access with auditable, reversible token mapping**.
 
 ## Surfaces (v1)
 
-- `glance mcp` — MCP server (stdio). Primary surface. Agent connects, calls tools.
-- `glance query "..."` — CLI for human dry-run.
-- `glance replay <session>` — human-only restore of a recorded agent session.
+- `gaze-lens mcp` — MCP server (stdio). Primary surface. Agent connects, calls tools.
+- `gaze-lens query "..."` — CLI for human dry-run.
+- `gaze-lens replay <session>` — human-only restore of a recorded agent session.
 
 ## Sources (v1)
 
