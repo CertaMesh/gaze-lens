@@ -172,16 +172,26 @@ impl Frontend for McpFrontend {
     async fn serve(
         mut self,
         session: Arc<Session>,
-        _shutdown: ShutdownToken,
+        shutdown: ShutdownToken,
     ) -> Result<(), FrontendError> {
         self.session = Some(session);
-        let running = ServiceExt::serve(self, stdio())
-            .await
-            .map_err(|err| FrontendError::Mcp(err.to_string()))?;
-        running
-            .waiting()
-            .await
-            .map_err(|err| FrontendError::Mcp(err.to_string()))?;
+        let running = tokio::select! {
+            result = ServiceExt::serve(self, stdio()) => {
+                result.map_err(|err| FrontendError::Mcp(err.to_string()))?
+            }
+            _ = shutdown.cancelled() => return Ok(()),
+        };
+        let cancellation = running.cancellation_token();
+        let waiting = running.waiting();
+        tokio::pin!(waiting);
+        tokio::select! {
+            result = &mut waiting => {
+                result.map_err(|err| FrontendError::Mcp(err.to_string()))?;
+            }
+            _ = shutdown.cancelled() => {
+                cancellation.cancel();
+            }
+        }
         Ok(())
     }
 }

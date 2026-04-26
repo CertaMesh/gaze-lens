@@ -77,3 +77,63 @@ readonly_required = true
 
     assert!(matches!(err, LensError::ProfileEnvMissing { env } if env == missing_env));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_serve_shutdown_clean() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project_config = temp.path().join("project.toml");
+    std::fs::write(
+        &project_config,
+        r#"
+[[profiles]]
+name = "logs"
+
+[profiles.source]
+kind = "ssh_log"
+host = "example.test"
+path = "/var/log/app.log"
+"#,
+    )
+    .expect("write profile");
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_gaze-lens"))
+        .arg("--project-config")
+        .arg(&project_config)
+        .arg("--user-config")
+        .arg(temp.path().join("missing-user.toml"))
+        .arg("serve")
+        .arg("--profile")
+        .arg("logs")
+        .arg("--manifest")
+        .arg(temp.path().join("manifest.sqlite"))
+        .arg("--snapshot-dir")
+        .arg(temp.path().join("snapshots"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn serve");
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let kill_status = std::process::Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status()
+        .expect("send sigterm");
+    assert!(kill_status.success(), "kill failed with {kill_status}");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("serve did not exit after SIGTERM");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+
+    assert!(status.success(), "serve exited with {status}");
+}

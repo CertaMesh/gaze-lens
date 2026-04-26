@@ -64,13 +64,30 @@ pub async fn run(
         SourceSpec::SshLog { .. } => {}
     }
 
-    McpFrontend::new()
-        .serve(session, ShutdownToken)
-        .await
-        .map_err(|err| LensError::FrontendError {
-            frontend: "mcp".to_string(),
-            detail: err.to_string(),
-        })
+    install_sigterm_exit_handler()?;
+    let shutdown = ShutdownToken::new();
+    let frontend_shutdown = shutdown.clone();
+    let mut frontend =
+        tokio::spawn(async move { McpFrontend::new().serve(session, frontend_shutdown).await });
+    tokio::select! {
+        result = &mut frontend => {
+            let result = result.map_err(|err| LensError::FrontendError {
+                frontend: "mcp".to_string(),
+                detail: err.to_string(),
+            })?;
+            result.map_err(|err| LensError::FrontendError {
+                frontend: "mcp".to_string(),
+                detail: err.to_string(),
+            })
+        }
+        result = wait_for_shutdown_signal() => {
+            result?;
+            shutdown.cancel();
+            frontend.abort();
+            let _ = frontend.await;
+            Ok(())
+        }
+    }
 }
 
 #[doc(hidden)]
@@ -97,6 +114,30 @@ fn default_policy_file() -> Result<PolicyFile, LensError> {
         "#,
     )
     .map_err(policy_error)
+}
+
+async fn wait_for_shutdown_signal() -> Result<(), LensError> {
+    let _ = tokio::signal::ctrl_c().await;
+    Ok(())
+}
+
+fn install_sigterm_exit_handler() -> Result<(), LensError> {
+    #[cfg(unix)]
+    {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        signal_hook::flag::register_conditional_shutdown(
+            signal_hook::consts::SIGTERM,
+            0,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .map_err(|err| LensError::Internal {
+            detail: format!("failed to install SIGTERM handler: {err}"),
+        })?;
+    }
+
+    Ok(())
 }
 
 fn policy_error(err: PolicyError) -> LensError {
