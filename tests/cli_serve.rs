@@ -115,7 +115,7 @@ path = "/var/log/app.log"
         .spawn()
         .expect("spawn serve");
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     let kill_status = std::process::Command::new("kill")
         .arg("-TERM")
         .arg(child.id().to_string())
