@@ -37,3 +37,7 @@ The 5 SPEC v1 MCP tools (`query`, `schema`, `list_tables`, `log_tail`, `log_grep
 ## MySQL integration tests
 
 The standard `cargo test --all-targets` run must not require Docker or a local database. MySQL end-to-end tests belong behind the opt-in `integration-mysql` feature and should be run explicitly in environments that provide a MySQL testcontainer or compatible local service.
+
+## Runtime policy fallback
+
+`serve` loads `profile.policy` when a profile names a policy TOML. Profiles without an explicit policy use the built-in fallback equivalent to an empty `[policy.database]` section, which preserves non-sensitive fields and still enables the default email detector.

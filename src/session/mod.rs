@@ -106,6 +106,15 @@ impl Session {
         manifest_path: &Path,
         snapshot_dir: &Path,
     ) -> Result<Self, LensError> {
+        Self::new_with_pipeline(policy, default_pipeline()?, manifest_path, snapshot_dir)
+    }
+
+    pub fn new_with_pipeline(
+        policy: &gaze::Policy,
+        pipeline: gaze::Pipeline,
+        manifest_path: &Path,
+        snapshot_dir: &Path,
+    ) -> Result<Self, LensError> {
         let lens_session_id = ulid::Ulid::new();
         let gaze_session = Self::build_gaze_session(&lens_session_id, policy)?;
         let manifest = ManifestWriter::new(
@@ -116,7 +125,7 @@ impl Session {
         Ok(Self::from_parts(
             lens_session_id,
             gaze_session,
-            default_pipeline()?,
+            pipeline,
             Arc::new(manifest),
             snapshot_dir.to_path_buf(),
             OutputCaps::default(),

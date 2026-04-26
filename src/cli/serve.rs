@@ -6,6 +6,8 @@ use clap::Args;
 use crate::errors::LensError;
 use crate::frontend::mcp::McpFrontend;
 use crate::frontend::{Frontend, ShutdownToken};
+use crate::policy::{PolicyError, PolicyFile, build_pipeline};
+use crate::profile::Profile;
 use crate::profile::{SourceSpec, load_profile};
 use crate::session::{OutputCaps, Session};
 use crate::source::db::DbSource;
@@ -38,8 +40,13 @@ pub async fn run(
     let profile = load_profile(&args.profile, project_config, user_config)?;
     let manifest = expand_path(&args.manifest)?;
     let snapshot_dir = expand_path(&args.snapshot_dir)?;
-    let policy = default_policy();
-    let session = Arc::new(Session::new(&policy, &manifest, &snapshot_dir)?);
+    let (policy, pipeline) = runtime_policy(&profile)?;
+    let session = Arc::new(Session::new_with_pipeline(
+        &policy,
+        pipeline,
+        &manifest,
+        &snapshot_dir,
+    )?);
 
     match &profile.source {
         SourceSpec::Mysql { .. } => {
@@ -66,21 +73,35 @@ pub async fn run(
         })
 }
 
-fn default_policy() -> gaze::Policy {
-    gaze::Policy {
-        session: gaze::SessionPolicy {
-            scope: gaze::SessionScope::Conversation,
-            ttl_secs: None,
-        },
-        detectors: Vec::new(),
-        dictionaries: Vec::new(),
-        rules: Vec::new(),
-        ner: None,
-        rulepacks: gaze::RulepackPolicy {
-            bundled: vec!["core".to_string()],
-            paths: Vec::new(),
-        },
-        locale: None,
+#[doc(hidden)]
+pub fn runtime_policy(profile: &Profile) -> Result<(gaze::Policy, gaze::Pipeline), LensError> {
+    let policy_file = match &profile.policy {
+        Some(path) => {
+            let path = expand_path(path)?;
+            let input = std::fs::read_to_string(&path).map_err(|err| LensError::Profile {
+                detail: format!("failed to read policy {}: {err}", path.display()),
+            })?;
+            PolicyFile::from_toml(&input).map_err(policy_error)?
+        }
+        None => default_policy_file()?,
+    };
+    let policy = policy_file.to_gaze_policy().map_err(policy_error)?;
+    let pipeline = build_pipeline(&policy_file).map_err(policy_error)?;
+    Ok((policy, pipeline))
+}
+
+fn default_policy_file() -> Result<PolicyFile, LensError> {
+    PolicyFile::from_toml(
+        r#"
+        [policy.database]
+        "#,
+    )
+    .map_err(policy_error)
+}
+
+fn policy_error(err: PolicyError) -> LensError {
+    LensError::Profile {
+        detail: err.to_string(),
     }
 }
 
