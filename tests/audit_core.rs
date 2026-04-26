@@ -140,7 +140,7 @@ async fn begin_happens_before_source_access() {
         fail_begin: false,
         fail_finish: false,
     });
-    let mut session = Session::new_with_manifest_for_tests(
+    let session = Session::new_with_manifest_for_tests(
         &policy(gaze::SessionScope::Conversation),
         manifest,
         temp.path(),
@@ -175,7 +175,7 @@ async fn begin_failure_prevents_source_access() {
         fail_begin: true,
         fail_finish: false,
     });
-    let mut session = Session::new_with_manifest_for_tests(
+    let session = Session::new_with_manifest_for_tests(
         &policy(gaze::SessionScope::Conversation),
         manifest,
         temp.path(),
@@ -208,7 +208,7 @@ async fn finish_failure_returns_error_without_tool_result() {
         fail_begin: false,
         fail_finish: true,
     });
-    let mut session = Session::new_with_manifest_for_tests(
+    let session = Session::new_with_manifest_for_tests(
         &policy(gaze::SessionScope::Conversation),
         manifest,
         temp.path(),
@@ -240,7 +240,7 @@ async fn raw_args_are_redacted_before_manifest_write() {
     let temp = tempfile::tempdir().expect("tempdir");
     let manifest_path = temp.path().join("manifest.sqlite");
     let snapshot_dir = temp.path().join("snapshots");
-    let mut session = Session::new(
+    let session = Session::new(
         &policy(gaze::SessionScope::Conversation),
         &manifest_path,
         &snapshot_dir,
@@ -294,7 +294,7 @@ async fn output_caps_truncate_rows_and_manifest_summary_records_it() {
         gaze::Session::new(gaze::Scope::Conversation(lens_id.to_string())).expect("gaze");
     let manifest = ManifestWriter::new(&manifest_path, lens_id, gaze_session.audit_session_id())
         .expect("manifest");
-    let mut session = Session::new_with_manifest_for_tests(
+    let session = Session::new_with_manifest_for_tests(
         &policy(gaze::SessionScope::Conversation),
         Arc::new(manifest),
         &snapshot_dir,
@@ -339,7 +339,7 @@ async fn output_caps_truncate_total_bytes_and_manifest_summary_records_it() {
     let snapshot_dir = temp.path().join("snapshots");
     let manifest =
         ManifestWriter::new(&manifest_path, ulid::Ulid::new(), "test-audit").expect("manifest");
-    let mut session = Session::new_with_manifest_for_tests(
+    let session = Session::new_with_manifest_for_tests(
         &policy(gaze::SessionScope::Conversation),
         Arc::new(manifest),
         &snapshot_dir,
@@ -388,7 +388,7 @@ async fn output_caps_replace_large_cells_and_manifest_summary_records_it() {
     let snapshot_dir = temp.path().join("snapshots");
     let manifest =
         ManifestWriter::new(&manifest_path, ulid::Ulid::new(), "test-audit").expect("manifest");
-    let mut session = Session::new_with_manifest_for_tests(
+    let session = Session::new_with_manifest_for_tests(
         &policy(gaze::SessionScope::Conversation),
         Arc::new(manifest),
         &snapshot_dir,
@@ -432,7 +432,7 @@ async fn output_caps_truncate_text_lines_and_manifest_summary_records_it() {
     let snapshot_dir = temp.path().join("snapshots");
     let manifest =
         ManifestWriter::new(&manifest_path, ulid::Ulid::new(), "test-audit").expect("manifest");
-    let mut session = Session::new_with_manifest_for_tests(
+    let session = Session::new_with_manifest_for_tests(
         &policy(gaze::SessionScope::Conversation),
         Arc::new(manifest),
         &snapshot_dir,
@@ -472,7 +472,7 @@ async fn output_caps_timeout_records_manifest_without_raw_values() {
     let snapshot_dir = temp.path().join("snapshots");
     let manifest =
         ManifestWriter::new(&manifest_path, ulid::Ulid::new(), "test-audit").expect("manifest");
-    let mut session = Session::new_with_manifest_for_tests(
+    let session = Session::new_with_manifest_for_tests(
         &policy(gaze::SessionScope::Conversation),
         Arc::new(manifest),
         &snapshot_dir,
@@ -509,7 +509,7 @@ async fn dispatch_with_nested_json_args_redacted() {
     let temp = tempfile::tempdir().expect("tempdir");
     let manifest_path = temp.path().join("manifest.sqlite");
     let snapshot_dir = temp.path().join("snapshots");
-    let mut session = Session::new(
+    let session = Session::new(
         &policy(gaze::SessionScope::Conversation),
         &manifest_path,
         &snapshot_dir,
@@ -544,7 +544,7 @@ async fn dispatch_with_bytes_preserves_base64_metadata() {
     let temp = tempfile::tempdir().expect("tempdir");
     let manifest_path = temp.path().join("manifest.sqlite");
     let snapshot_dir = temp.path().join("snapshots");
-    let mut session = Session::new(
+    let session = Session::new(
         &policy(gaze::SessionScope::Conversation),
         &manifest_path,
         &snapshot_dir,
@@ -587,7 +587,7 @@ async fn snapshot_file_and_dir_permissions_are_private() {
     let temp = tempfile::tempdir().expect("tempdir");
     let manifest_path = temp.path().join("manifest.sqlite");
     let snapshot_dir = temp.path().join("snapshots");
-    let mut session = Session::new(
+    let session = Session::new(
         &policy(gaze::SessionScope::Conversation),
         &manifest_path,
         &snapshot_dir,

@@ -9,7 +9,7 @@ use gaze_recognizers::RegexDetector;
 use crate::errors::LensError;
 use crate::source::db::TableSchema;
 use crate::source::db::schema::SchemaTokenizer;
-use crate::source::{FakeSource, SourceOutput, ToolArgs};
+use crate::source::{FakeSource, FakeSourceAdapter, Source, SourceOutput, ToolArgs};
 use crate::value::{LensRow, LensValue, LowerError};
 
 pub mod manifest;
@@ -28,7 +28,7 @@ struct SessionInner {
     pipeline: Arc<gaze::Pipeline>,
     manifest: Arc<dyn ManifestStore>,
     snapshot_dir: PathBuf,
-    sources: Mutex<HashMap<String, Arc<dyn FakeSource>>>,
+    sources: Mutex<HashMap<String, Arc<dyn Source>>>,
     schema_tokenizer: SchemaTokenizer,
     caps: OutputCaps,
 }
@@ -203,12 +203,20 @@ impl Session {
         })
     }
 
-    pub fn register_fake_source(&mut self, name: &str, source: Box<dyn FakeSource>) {
+    pub fn register_source(&self, name: impl Into<String>, source: Arc<dyn Source>) {
         self.inner
             .sources
             .lock()
             .expect("source map lock")
-            .insert(name.to_string(), Arc::from(source));
+            .insert(name.into(), source);
+    }
+
+    pub fn register_fake_source(&self, name: &str, source: Box<dyn FakeSource>) {
+        self.inner
+            .sources
+            .lock()
+            .expect("source map lock")
+            .insert(name.to_string(), Arc::new(FakeSourceAdapter::new(source)));
     }
 
     pub fn tokenize_schema_metadata(
@@ -266,11 +274,11 @@ impl Session {
             .cloned()
             .ok_or_else(|| LensError::SourceError {
                 source_name: call.tool_name.clone(),
-                detail: "unknown fake source".to_string(),
+                detail: "unknown source".to_string(),
                 sql: None,
                 stderr: None,
             })?;
-        source.invoke(&call.args).await
+        source.dispatch(call).await
     }
 
     fn redact_result(&self, output: SourceOutput) -> Result<CleanOutput, LensError> {

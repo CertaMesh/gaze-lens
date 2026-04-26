@@ -71,7 +71,7 @@ async fn test_log_tail_stub_returns_deferred() {
 #[tokio::test]
 async fn test_query_e2e_pseudonymized() {
     let manifest = Arc::new(RecordingManifest::default());
-    let mut session = session_with_manifest(manifest.clone());
+    let session = session_with_manifest(manifest.clone());
     session.register_fake_source(
         "query",
         Box::new(InMemoryFakeSource::rows(vec![BTreeMap::from([(
