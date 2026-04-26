@@ -6,8 +6,11 @@ use clap::Args;
 use crate::errors::LensError;
 use crate::frontend::mcp::McpFrontend;
 use crate::frontend::{Frontend, ShutdownToken};
-use crate::profile::load_profile;
-use crate::session::Session;
+use crate::profile::{SourceSpec, load_profile};
+use crate::session::{OutputCaps, Session};
+use crate::source::db::DbSource;
+use crate::source::db::mysql::MysqlSource;
+use crate::source::{DbSourceWrapper, Source};
 
 #[derive(Debug, Args)]
 pub struct ServeArgs {
@@ -38,9 +41,22 @@ pub async fn run(
     let policy = default_policy();
     let session = Arc::new(Session::new(&policy, &manifest, &snapshot_dir)?);
 
-    // Source construction lands as adapters are wired into profile runtime.
-    // PR2a keeps the MCP transport on the shared Session audit path.
-    let _profile_name = profile.name;
+    match &profile.source {
+        SourceSpec::Mysql { .. } => {
+            let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
+            let db_source: Arc<dyn DbSource> =
+                Arc::new(MysqlSource::connect(&profile, limit_cap).await?);
+            let source: Arc<dyn Source> = Arc::new(DbSourceWrapper::with_schema_allowlist(
+                db_source,
+                profile.schema_allowlist.clone(),
+            ));
+            for tool_name in ["query", "schema", "list_tables"] {
+                session.register_source(tool_name, source.clone());
+            }
+        }
+        SourceSpec::SshLog { .. } => {}
+    }
+
     McpFrontend::new()
         .serve(session, ShutdownToken)
         .await
