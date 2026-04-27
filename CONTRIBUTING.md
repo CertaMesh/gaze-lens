@@ -42,6 +42,14 @@ The standard `cargo test --all-targets` run must not require Docker or a local d
 
 The standard `cargo test --all-targets` run must not require Docker or a local database. Postgres end-to-end tests belong behind the opt-in `integration-postgres` feature and should be run explicitly in environments that provide a Postgres testcontainer or compatible local service. SQLite target-source tests use a temp-file database and run in the standard suite.
 
+Run the opt-in Postgres smoke with:
+
+```sh
+cargo test --all-targets --features integration-postgres
+```
+
+Default CI does not run this feature in v1; enabling it in CI is a deferred decision.
+
 ## Runtime policy fallback
 
 `serve` loads `profile.policy` when a profile names a policy TOML. Profiles without an explicit policy use the built-in fallback equivalent to an empty `[policy.database]` section, which preserves non-sensitive fields and still enables the default email detector.

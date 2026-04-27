@@ -105,7 +105,7 @@ impl DbSource for PostgresSource {
             r#"
             SELECT table_name
             FROM information_schema.tables
-            WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+            WHERE table_schema = current_schema()
               AND table_type = 'BASE TABLE'
             ORDER BY table_name
             "#,
