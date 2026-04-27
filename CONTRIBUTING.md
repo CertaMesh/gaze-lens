@@ -14,6 +14,19 @@
 
 Do not silently float to an arbitrary local Gaze checkout. When a PR depends on a newer Gaze API, update the expected Gaze tag/revision in the PR description and keep the path dependency pointed at that pinned checkout.
 
+## Releases
+
+Releases are tag-driven through [cargo-dist](https://opensource.axo.dev/cargo-dist/). To cut a release:
+
+1. Bump the package version in `Cargo.toml`.
+2. Commit the version bump.
+3. Create a matching SemVer tag, for example `git tag v1.0.1`.
+4. Push the tag with `git push origin v1.0.1`.
+
+The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured macOS, Linux, and Windows archives, generates shell and PowerShell installers, and uploads everything to the GitHub release for that tag. v1.0.0 shipped without binaries; v1.0.1 and later tags will publish them automatically.
+
+The release workflow checks out the pinned Gaze path dependency before running cargo-dist. When changing the required Gaze revision, update both this section's release notes/PR description and the `GAZE_REF` used by `.github/workflows/release.yml`.
+
 ## sqlx macro policy (banned for production-source queries)
 
 **Do not use `sqlx::query!`, `sqlx::query_as!`, or any compile-time query macro for production-source adapters** (MySQL, Postgres, SQLite reading from operator profiles).
