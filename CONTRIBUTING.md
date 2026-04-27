@@ -8,6 +8,12 @@
 4. Test suite green before each commit; fix-and-commit-separately on failure.
 5. Stage specific files by name; never `git add -A`.
 
+## Gaze path dependency
+
+`Cargo.toml` pins `gaze` and `gaze-recognizers` as local path dependencies during v1 development. Contributors must check out the matching Gaze tag or orchestrator-provided Gaze revision at `../../../../Workspace/bets/Gaze` relative to this repo/worktree before building.
+
+Do not silently float to an arbitrary local Gaze checkout. When a PR depends on a newer Gaze API, update the expected Gaze tag/revision in the PR description and keep the path dependency pointed at that pinned checkout.
+
 ## sqlx macro policy (banned for production-source queries)
 
 **Do not use `sqlx::query!`, `sqlx::query_as!`, or any compile-time query macro for production-source adapters** (MySQL, Postgres, SQLite reading from operator profiles).

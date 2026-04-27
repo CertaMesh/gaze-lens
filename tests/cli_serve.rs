@@ -27,7 +27,7 @@ impl Frontend for ShutdownObservingFrontend {
 }
 
 #[test]
-fn test_serve_is_the_only_subcommand() {
+fn test_serve_is_available_as_a_subcommand() {
     let cli = Cli::parse_from(["gaze-lens", "serve"]);
     assert!(matches!(cli.cmd, Cmd::Serve(_)));
 }
@@ -48,7 +48,9 @@ fn test_serve_parses_profile_and_paths() {
         "--snapshot-dir",
         "/tmp/snapshots",
     ]);
-    let Cmd::Serve(args) = cli.cmd;
+    let Cmd::Serve(args) = cli.cmd else {
+        panic!("expected serve command");
+    };
     assert_eq!(args.profile, "prod");
     assert_eq!(
         cli.project_config.as_deref(),

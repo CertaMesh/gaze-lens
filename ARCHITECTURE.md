@@ -37,9 +37,9 @@ From scratchpad 458 §"Core traits".
 pub trait DbSource: Send + Sync {
     fn kind(&self) -> DbKind;
     fn profile_name(&self) -> &str;
-    async fn list_tables(&self) -> Result<Vec<String>, SourceError>;
-    async fn schema(&self, table: &str) -> Result<TableSchema, SourceError>;
-    async fn query(&self, sql: &str, limit: usize) -> Result<Vec<BTreeMap<String, gaze::Value>>, SourceError>;
+    async fn list_tables(&self) -> Result<Vec<String>, LensError>;
+    async fn schema(&self, table: &str) -> Result<TableSchema, LensError>;
+    async fn query(&self, query: &CannedQuery) -> Result<Vec<LensRow>, LensError>;
 }
 
 #[async_trait]
@@ -82,6 +82,11 @@ From scratchpad 442 mining audit + Codex r1 hardening notes.
 | mcp/errors.rs | LIFT | Error sanitizer thin wrapper. |
 | policy.rs | LIFT + relax | Drop production-only constraint; multi-profile via `profile.rs`. |
 | cli/* | PARTIAL LIFT | New: `query`, `replay` per D5/D8. `init` per D6. |
+
+## Type Conversion Notes
+
+- DB adapters return `LensRow` values, not lossy strings. `NULL` remains distinct from an empty string, bytes carry base64 metadata, and decode failures reject the row with an explicit conversion error.
+- MySQL `DATETIME` has no timezone. v1 normalizes timezone-less MySQL datetime values to UTC RFC3339 strings by default so manifest and CLI output remain stable across operator laptops.
 
 ## Stop-gates (implementer)
 

@@ -64,7 +64,7 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 - **Whole-session replay only at v1.** `gaze-lens replay <session_ulid>` walks the manifest call history and restores tokens via `gaze::Session::import(snapshot)`. Per-call replay is v1.x stop-gated on Gaze feedback for redaction-row correlation. (D8)
 - Default Gaze session scope is `Scope::Conversation(<lens_session_id>)`; gaze-lens rejects `Scope::Ephemeral` at session construction because `Session::export()` rejects it. (D10)
 - Tool args (SQL `where` AST, grep patterns, table/column names) are tokenized via the same `Pipeline::redact` path as result data **before** manifest write. Manifest never stores raw args. Raw args are reconstructable on operator replay via the session snapshot. (D7)
-- Schema metadata (table/column names) flows through Gaze with a `schema_metadata` source class. Default-deny posture; allowlist common safe names via `[schema] allow_columns = [...]`. Tokens are session-stable. (D2)
+- Schema metadata (table/column names) flows through Gaze with a `schema_metadata` source class. This is presentation privacy for schema/list output, not an access-control grant. Query access is governed by each column's `ColumnInfo.allowed` value during canned-query validation. Default-deny posture; allowlist common safe names via `[schema] allow_columns = [...]`. Tokens are session-stable. (D2)
 
 ## Anti-features (locked)
 
