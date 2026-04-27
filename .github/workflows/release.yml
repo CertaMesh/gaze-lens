@@ -59,15 +59,8 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Checkout Gaze path dependency
-        shell: bash
-        run: |
-          GAZE_REF="d4bec8c14a8caab0b25b5beb23822830dec80fbc"
-          GAZE_PATH="../../../../Workspace/bets/Gaze"
-          mkdir -p "$(dirname "$GAZE_PATH")"
-          git clone https://github.com/PIInuts/Gaze.git "$GAZE_PATH"
-          git -C "$GAZE_PATH" fetch --depth=1 origin "$GAZE_REF"
-          git -C "$GAZE_PATH" checkout --detach "$GAZE_REF"
+      - name: Configure git for private Gaze access
+        run: git config --global url."https://${{ secrets.GAZE_REPO_TOKEN }}@github.com/PIInuts/gaze.git".insteadOf "https://github.com/PIInuts/gaze.git"
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -123,15 +116,8 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Checkout Gaze path dependency
-        shell: bash
-        run: |
-          GAZE_REF="d4bec8c14a8caab0b25b5beb23822830dec80fbc"
-          GAZE_PATH="../../../../Workspace/bets/Gaze"
-          mkdir -p "$(dirname "$GAZE_PATH")"
-          git clone https://github.com/PIInuts/Gaze.git "$GAZE_PATH"
-          git -C "$GAZE_PATH" fetch --depth=1 origin "$GAZE_REF"
-          git -C "$GAZE_PATH" checkout --detach "$GAZE_REF"
+      - name: Configure git for private Gaze access
+        run: git config --global url."https://${{ secrets.GAZE_REPO_TOKEN }}@github.com/PIInuts/gaze.git".insteadOf "https://github.com/PIInuts/gaze.git"
       - name: Install Rust non-interactively if not already installed
         if: ${{ matrix.container }}
         run: |
@@ -191,15 +177,8 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Checkout Gaze path dependency
-        shell: bash
-        run: |
-          GAZE_REF="d4bec8c14a8caab0b25b5beb23822830dec80fbc"
-          GAZE_PATH="../../../../Workspace/bets/Gaze"
-          mkdir -p "$(dirname "$GAZE_PATH")"
-          git clone https://github.com/PIInuts/Gaze.git "$GAZE_PATH"
-          git -C "$GAZE_PATH" fetch --depth=1 origin "$GAZE_REF"
-          git -C "$GAZE_PATH" checkout --detach "$GAZE_REF"
+      - name: Configure git for private Gaze access
+        run: git config --global url."https://${{ secrets.GAZE_REPO_TOKEN }}@github.com/PIInuts/gaze.git".insteadOf "https://github.com/PIInuts/gaze.git"
       - name: Install cached dist
         uses: actions/download-artifact@v7
         with:

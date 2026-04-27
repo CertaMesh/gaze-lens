@@ -7,7 +7,7 @@ members = ["cargo:."]
 cargo-dist-version = "0.31.0"
 # CI backends to support
 ci = "github"
-# release.yml has repo-specific checkout steps for the external Gaze path dependency.
+# release.yml has repo-specific private Git auth for the external Gaze dependency.
 allow-dirty = ["ci"]
 # Do not run release artifact validation on pull requests.
 pr-run-mode = "skip"
