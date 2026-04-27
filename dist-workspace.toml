@@ -9,6 +9,8 @@ cargo-dist-version = "0.31.0"
 ci = "github"
 # release.yml has repo-specific checkout steps for the external Gaze path dependency.
 allow-dirty = ["ci"]
+# Do not run release artifact validation on pull requests.
+pr-run-mode = "skip"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
 # Target platforms to build apps for (Rust target-triple syntax)
