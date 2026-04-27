@@ -19,7 +19,13 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 
 ## Install
 
-`gaze-lens` builds with stable Rust 1.89+. v1 ships from source; published crates / prebuilt binaries are deferred.
+`gaze-lens` builds with stable Rust 1.89+.
+
+### Prebuilt binaries (v1.0.1+)
+
+Future `v*.*.*` releases publish prebuilt binaries and shell/PowerShell installers to the [GitHub releases page](https://github.com/PIInuts/gaze-lens/releases). v1.0.0 shipped without binaries; the next release tag will start attaching them automatically.
+
+### Source build
 
 ```sh
 git clone https://github.com/PIInuts/gaze-lens
