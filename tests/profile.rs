@@ -245,9 +245,36 @@ fn sqlite_profile_parses_path_and_readonly_default() {
         SourceSpec::Sqlite {
             path,
             readonly_required,
+            json_text_columns,
         } => {
             assert_eq!(path, std::path::PathBuf::from("/srv/app/prod.sqlite"));
             assert!(readonly_required);
+            assert!(json_text_columns.is_empty());
+        }
+        _ => panic!("expected sqlite"),
+    }
+}
+
+#[test]
+fn sqlite_profile_parses_json_text_columns() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "prod-sqlite"
+            source = { kind = "sqlite", path = "/srv/app/prod.sqlite", json_text_columns = ["users.preferences"] }
+        "#,
+    );
+
+    let profile = load_profile("prod-sqlite", Some(&project), None).expect("profile");
+
+    match profile.source {
+        SourceSpec::Sqlite {
+            json_text_columns, ..
+        } => {
+            assert_eq!(json_text_columns, vec!["users.preferences"]);
         }
         _ => panic!("expected sqlite"),
     }

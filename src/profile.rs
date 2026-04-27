@@ -48,6 +48,8 @@ pub enum SourceSpec {
         path: PathBuf,
         #[serde(default = "default_readonly_required")]
         readonly_required: bool,
+        #[serde(default)]
+        json_text_columns: Vec<String>,
     },
     SshLog {
         host: String,
@@ -239,11 +241,14 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
         },
         (
             SourceSpec::Sqlite {
-                path: user_path, ..
+                path: user_path,
+                json_text_columns: user_json_text_columns,
+                ..
             },
             SourceSpec::Sqlite {
                 path: project_path,
                 readonly_required,
+                json_text_columns: project_json_text_columns,
             },
         ) => SourceSpec::Sqlite {
             path: if user_path.as_os_str().is_empty() {
@@ -252,6 +257,11 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
                 user_path.clone()
             },
             readonly_required: *readonly_required,
+            json_text_columns: if project_json_text_columns.is_empty() {
+                user_json_text_columns.clone()
+            } else {
+                project_json_text_columns.clone()
+            },
         },
         (
             SourceSpec::SshLog {

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use gaze_lens::errors::LensError;
 use gaze_lens::session::{CleanOutput, Session, ToolCall};
 use gaze_lens::source::DbSourceWrapper;
 use gaze_lens::source::db::query::CannedQuery;
@@ -11,7 +12,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 #[tokio::test]
 async fn sqlite_decodes_runtime_type_not_declared_affinity() {
-    let source = sqlite_source().await;
+    let source = sqlite_source_with_json_text_columns(["items.json_text"]).await;
 
     let rows = source
         .query(&CannedQuery {
@@ -79,7 +80,7 @@ async fn sqlite_schema_uses_declared_types_for_metadata() {
 
 #[tokio::test]
 async fn sqlite_source_can_route_through_session_db_wrapper() {
-    let source = sqlite_source().await;
+    let source = sqlite_source_with_json_text_columns(["items.json_text"]).await;
     let temp = tempfile::tempdir().expect("tempdir");
     let session = Arc::new(
         Session::new(
@@ -121,7 +122,95 @@ async fn sqlite_source_can_route_through_session_db_wrapper() {
     assert!(!email.contains("alice@example.com"));
 }
 
+#[tokio::test]
+async fn sqlite_text_json_default_denies_scalar_looking_text() {
+    let source = sqlite_source().await;
+
+    let rows = source
+        .query(&CannedQuery {
+            table: "items".to_string(),
+            columns: Some(vec![
+                "json_text".to_string(),
+                "scalar_bool_text".to_string(),
+                "scalar_number_text".to_string(),
+            ]),
+            r#where: None,
+            where_combinator: None,
+            order_by: None,
+            limit: Some(1),
+        })
+        .await
+        .expect("query");
+
+    let row = &rows[0];
+    assert_eq!(
+        row["json_text"],
+        LensValue::String(r#"{"email":"alice@example.com"}"#.to_string())
+    );
+    assert_eq!(
+        row["scalar_bool_text"],
+        LensValue::String("true".to_string())
+    );
+    assert_eq!(
+        row["scalar_number_text"],
+        LensValue::String("123".to_string())
+    );
+}
+
+#[tokio::test]
+async fn sqlite_text_json_allowlist_decodes_objects_and_arrays() {
+    let source =
+        sqlite_source_with_json_text_columns(["items.json_text", "items.json_array_text"]).await;
+
+    let rows = source
+        .query(&CannedQuery {
+            table: "items".to_string(),
+            columns: Some(vec!["json_text".to_string(), "json_array_text".to_string()]),
+            r#where: None,
+            where_combinator: None,
+            order_by: None,
+            limit: Some(1),
+        })
+        .await
+        .expect("query");
+
+    let row = &rows[0];
+    assert_eq!(
+        row["json_text"],
+        LensValue::Json(serde_json::json!({"email": "alice@example.com"}))
+    );
+    assert_eq!(
+        row["json_array_text"],
+        LensValue::Json(serde_json::json!(["alpha", 2]))
+    );
+}
+
+#[tokio::test]
+async fn sqlite_text_json_allowlist_rejects_invalid_json_text() {
+    let source = sqlite_source_with_json_text_columns(["items.invalid_json_text"]).await;
+
+    let err = source
+        .query(&CannedQuery {
+            table: "items".to_string(),
+            columns: Some(vec!["invalid_json_text".to_string()]),
+            r#where: None,
+            where_combinator: None,
+            order_by: None,
+            limit: Some(1),
+        })
+        .await
+        .expect_err("invalid json should reject row");
+
+    assert!(matches!(err, LensError::ConvertError(_)));
+}
+
 async fn sqlite_source() -> SqliteSource {
+    sqlite_source_with_json_text_columns(std::iter::empty::<&str>()).await
+}
+
+async fn sqlite_source_with_json_text_columns(
+    json_text_columns: impl IntoIterator<Item = impl Into<String>>,
+) -> SqliteSource {
     let temp = tempfile::tempdir().expect("tempdir");
     let path = temp.path().join("target.sqlite");
     let options = SqliteConnectOptions::new()
@@ -134,7 +223,12 @@ async fn sqlite_source() -> SqliteSource {
         .expect("sqlite pool");
     setup_schema(&pool).await;
     std::mem::forget(temp);
-    SqliteSource::from_pool_for_tests(pool, "sqlite-test", 100)
+    SqliteSource::from_pool_for_tests_with_json_text_columns(
+        pool,
+        "sqlite-test",
+        100,
+        json_text_columns,
+    )
 }
 
 async fn setup_schema(pool: &sqlx::SqlitePool) {
@@ -148,6 +242,10 @@ async fn setup_schema(pool: &sqlx::SqlitePool) {
             bool_false BOOLEAN,
             bool_true BOOLEAN,
             json_text TEXT,
+            json_array_text TEXT,
+            invalid_json_text TEXT,
+            scalar_bool_text TEXT,
+            scalar_number_text TEXT,
             timestamp_text TIMESTAMP,
             null_value TEXT
         )
@@ -167,9 +265,13 @@ async fn setup_schema(pool: &sqlx::SqlitePool) {
             bool_false,
             bool_true,
             json_text,
+            json_array_text,
+            invalid_json_text,
+            scalar_bool_text,
+            scalar_number_text,
             timestamp_text,
             null_value
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind("stored as text")
@@ -179,6 +281,10 @@ async fn setup_schema(pool: &sqlx::SqlitePool) {
     .bind(0_i64)
     .bind(1_i64)
     .bind(r#"{"email":"alice@example.com"}"#)
+    .bind(r#"["alpha",2]"#)
+    .bind("not json")
+    .bind("true")
+    .bind("123")
     .bind("2026-04-26T22:30:15Z")
     .bind(Option::<String>::None)
     .execute(pool)

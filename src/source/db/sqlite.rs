@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use async_trait::async_trait;
@@ -18,6 +18,7 @@ pub struct SqliteSource {
     pool: SqlitePool,
     profile_name: String,
     limit_cap: u32,
+    json_text_columns: BTreeSet<String>,
 }
 
 impl std::fmt::Debug for SqliteSource {
@@ -34,6 +35,7 @@ impl SqliteSource {
         let SourceSpec::Sqlite {
             path,
             readonly_required,
+            json_text_columns,
         } = &profile.source
         else {
             return Err(LensError::Profile {
@@ -62,6 +64,7 @@ impl SqliteSource {
             pool,
             profile_name: profile.name.clone(),
             limit_cap,
+            json_text_columns: json_text_columns.iter().cloned().collect(),
         })
     }
 
@@ -75,6 +78,25 @@ impl SqliteSource {
             pool,
             profile_name: profile_name.into(),
             limit_cap,
+            json_text_columns: BTreeSet::new(),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn from_pool_for_tests_with_json_text_columns(
+        pool: SqlitePool,
+        profile_name: impl Into<String>,
+        limit_cap: u32,
+        json_text_columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            pool,
+            profile_name: profile_name.into(),
+            limit_cap,
+            json_text_columns: json_text_columns
+                .into_iter()
+                .map(Into::into)
+                .collect::<BTreeSet<_>>(),
         }
     }
 }
@@ -150,7 +172,7 @@ impl DbSource for SqliteSource {
             .await
             .map_err(|err| source_error(&self.profile_name, err.to_string(), Some(sql.clone())))?;
         rows.iter()
-            .map(|row| row_to_values(row, &schema))
+            .map(|row| row_to_values(row, &schema, &self.json_text_columns))
             .collect::<Result<Vec<_>, _>>()
     }
 }
@@ -172,7 +194,11 @@ fn bind_value<'q>(
     })
 }
 
-fn row_to_values(row: &SqliteRow, schema: &TableSchema) -> Result<LensRow, LensError> {
+fn row_to_values(
+    row: &SqliteRow,
+    schema: &TableSchema,
+    json_text_columns: &BTreeSet<String>,
+) -> Result<LensRow, LensError> {
     let mut out = BTreeMap::new();
     for (index, column) in row.columns().iter().enumerate() {
         let name = column.name().to_string();
@@ -182,13 +208,27 @@ fn row_to_values(row: &SqliteRow, schema: &TableSchema) -> Result<LensRow, LensE
             .find(|candidate| candidate.name == name)
             .map(|candidate| candidate.data_type.as_str())
             .unwrap_or("");
-        let value = decode_value(row, index, declared_ty)?;
+        let value = decode_value(
+            row,
+            index,
+            &schema.table,
+            &name,
+            declared_ty,
+            json_text_columns,
+        )?;
         out.insert(name, value);
     }
     Ok(out)
 }
 
-fn decode_value(row: &SqliteRow, index: usize, declared_ty: &str) -> Result<LensValue, LensError> {
+fn decode_value(
+    row: &SqliteRow,
+    index: usize,
+    table_name: &str,
+    column_name: &str,
+    declared_ty: &str,
+    json_text_columns: &BTreeSet<String>,
+) -> Result<LensValue, LensError> {
     let raw = row
         .try_get_raw(index)
         .map_err(|err| decode_error("sqlite", err))?;
@@ -237,8 +277,10 @@ fn decode_value(row: &SqliteRow, index: usize, declared_ty: &str) -> Result<Lens
             {
                 return Ok(value);
             }
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&value) {
-                return Ok(LensValue::Json(json));
+            if json_text_columns.contains(&format!("{table_name}.{column_name}")) {
+                return serde_json::from_str::<serde_json::Value>(&value)
+                    .map(LensValue::Json)
+                    .map_err(|err| decode_error("TEXT json", err));
             }
             Ok(LensValue::String(value))
         }
