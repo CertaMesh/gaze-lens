@@ -8,11 +8,17 @@
 4. Test suite green before each commit; fix-and-commit-separately on failure.
 5. Stage specific files by name; never `git add -A`.
 
-## Gaze path dependency
+## Gaze dependency pin
 
-`Cargo.toml` pins `gaze` and `gaze-recognizers` as local path dependencies during v1 development. Contributors must check out the matching Gaze tag or orchestrator-provided Gaze revision at `../../../../Workspace/bets/Gaze` relative to this repo/worktree before building.
+`Cargo.toml` pins `gaze` and `gaze-recognizers` to a specific `PIInuts/gaze` Git revision. Do not silently float to an arbitrary Gaze checkout. When adopting new Gaze features, update the `rev = "..."` SHA in `Cargo.toml` and bump the gaze-lens patch version in the same PR.
 
-Do not silently float to an arbitrary local Gaze checkout. When a PR depends on a newer Gaze API, update the expected Gaze tag/revision in the PR description and keep the path dependency pointed at that pinned checkout.
+Local development can use a local Gaze checkout through a per-developer Cargo patch. Add this to `~/.cargo/config.toml` and do not commit it:
+
+```toml
+[patch."https://github.com/PIInuts/gaze.git"]
+gaze = { path = "/abs/path/to/Gaze/crates/gaze" }
+gaze-recognizers = { path = "/abs/path/to/Gaze/crates/gaze-recognizers" }
+```
 
 ## Releases
 
@@ -25,7 +31,9 @@ Releases are tag-driven through [cargo-dist](https://opensource.axo.dev/cargo-di
 
 The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured macOS, Linux, and Windows archives, generates shell and PowerShell installers, and uploads everything to the GitHub release for that tag. v1.0.0 shipped without binaries; v1.0.1 and later tags will publish them automatically.
 
-The release workflow checks out the pinned Gaze path dependency before running cargo-dist. When changing the required Gaze revision, update both this section's release notes/PR description and the `GAZE_REF` used by `.github/workflows/release.yml`.
+The release workflow requires a repository secret named `GAZE_REPO_TOKEN` on `PIInuts/gaze-lens` so Cargo can fetch the private `PIInuts/gaze` dependency. Use a fine-grained PAT scoped to `PIInuts/gaze` with read-only repository access, then add it in GitHub under Settings -> Secrets and variables -> Actions -> New repository secret.
+
+The release workflow configures Git to use that token before cargo-dist resolves dependencies. When changing the required Gaze revision, update the `rev = "..."` SHA in `Cargo.toml`, bump the patch version, and call out the Gaze revision in the release PR description.
 
 ## sqlx macro policy (banned for production-source queries)
 
