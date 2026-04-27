@@ -4,6 +4,10 @@ use clap::{Parser, Subcommand};
 
 use crate::errors::LensError;
 
+pub mod check;
+pub mod init;
+pub mod query;
+pub mod replay;
 pub mod serve;
 
 #[derive(Debug, Parser)]
@@ -21,6 +25,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
+    Init(init::InitArgs),
+    Query(query::QueryArgs),
+    Replay(replay::ReplayArgs),
+    Check(check::CheckArgs),
     Serve(serve::ServeArgs),
 }
 
@@ -31,6 +39,32 @@ pub fn run(cli: Cli) -> Result<(), LensError> {
         }
     }
     match cli.cmd {
+        Cmd::Init(args) => init::run(
+            args,
+            cli.project_config.as_deref(),
+            cli.user_config.as_deref(),
+        ),
+        Cmd::Query(args) => {
+            let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
+                detail: err.to_string(),
+            })?;
+            runtime.block_on(query::run(
+                args,
+                cli.project_config.as_deref(),
+                cli.user_config.as_deref(),
+            ))
+        }
+        Cmd::Replay(args) => replay::run(args),
+        Cmd::Check(args) => {
+            let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
+                detail: err.to_string(),
+            })?;
+            runtime.block_on(check::run(
+                args,
+                cli.project_config.as_deref(),
+                cli.user_config.as_deref(),
+            ))
+        }
         Cmd::Serve(args) => {
             let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
                 detail: err.to_string(),
