@@ -13,6 +13,8 @@ use crate::profile::{SourceSpec, load_profile};
 use crate::session::{OutputCaps, Session};
 use crate::source::db::DbSource;
 use crate::source::db::mysql::MysqlSource;
+use crate::source::db::postgres::PostgresSource;
+use crate::source::db::sqlite::SqliteSource;
 use crate::source::log::SshLogSourceWrapper;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 use crate::source::{DbSourceWrapper, Source};
@@ -56,6 +58,30 @@ pub async fn run(
             let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
             let db_source: Arc<dyn DbSource> =
                 Arc::new(MysqlSource::connect(&profile, limit_cap).await?);
+            let source: Arc<dyn Source> = Arc::new(DbSourceWrapper::with_schema_allowlist(
+                db_source,
+                profile.schema_allowlist.clone(),
+            ));
+            for tool_name in ["query", "schema", "list_tables"] {
+                session.register_source(tool_name, source.clone());
+            }
+        }
+        SourceSpec::Postgres { .. } => {
+            let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
+            let db_source: Arc<dyn DbSource> =
+                Arc::new(PostgresSource::connect(&profile, limit_cap).await?);
+            let source: Arc<dyn Source> = Arc::new(DbSourceWrapper::with_schema_allowlist(
+                db_source,
+                profile.schema_allowlist.clone(),
+            ));
+            for tool_name in ["query", "schema", "list_tables"] {
+                session.register_source(tool_name, source.clone());
+            }
+        }
+        SourceSpec::Sqlite { .. } => {
+            let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
+            let db_source: Arc<dyn DbSource> =
+                Arc::new(SqliteSource::connect(&profile, limit_cap).await?);
             let source: Arc<dyn Source> = Arc::new(DbSourceWrapper::with_schema_allowlist(
                 db_source,
                 profile.schema_allowlist.clone(),

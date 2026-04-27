@@ -31,6 +31,26 @@ pub enum SourceSpec {
         #[serde(default = "default_readonly_required")]
         readonly_required: bool,
     },
+    Postgres {
+        host: String,
+        port: u16,
+        database: String,
+        username: String,
+        password_env: String,
+        #[serde(default)]
+        ssh_host: Option<String>,
+        #[serde(default)]
+        local_port: Option<u16>,
+        #[serde(default = "default_readonly_required")]
+        readonly_required: bool,
+    },
+    Sqlite {
+        path: PathBuf,
+        #[serde(default = "default_readonly_required")]
+        readonly_required: bool,
+        #[serde(default)]
+        json_text_columns: Vec<String>,
+    },
     SshLog {
         host: String,
         path: String,
@@ -46,7 +66,14 @@ struct ProfileFile {
 impl Profile {
     pub fn resolve_password(&self) -> Result<String, LensError> {
         let env = match &self.source {
-            SourceSpec::Mysql { password_env, .. } => password_env,
+            SourceSpec::Mysql { password_env, .. } | SourceSpec::Postgres { password_env, .. } => {
+                password_env
+            }
+            SourceSpec::Sqlite { .. } => {
+                return Err(LensError::Profile {
+                    detail: "sqlite profiles do not have database passwords".to_string(),
+                });
+            }
             SourceSpec::SshLog { .. } => {
                 return Err(LensError::Profile {
                     detail: "ssh_log profiles do not have database passwords".to_string(),
@@ -175,6 +202,66 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
             ssh_host: user_ssh_host.clone().or_else(|| project_ssh_host.clone()),
             local_port: user_local_port.or(*project_local_port),
             readonly_required: *readonly_required,
+        },
+        (
+            SourceSpec::Postgres {
+                host: user_host,
+                port: user_port,
+                ssh_host: user_ssh_host,
+                local_port: user_local_port,
+                ..
+            },
+            SourceSpec::Postgres {
+                host: project_host,
+                port: project_port,
+                database,
+                username,
+                password_env,
+                ssh_host: project_ssh_host,
+                local_port: project_local_port,
+                readonly_required,
+            },
+        ) => SourceSpec::Postgres {
+            host: if user_host.is_empty() {
+                project_host.clone()
+            } else {
+                user_host.clone()
+            },
+            port: if *user_port == 0 {
+                *project_port
+            } else {
+                *user_port
+            },
+            database: database.clone(),
+            username: username.clone(),
+            password_env: password_env.clone(),
+            ssh_host: user_ssh_host.clone().or_else(|| project_ssh_host.clone()),
+            local_port: user_local_port.or(*project_local_port),
+            readonly_required: *readonly_required,
+        },
+        (
+            SourceSpec::Sqlite {
+                path: user_path,
+                json_text_columns: user_json_text_columns,
+                ..
+            },
+            SourceSpec::Sqlite {
+                path: project_path,
+                readonly_required,
+                json_text_columns: project_json_text_columns,
+            },
+        ) => SourceSpec::Sqlite {
+            path: if user_path.as_os_str().is_empty() {
+                project_path.clone()
+            } else {
+                user_path.clone()
+            },
+            readonly_required: *readonly_required,
+            json_text_columns: if project_json_text_columns.is_empty() {
+                user_json_text_columns.clone()
+            } else {
+                project_json_text_columns.clone()
+            },
         },
         (
             SourceSpec::SshLog {

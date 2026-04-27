@@ -1,6 +1,6 @@
 use gaze_lens::source::db::query::{
-    CannedQuery, ColumnInfo, OrderBy, OrderDir, QueryError, QueryValue, ScalarOrList, ScalarValue,
-    TableSchema, WhereClause, WhereCombinator, WhereOp,
+    CannedQuery, ColumnInfo, Dialect, OrderBy, OrderDir, QueryError, QueryValue, ScalarOrList,
+    ScalarValue, TableSchema, WhereClause, WhereCombinator, WhereOp,
 };
 
 fn schema() -> TableSchema {
@@ -200,6 +200,74 @@ fn limit_cap_clamps_to_schema_limit() {
 
     assert_eq!(compiled.sql, "SELECT `id` FROM `users` LIMIT ?");
     assert_eq!(compiled.binds, vec![QueryValue::U64(50)]);
+}
+
+#[test]
+fn postgres_dialect_uses_numbered_placeholders_and_quoted_idents() {
+    let query = CannedQuery {
+        table: "users".to_string(),
+        columns: Some(vec!["id".to_string(), "email".to_string()]),
+        r#where: Some(vec![
+            clause("id", WhereOp::Eq, scalar(ScalarValue::I64(1))),
+            clause(
+                "email",
+                WhereOp::Like,
+                scalar(ScalarValue::String("%@example.com".to_string())),
+            ),
+        ]),
+        where_combinator: Some(WhereCombinator::And),
+        order_by: Some(vec![OrderBy {
+            col: "created_at".to_string(),
+            dir: OrderDir::Asc,
+        }]),
+        limit: Some(10),
+    };
+
+    let compiled = query
+        .compile_to_sql_for(&schema(), Dialect::Postgres)
+        .expect("compile");
+
+    assert_eq!(
+        compiled.sql,
+        "SELECT \"id\", \"email\" FROM \"users\" WHERE \"id\" = $1 AND \"email\" LIKE $2 ORDER BY \"created_at\" ASC LIMIT $3"
+    );
+    assert_eq!(
+        compiled.binds,
+        vec![
+            QueryValue::I64(1),
+            QueryValue::String("%@example.com".to_string()),
+            QueryValue::U64(10),
+        ]
+    );
+}
+
+#[test]
+fn sqlite_dialect_keeps_question_placeholders_with_sqlite_safe_idents() {
+    let query = CannedQuery {
+        table: "users".to_string(),
+        columns: Some(vec!["id".to_string()]),
+        r#where: Some(vec![clause(
+            "age",
+            WhereOp::Gt,
+            scalar(ScalarValue::I64(18)),
+        )]),
+        where_combinator: None,
+        order_by: None,
+        limit: Some(1),
+    };
+
+    let compiled = query
+        .compile_to_sql_for(&schema(), Dialect::Sqlite)
+        .expect("compile");
+
+    assert_eq!(
+        compiled.sql,
+        "SELECT `id` FROM `users` WHERE `age` > ? LIMIT ?"
+    );
+    assert_eq!(
+        compiled.binds,
+        vec![QueryValue::I64(18), QueryValue::U64(1)]
+    );
 }
 
 fn clause(col: &str, op: WhereOp, val: Option<ScalarOrList>) -> WhereClause {
