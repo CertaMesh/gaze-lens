@@ -15,8 +15,8 @@ integration-postgres = []
 [dependencies]
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive", "env"] }
-gaze = { path = "../../../../Workspace/bets/Gaze/crates/gaze" }
-gaze-recognizers = { path = "../../../../Workspace/bets/Gaze/crates/gaze-recognizers" }
+gaze = { git = "https://github.com/PIInuts/gaze.git", rev = "d4bec8c14a8caab0b25b5beb23822830dec80fbc" }
+gaze-recognizers = { git = "https://github.com/PIInuts/gaze.git", rev = "d4bec8c14a8caab0b25b5beb23822830dec80fbc" }
 rmcp = { version = "0.2", features = ["client", "transport-io"] }
 regex = "1"
 rusqlite = "0.32"
