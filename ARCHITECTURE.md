@@ -11,11 +11,12 @@ src/
   lib.rs
   main.rs
   errors.rs
+  value.rs
   source/
     mod.rs
-    db/{mod.rs,mysql.rs,postgres.rs,sqlite.rs}
-    log/{mod.rs,file_log.rs}
     ssh_tunnel.rs
+    db/{mod.rs,mysql.rs,postgres.rs,sqlite.rs,query.rs,schema.rs}
+    log/{mod.rs,ssh_log.rs}
   frontend/
     mod.rs
     mcp.rs
@@ -26,7 +27,16 @@ src/
   policy.rs
   profile.rs
   cli/{mod.rs,init.rs,check.rs,serve.rs,query.rs,replay.rs}
+  bin/
+    replay-fixture.rs
 ```
+
+Notes vs original spine sketch:
+
+- `log/file_log.rs` was DROP per the mining audit; the actual v1 log source is `log/ssh_log.rs` (D16, PR2b).
+- `value.rs` holds `LensValue` and the typed row plumbing introduced in PR1.
+- `source/db/{query.rs,schema.rs}` split the canned-query AST and tokenized schema metadata out of the per-engine adapters (PR2a/PR3).
+- `bin/replay-fixture.rs` is a small helper binary used by cross-process replay tests.
 
 ## Core traits (v1)
 
