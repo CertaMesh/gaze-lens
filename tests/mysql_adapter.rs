@@ -7,6 +7,8 @@ fn mysql_profile(readonly_required: bool, password_env: &str) -> Profile {
         name: "prod".to_string(),
         policy: None,
         schema_allowlist: None,
+        snapshot_retention_days: None,
+        auto_purge: false,
         source: SourceSpec::Mysql {
             host: "127.0.0.1".to_string(),
             port: 3306,

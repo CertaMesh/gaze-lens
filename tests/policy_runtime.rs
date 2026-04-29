@@ -30,6 +30,8 @@ async fn serve_runtime_policy_column_rules_reach_session_pipeline() {
         },
         policy: Some(policy_path),
         schema_allowlist: None,
+        snapshot_retention_days: None,
+        auto_purge: false,
     };
 
     let (policy, pipeline) = runtime_policy(&profile).expect("runtime policy");

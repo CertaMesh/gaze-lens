@@ -13,6 +13,17 @@ pub struct Profile {
     pub policy: Option<PathBuf>,
     #[serde(default)]
     pub schema_allowlist: Option<Vec<String>>,
+    /// Snapshot retention TTL in days. `None` (default) = unlimited (D3 default).
+    /// When `Some(n)`, snapshots older than `n` days are eligible for sweep
+    /// at session start. Sweep is gated on `auto_purge` for destructive vs warn.
+    #[serde(default)]
+    pub snapshot_retention_days: Option<u32>,
+    /// Destructive operational policy. `false` (default) = warn-only;
+    /// `true` = silently purge expired snapshots and tombstone manifest rows.
+    /// Merge rule is plain conjunction: `merged = project.auto_purge && user.auto_purge`.
+    /// User cannot opt INTO auto_purge if project has not enabled it; user can opt OUT.
+    #[serde(default)]
+    pub auto_purge: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -231,6 +242,13 @@ fn merge_profiles(user_profiles: Vec<Profile>, project_profiles: Vec<Profile>) -
 }
 
 fn merge_one(user: &Profile, project: &Profile) -> Profile {
+    // `snapshot_retention_days`: project file overrides; user fallback.
+    let snapshot_retention_days = project
+        .snapshot_retention_days
+        .or(user.snapshot_retention_days);
+    // `auto_purge`: destructive-default merge — plain conjunction.
+    // Project file must opt IN to auto_purge; user cannot escalate. User can downgrade.
+    let auto_purge = project.auto_purge && user.auto_purge;
     Profile {
         name: project.name.clone(),
         source: merge_source(&user.source, &project.source),
@@ -239,6 +257,8 @@ fn merge_one(user: &Profile, project: &Profile) -> Profile {
             .schema_allowlist
             .clone()
             .or_else(|| user.schema_allowlist.clone()),
+        snapshot_retention_days,
+        auto_purge,
     }
 }
 
