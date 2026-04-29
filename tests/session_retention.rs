@@ -1,14 +1,14 @@
 //! PR 6 — snapshot retention TTL with `purged_at_ms` tombstone.
 //!
-//! Tests the seven scenarios spelled out in the PR-6 plan plus the advisory
-//! v2→v3 schema-migration test.
+//! Tests cover the AutoPurge {Off, Warn, Purge} sweep behavior, the
+//! profile-merge cap (project-opt-in for destructive operations), the
+//! v2→v3 schema migration, and the honest replay error path.
 
 use std::path::{Path, PathBuf};
 
 use gaze_lens::cli::retention::apply_retention_policy;
-use gaze_lens::errors::LensError;
 use gaze_lens::profile::{Profile, SourceSpec};
-use gaze_lens::session::maintenance::ManifestMaintenance;
+use gaze_lens::session::maintenance::{AutoPurge, ManifestMaintenance};
 use gaze_lens::session::manifest::initialize_schema;
 use gaze_lens::session::restore::restore_whole_session;
 use rusqlite::{Connection, params};
@@ -34,6 +34,9 @@ struct Fixture {
     _temp: tempfile::TempDir,
     manifest: PathBuf,
     snapshots: PathBuf,
+    /// Override `.last_retention_warn` so each test runs in isolation
+    /// without touching the shared `~/.gaze-lens/` state.
+    warn_state: PathBuf,
 }
 
 impl Fixture {
@@ -41,6 +44,7 @@ impl Fixture {
         let temp = tempfile::tempdir().expect("tempdir");
         let manifest = temp.path().join("manifest.sqlite");
         let snapshots = temp.path().join("snapshots");
+        let warn_state = temp.path().join(".last_retention_warn");
         std::fs::create_dir_all(&snapshots).expect("snapshot dir");
         let conn = Connection::open(&manifest).expect("open manifest");
         initialize_schema(&conn).expect("init schema");
@@ -48,7 +52,14 @@ impl Fixture {
             _temp: temp,
             manifest,
             snapshots,
+            warn_state,
         }
+    }
+
+    fn open_maintenance(&self) -> ManifestMaintenance {
+        ManifestMaintenance::open(&self.manifest, &self.snapshots)
+            .expect("open mm")
+            .with_warn_state_path(self.warn_state.clone())
     }
 
     fn insert_call(
@@ -110,7 +121,7 @@ impl Fixture {
     }
 }
 
-fn profile_with_retention(retention_days: Option<u32>, auto_purge: bool) -> Profile {
+fn profile_with_retention(retention_days: Option<u32>, auto_purge: AutoPurge) -> Profile {
     Profile {
         name: "retention-test".to_string(),
         source: SourceSpec::Sqlite {
@@ -126,7 +137,7 @@ fn profile_with_retention(retention_days: Option<u32>, auto_purge: bool) -> Prof
 }
 
 #[test]
-fn sweep_with_auto_purge_tombstones_expired() {
+fn sweep_purge_tombstones_and_removes_files() {
     let fx = Fixture::new();
     let now = now_ms();
     let old_ulid = ulid_at_ms(now - (10 * MS_PER_DAY));
@@ -141,8 +152,10 @@ fn sweep_with_auto_purge_tombstones_expired() {
         None,
     );
 
-    let mm = ManifestMaintenance::open(&fx.manifest, &fx.snapshots).expect("open mm");
-    let report = mm.sweep_expired_snapshots(7, true).expect("sweep");
+    let mm = fx.open_maintenance();
+    let report = mm
+        .sweep_expired_snapshots(7, AutoPurge::Purge)
+        .expect("sweep");
     assert_eq!(report.purged.len(), 1);
     assert!(report.would_purge.is_empty());
     assert!(report.failed.is_empty());
@@ -157,7 +170,38 @@ fn sweep_with_auto_purge_tombstones_expired() {
 }
 
 #[test]
-fn sweep_warn_only_keeps_expired() {
+fn sweep_purge_idempotent_on_missing_file() {
+    // A previous sweep (or operator) already deleted the snapshot file but
+    // the manifest row still references it (purged_at_ms NULL). The next
+    // sweep must tombstone the row without erroring on the missing file.
+    let fx = Fixture::new();
+    let now = now_ms();
+    let id = ulid_at_ms(now - (10 * MS_PER_DAY)).to_string();
+    let snap = fx.snapshots.join(format!("{id}.snap"));
+    // Intentionally do NOT create the snapshot file.
+    fx.insert_call(
+        "call-missing",
+        &id,
+        Some(&snap),
+        "ok",
+        now - (10 * MS_PER_DAY),
+        None,
+    );
+
+    let mm = fx.open_maintenance();
+    let report = mm
+        .sweep_expired_snapshots(7, AutoPurge::Purge)
+        .expect("sweep");
+    assert_eq!(report.purged.len(), 1, "row tombstoned despite ENOENT");
+    assert!(report.failed.is_empty(), "ENOENT must NOT count as failure");
+
+    let (snapshot_ref, purged_at_ms) = fx.read_call("call-missing");
+    assert!(snapshot_ref.is_none());
+    assert!(purged_at_ms.is_some());
+}
+
+#[test]
+fn sweep_warn_emits_warning_no_mutation() {
     let fx = Fixture::new();
     let now = now_ms();
     let old_ulid = ulid_at_ms(now - (10 * MS_PER_DAY));
@@ -172,10 +216,20 @@ fn sweep_warn_only_keeps_expired() {
         None,
     );
 
-    let mm = ManifestMaintenance::open(&fx.manifest, &fx.snapshots).expect("open mm");
-    let report = mm.sweep_expired_snapshots(7, false).expect("sweep");
+    let mm = fx.open_maintenance();
+    let report = mm
+        .sweep_expired_snapshots(7, AutoPurge::Warn)
+        .expect("sweep");
     assert_eq!(report.would_purge.len(), 1);
     assert!(report.purged.is_empty());
+    assert!(
+        report.warning_emitted,
+        "first warn invocation should emit the warning"
+    );
+    assert!(
+        fx.warn_state.exists(),
+        "warn-state file should be touched after emission"
+    );
 
     let (snapshot_ref, purged_at_ms) = fx.read_call("call-old");
     assert!(snapshot_ref.is_some(), "snapshot_ref should remain set");
@@ -184,38 +238,73 @@ fn sweep_warn_only_keeps_expired() {
 }
 
 #[test]
-fn replay_returns_snapshot_purged_for_tombstoned_row() {
+fn sweep_warn_per_day_suppression() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let old_ulid = ulid_at_ms(now - (10 * MS_PER_DAY));
+    let id = old_ulid.to_string();
+    let snap = fx.write_snapshot_file(&id);
+    fx.insert_call(
+        "call-old",
+        &id,
+        Some(&snap),
+        "ok",
+        now - (10 * MS_PER_DAY),
+        None,
+    );
+
+    let mm = fx.open_maintenance();
+    let first = mm
+        .sweep_expired_snapshots(7, AutoPurge::Warn)
+        .expect("first sweep");
+    assert!(first.warning_emitted, "first invocation must warn");
+
+    let second = mm
+        .sweep_expired_snapshots(7, AutoPurge::Warn)
+        .expect("second sweep");
+    assert_eq!(
+        second.would_purge.len(),
+        1,
+        "scan still finds the expired entry"
+    );
+    assert!(
+        !second.warning_emitted,
+        "second invocation within 24h must be suppressed"
+    );
+}
+
+#[test]
+fn sweep_off_is_noop() {
     let fx = Fixture::new();
     let now = now_ms();
     let id = ulid_at_ms(now - (30 * MS_PER_DAY)).to_string();
-    let purged_at = now - MS_PER_DAY;
+    let snap = fx.write_snapshot_file(&id);
     fx.insert_call(
-        "call-tombstoned",
+        "call-ancient",
         &id,
-        None,
+        Some(&snap),
         "ok",
         now - (30 * MS_PER_DAY),
-        Some(purged_at),
+        None,
     );
 
-    let err = restore_whole_session(&fx.manifest, &id)
-        .expect_err("replay against tombstoned row should error");
-    match err {
-        LensError::SnapshotPurged {
-            lens_session_id,
-            purged_at_ms,
-            purged_at_iso8601,
-            retention_days_repr: _,
-        } => {
-            assert_eq!(lens_session_id, id);
-            assert_eq!(purged_at_ms, purged_at);
-            assert!(
-                purged_at_iso8601.contains('T') && purged_at_iso8601.ends_with('Z'),
-                "iso8601 should be RFC3339-shaped: {purged_at_iso8601}"
-            );
-        }
-        other => panic!("expected SnapshotPurged, got {other:?}"),
-    }
+    let mm = fx.open_maintenance();
+    let report = mm
+        .sweep_expired_snapshots(7, AutoPurge::Off)
+        .expect("sweep");
+    assert!(report.is_empty(), "Off mode produces empty report");
+    assert!(report.purged.is_empty());
+    assert!(report.would_purge.is_empty());
+    assert!(!report.warning_emitted);
+    assert!(
+        !fx.warn_state.exists(),
+        "Off must not touch the warn-state file"
+    );
+
+    let (snapshot_ref, purged_at_ms) = fx.read_call("call-ancient");
+    assert!(snapshot_ref.is_some());
+    assert!(purged_at_ms.is_none());
+    assert!(snap.exists());
 }
 
 #[test]
@@ -250,7 +339,7 @@ fn default_unlimited_is_no_op() {
 
     // No retention configured → apply_retention_policy is a no-op even with
     // a one-year-old snapshot present. D3 default behaviour preserved.
-    let profile = profile_with_retention(None, false);
+    let profile = profile_with_retention(None, AutoPurge::Off);
     apply_retention_policy(&profile, &fx.manifest, &fx.snapshots).expect("apply policy");
 
     let (snapshot_ref, purged_at_ms) = fx.read_call("call-ancient");
@@ -266,13 +355,13 @@ fn default_unlimited_is_no_op() {
 }
 
 #[test]
-fn merge_user_cannot_enable_auto_purge_when_project_disables() {
+fn merge_cap_truth_table_when_both_files_define_profile() {
     use gaze_lens::profile::load_profiles;
     use std::fs::write;
 
     fn project_user_pair(
-        project_auto_purge: bool,
-        user_auto_purge: bool,
+        project_auto_purge: &str,
+        user_auto_purge: &str,
     ) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let project = dir.path().join("project.toml");
@@ -283,7 +372,7 @@ fn merge_user_cannot_enable_auto_purge_when_project_disables() {
                 r#"
 [[profiles]]
 name = "p"
-auto_purge = {project_auto_purge}
+auto_purge = "{project_auto_purge}"
 [profiles.source]
 kind = "sqlite"
 path = "/tmp/x.sqlite"
@@ -297,7 +386,7 @@ path = "/tmp/x.sqlite"
                 r#"
 [[profiles]]
 name = "p"
-auto_purge = {user_auto_purge}
+auto_purge = "{user_auto_purge}"
 [profiles.source]
 kind = "sqlite"
 path = "/tmp/x.sqlite"
@@ -308,13 +397,20 @@ path = "/tmp/x.sqlite"
         (dir, project, user)
     }
 
-    // Truth table for `merged = project AND user`
-    for (project, user, expected) in [
-        (false, false, false),
-        (false, true, false),
-        (true, false, false),
-        (true, true, true),
-    ] {
+    // Truth table for `merged = min(project, user)` over Off < Warn < Purge.
+    // User can downgrade; user CANNOT escalate above project-authorized value.
+    let cases = [
+        ("off", "off", AutoPurge::Off),
+        ("off", "warn", AutoPurge::Off),
+        ("off", "purge", AutoPurge::Off),
+        ("warn", "off", AutoPurge::Off),
+        ("warn", "warn", AutoPurge::Warn),
+        ("warn", "purge", AutoPurge::Warn),
+        ("purge", "off", AutoPurge::Off),
+        ("purge", "warn", AutoPurge::Warn),
+        ("purge", "purge", AutoPurge::Purge),
+    ];
+    for (project, user, expected) in cases {
         let (_dir, project_path, user_path) = project_user_pair(project, user);
         let profiles = load_profiles(Some(&project_path), Some(&user_path)).expect("load profiles");
         let profile = profiles
@@ -323,7 +419,7 @@ path = "/tmp/x.sqlite"
             .expect("profile p");
         assert_eq!(
             profile.auto_purge, expected,
-            "project={project} user={user} -> expected {expected}"
+            "project={project} user={user} -> expected {expected:?}"
         );
     }
 }
@@ -342,8 +438,10 @@ fn ulid_timestamp_used_for_age() {
     fx.insert_call("call-old", &old_id, Some(&old_snap), "ok", now, None);
     fx.insert_call("call-fresh", &fresh_id, Some(&fresh_snap), "ok", now, None);
 
-    let mm = ManifestMaintenance::open(&fx.manifest, &fx.snapshots).expect("open mm");
-    let report = mm.sweep_expired_snapshots(7, false).expect("sweep");
+    let mm = fx.open_maintenance();
+    let report = mm
+        .sweep_expired_snapshots(7, AutoPurge::Warn)
+        .expect("sweep");
     assert_eq!(report.would_purge.len(), 1);
     let entry = &report.would_purge[0];
     assert_eq!(entry.lens_session_id, old_id);

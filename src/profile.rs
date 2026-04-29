@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::errors::LensError;
+use crate::session::maintenance::AutoPurge;
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Profile {
@@ -18,12 +19,16 @@ pub struct Profile {
     /// at session start. Sweep is gated on `auto_purge` for destructive vs warn.
     #[serde(default)]
     pub snapshot_retention_days: Option<u32>,
-    /// Destructive operational policy. `false` (default) = warn-only;
-    /// `true` = silently purge expired snapshots and tombstone manifest rows.
-    /// Merge rule is plain conjunction: `merged = project.auto_purge && user.auto_purge`.
-    /// User cannot opt INTO auto_purge if project has not enabled it; user can opt OUT.
+    /// Destructive operational policy. `Off` (default) = no sweep;
+    /// `Warn` = read-only scan with per-day-suppressed stderr warning;
+    /// `Purge` = silently purge expired snapshots and tombstone manifest rows.
+    ///
+    /// Merge rule is `min(project, user)` over `Off < Warn < Purge`. The user
+    /// can opt to a less destructive mode but cannot escalate above what the
+    /// project authorizes. Profiles defined ONLY in the user file are forced
+    /// to `Off` regardless — destructive ops require project-level opt-in.
     #[serde(default)]
-    pub auto_purge: bool,
+    pub auto_purge: AutoPurge,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -246,9 +251,10 @@ fn merge_one(user: &Profile, project: &Profile) -> Profile {
     let snapshot_retention_days = project
         .snapshot_retention_days
         .or(user.snapshot_retention_days);
-    // `auto_purge`: destructive-default merge — plain conjunction.
-    // Project file must opt IN to auto_purge; user cannot escalate. User can downgrade.
-    let auto_purge = project.auto_purge && user.auto_purge;
+    // `auto_purge`: destructive-default cap merge — `min(project, user)` over
+    // `Off < Warn < Purge`. User can downgrade; user cannot escalate above
+    // what project has authorized.
+    let auto_purge = project.auto_purge.cap_with(user.auto_purge);
     Profile {
         name: project.name.clone(),
         source: merge_source(&user.source, &project.source),

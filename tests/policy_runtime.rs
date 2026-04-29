@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use gaze_lens::cli::serve::runtime_policy;
 use gaze_lens::profile::{Profile, SourceSpec};
+use gaze_lens::session::maintenance::AutoPurge;
 use gaze_lens::session::{Session, ToolCall};
 use gaze_lens::source::{InMemoryFakeSource, ToolArgs};
 use gaze_lens::value::LensValue;
@@ -31,7 +32,7 @@ async fn serve_runtime_policy_column_rules_reach_session_pipeline() {
         policy: Some(policy_path),
         schema_allowlist: None,
         snapshot_retention_days: None,
-        auto_purge: false,
+        auto_purge: AutoPurge::Off,
     };
 
     let (policy, pipeline) = runtime_policy(&profile).expect("runtime policy");
