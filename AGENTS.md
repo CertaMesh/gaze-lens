@@ -87,7 +87,7 @@ gaze-lens replay <session_ulid> → gaze::Session::import → original values
 
 **Session lifecycle is decoupled from MCP-stdio process lifecycle** (D13). This lets v1.x add a long-running daemon mode (for SDK push ingest) without rewriting session/audit/restore.
 
-**Manifest vs Gaze redaction log.** `gaze-lens` writes its own SQLite manifest at `~/.gaze-lens/manifest.db`; this coexists with Gaze's metadata-only redaction log but is a separate data plane. Snapshot blobs are stored as out-of-row files referenced from the manifest (D9).
+**Manifest vs Gaze redaction log.** `gaze-lens` writes its own SQLite manifest at `~/.gaze-lens/manifest.sqlite`; this coexists with Gaze's metadata-only redaction log but is a separate data plane. Snapshot blobs are stored as out-of-row files referenced from the manifest (D9).
 
 For full architectural detail, file-by-file mining verdicts, and the 16 locked design decisions (D1-D16), read [ARCHITECTURE.md](./ARCHITECTURE.md) and the `Open decisions` reference in CONTRIBUTING.md.
 
@@ -101,4 +101,4 @@ For full architectural detail, file-by-file mining verdicts, and the 16 locked d
 
 ## Status
 
-v0.1 ships from source. Crates.io publish + prebuilt binaries are tracked separately (cargo-dist workflow in progress). The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
+v0.1.1 ships from source (binary tarball available); v0.2 in flight. Crates.io publish + prebuilt binaries are tracked separately (cargo-dist workflow in progress). The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
