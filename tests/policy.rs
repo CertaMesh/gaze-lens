@@ -1,6 +1,4 @@
-use gaze_lens::errors::LensError;
 use gaze_lens::policy::{PolicyFile, build_pipeline};
-use gaze_lens::session::Session;
 
 #[test]
 fn minimal_policy_toml_builds_pipeline_and_allows_non_production_profiles() {
@@ -26,30 +24,38 @@ fn minimal_policy_toml_builds_pipeline_and_allows_non_production_profiles() {
     build_pipeline(&policy).expect("pipeline");
 }
 
-#[test]
-fn ephemeral_scope_from_policy_is_rejected_by_session_core() {
-    let policy = PolicyFile::from_toml(
+fn policy_with_scope(scope: &str) -> PolicyFile {
+    PolicyFile::from_toml(&format!(
         r#"
         [session]
-        scope = "ephemeral"
+        scope = "{scope}"
 
         [policy.database]
         "#,
-    )
+    ))
     .expect("policy")
-    .to_gaze_policy()
-    .expect("gaze policy");
-    let temp = tempfile::tempdir().expect("tempdir");
+}
 
-    let result = Session::new(
-        &policy,
-        &temp.path().join("manifest.sqlite"),
-        &temp.path().join("snapshots"),
+#[test]
+fn conversation_scope_is_accepted_case_insensitively() {
+    let policy = policy_with_scope("Conversation")
+        .to_gaze_policy()
+        .expect("gaze policy");
+
+    assert!(matches!(
+        policy.session.scope,
+        gaze::SessionScope::Conversation
+    ));
+}
+
+#[test]
+fn persistent_scope_from_policy_is_rejected_explicitly() {
+    let err = policy_with_scope("persistent")
+        .to_gaze_policy()
+        .expect_err("persistent scope should fail");
+
+    assert_eq!(
+        err.to_string(),
+        "policy.session.scope = \"persistent\" is not supported in v0.1; only \"conversation\" is accepted. See SPEC.md §session-lifecycle."
     );
-    let err = match result {
-        Ok(_) => panic!("ephemeral session should fail"),
-        Err(err) => err,
-    };
-
-    assert!(matches!(err, LensError::ScopeRejected { .. }));
 }
