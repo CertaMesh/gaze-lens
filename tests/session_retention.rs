@@ -1,0 +1,354 @@
+//! PR 6 — snapshot retention TTL with `purged_at_ms` tombstone.
+//!
+//! Tests the seven scenarios spelled out in the PR-6 plan plus the advisory
+//! v2→v3 schema-migration test.
+
+use std::path::{Path, PathBuf};
+
+use gaze_lens::cli::retention::apply_retention_policy;
+use gaze_lens::errors::LensError;
+use gaze_lens::profile::{Profile, SourceSpec};
+use gaze_lens::session::maintenance::ManifestMaintenance;
+use gaze_lens::session::manifest::initialize_schema;
+use gaze_lens::session::restore::restore_whole_session;
+use rusqlite::{Connection, params};
+
+const MS_PER_DAY: i64 = 86_400_000;
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+/// Construct a ULID whose 48-bit timestamp is exactly `ms_since_epoch`.
+fn ulid_at_ms(ms_since_epoch: i64) -> ulid::Ulid {
+    let ms = ms_since_epoch.max(0) as u64;
+    ulid::Ulid::from_parts(ms, 0)
+}
+
+/// Initialise a fresh manifest at v3, plus an empty snapshot directory.
+struct Fixture {
+    _temp: tempfile::TempDir,
+    manifest: PathBuf,
+    snapshots: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest = temp.path().join("manifest.sqlite");
+        let snapshots = temp.path().join("snapshots");
+        std::fs::create_dir_all(&snapshots).expect("snapshot dir");
+        let conn = Connection::open(&manifest).expect("open manifest");
+        initialize_schema(&conn).expect("init schema");
+        Self {
+            _temp: temp,
+            manifest,
+            snapshots,
+        }
+    }
+
+    fn insert_call(
+        &self,
+        call_id: &str,
+        lens_session_id: &str,
+        snapshot_path: Option<&Path>,
+        status: &str,
+        started_at_ms: i64,
+        purged_at_ms: Option<i64>,
+    ) {
+        // Sessions row first (referential consistency, even though manifest
+        // doesn't enforce FK).
+        let conn = Connection::open(&self.manifest).expect("open manifest");
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions (lens_session_id, gaze_audit_session_id, created_at_ms)
+             VALUES (?1, ?2, ?3)",
+            params![lens_session_id, "audit-stub", started_at_ms],
+        )
+        .expect("insert session");
+        conn.execute(
+            "INSERT INTO calls (
+                call_id, lens_session_id, tool_name, redacted_args_json, status,
+                snapshot_ref, started_at_ms, purged_at_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                call_id,
+                lens_session_id,
+                "query",
+                "{\"json\":\"\"}",
+                status,
+                snapshot_path.map(|p| p.to_string_lossy().to_string()),
+                started_at_ms,
+                purged_at_ms,
+            ],
+        )
+        .expect("insert call");
+    }
+
+    fn write_snapshot_file(&self, lens_session_id: &str) -> PathBuf {
+        let path = self.snapshots.join(format!("{lens_session_id}.snap"));
+        std::fs::write(&path, b"stub").expect("write snapshot");
+        path
+    }
+
+    fn read_call(&self, call_id: &str) -> (Option<String>, Option<i64>) {
+        let conn = Connection::open(&self.manifest).expect("open manifest");
+        conn.query_row(
+            "SELECT snapshot_ref, purged_at_ms FROM calls WHERE call_id = ?1",
+            params![call_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                ))
+            },
+        )
+        .expect("read call")
+    }
+}
+
+fn profile_with_retention(retention_days: Option<u32>, auto_purge: bool) -> Profile {
+    Profile {
+        name: "retention-test".to_string(),
+        source: SourceSpec::Sqlite {
+            path: PathBuf::from("/tmp/unused.sqlite"),
+            readonly_required: true,
+            json_text_columns: Vec::new(),
+        },
+        policy: None,
+        schema_allowlist: None,
+        snapshot_retention_days: retention_days,
+        auto_purge,
+    }
+}
+
+#[test]
+fn sweep_with_auto_purge_tombstones_expired() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let old_ulid = ulid_at_ms(now - (10 * MS_PER_DAY));
+    let id = old_ulid.to_string();
+    let snap = fx.write_snapshot_file(&id);
+    fx.insert_call(
+        "call-old",
+        &id,
+        Some(&snap),
+        "ok",
+        now - (10 * MS_PER_DAY),
+        None,
+    );
+
+    let mm = ManifestMaintenance::open(&fx.manifest, &fx.snapshots).expect("open mm");
+    let report = mm.sweep_expired_snapshots(7, true).expect("sweep");
+    assert_eq!(report.purged.len(), 1);
+    assert!(report.would_purge.is_empty());
+    assert!(report.failed.is_empty());
+
+    let (snapshot_ref, purged_at_ms) = fx.read_call("call-old");
+    assert!(
+        snapshot_ref.is_none(),
+        "snapshot_ref should be NULL after tombstone"
+    );
+    assert!(purged_at_ms.is_some(), "purged_at_ms should be set");
+    assert!(!snap.exists(), "snapshot file should be removed");
+}
+
+#[test]
+fn sweep_warn_only_keeps_expired() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let old_ulid = ulid_at_ms(now - (10 * MS_PER_DAY));
+    let id = old_ulid.to_string();
+    let snap = fx.write_snapshot_file(&id);
+    fx.insert_call(
+        "call-old",
+        &id,
+        Some(&snap),
+        "ok",
+        now - (10 * MS_PER_DAY),
+        None,
+    );
+
+    let mm = ManifestMaintenance::open(&fx.manifest, &fx.snapshots).expect("open mm");
+    let report = mm.sweep_expired_snapshots(7, false).expect("sweep");
+    assert_eq!(report.would_purge.len(), 1);
+    assert!(report.purged.is_empty());
+
+    let (snapshot_ref, purged_at_ms) = fx.read_call("call-old");
+    assert!(snapshot_ref.is_some(), "snapshot_ref should remain set");
+    assert!(purged_at_ms.is_none(), "purged_at_ms should remain NULL");
+    assert!(snap.exists(), "snapshot file should remain on disk");
+}
+
+#[test]
+fn replay_returns_snapshot_purged_for_tombstoned_row() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let id = ulid_at_ms(now - (30 * MS_PER_DAY)).to_string();
+    let purged_at = now - MS_PER_DAY;
+    fx.insert_call(
+        "call-tombstoned",
+        &id,
+        None,
+        "ok",
+        now - (30 * MS_PER_DAY),
+        Some(purged_at),
+    );
+
+    let err = restore_whole_session(&fx.manifest, &id)
+        .expect_err("replay against tombstoned row should error");
+    match err {
+        LensError::SnapshotPurged {
+            lens_session_id,
+            purged_at_ms,
+            purged_at_iso8601,
+            retention_days_repr: _,
+        } => {
+            assert_eq!(lens_session_id, id);
+            assert_eq!(purged_at_ms, purged_at);
+            assert!(
+                purged_at_iso8601.contains('T') && purged_at_iso8601.ends_with('Z'),
+                "iso8601 should be RFC3339-shaped: {purged_at_iso8601}"
+            );
+        }
+        other => panic!("expected SnapshotPurged, got {other:?}"),
+    }
+}
+
+#[test]
+fn status_not_ok_rows_ignored_by_replay() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let id = ulid_at_ms(now).to_string();
+    fx.insert_call("call-err", &id, None, "error", now, None);
+
+    let restored = restore_whole_session(&fx.manifest, &id)
+        .expect("replay should succeed even with only error rows");
+    assert!(
+        restored.calls.is_empty(),
+        "error rows must not appear in restored calls"
+    );
+}
+
+#[test]
+fn default_unlimited_is_no_op() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let id = ulid_at_ms(now - (365 * MS_PER_DAY)).to_string();
+    let snap = fx.write_snapshot_file(&id);
+    fx.insert_call(
+        "call-ancient",
+        &id,
+        Some(&snap),
+        "ok",
+        now - (365 * MS_PER_DAY),
+        None,
+    );
+
+    // No retention configured → apply_retention_policy is a no-op even with
+    // a one-year-old snapshot present. D3 default behaviour preserved.
+    let profile = profile_with_retention(None, false);
+    apply_retention_policy(&profile, &fx.manifest, &fx.snapshots).expect("apply policy");
+
+    let (snapshot_ref, purged_at_ms) = fx.read_call("call-ancient");
+    assert!(
+        snapshot_ref.is_some(),
+        "ancient snapshot must remain referenced"
+    );
+    assert!(
+        purged_at_ms.is_none(),
+        "ancient snapshot must not be tombstoned"
+    );
+    assert!(snap.exists(), "snapshot file must remain on disk");
+}
+
+#[test]
+fn ulid_timestamp_used_for_age() {
+    // Two rows with identical mtimes (write order, not relevant to sweep) but
+    // different ULID-embedded timestamps. Sweep must see the OLD-ULID one as
+    // expired and the FRESH-ULID one as fresh, independent of file mtime.
+    let fx = Fixture::new();
+    let now = now_ms();
+    let old_id = ulid_at_ms(now - (30 * MS_PER_DAY)).to_string();
+    let fresh_id = ulid_at_ms(now - MS_PER_DAY).to_string();
+    let old_snap = fx.write_snapshot_file(&old_id);
+    let fresh_snap = fx.write_snapshot_file(&fresh_id);
+    fx.insert_call("call-old", &old_id, Some(&old_snap), "ok", now, None);
+    fx.insert_call("call-fresh", &fresh_id, Some(&fresh_snap), "ok", now, None);
+
+    let mm = ManifestMaintenance::open(&fx.manifest, &fx.snapshots).expect("open mm");
+    let report = mm.sweep_expired_snapshots(7, false).expect("sweep");
+    assert_eq!(report.would_purge.len(), 1);
+    let entry = &report.would_purge[0];
+    assert_eq!(entry.lens_session_id, old_id);
+    assert!(entry.age_days >= 7);
+}
+
+#[test]
+fn legacy_v2_manifest_gains_purged_at_ms_column_via_migration() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = dir.path().join("legacy.sqlite");
+    {
+        let conn = Connection::open(&manifest).expect("open");
+        // Synthesize a v0.1.x-shaped v2 manifest: no `purged_at_ms` column,
+        // user_version pinned at 2.
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                lens_session_id TEXT PRIMARY KEY,
+                gaze_audit_session_id TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            );
+            CREATE TABLE calls (
+                call_id TEXT PRIMARY KEY,
+                lens_session_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                redacted_args_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_summary TEXT,
+                snapshot_ref TEXT,
+                started_at_ms INTEGER NOT NULL,
+                finished_at_ms INTEGER
+            );
+            PRAGMA user_version = 2;
+            "#,
+        )
+        .expect("legacy schema");
+        conn.execute(
+            "INSERT INTO sessions (lens_session_id, gaze_audit_session_id, created_at_ms)
+             VALUES ('legacy-session', 'legacy-audit', 0)",
+            [],
+        )
+        .expect("legacy session row");
+        conn.execute(
+            "INSERT INTO calls (call_id, lens_session_id, tool_name, redacted_args_json, status, started_at_ms)
+             VALUES ('legacy-call', 'legacy-session', 'query', '{}', 'ok', 0)",
+            [],
+        )
+        .expect("legacy call row");
+    }
+
+    // Run the migration.
+    {
+        let conn = Connection::open(&manifest).expect("open for migration");
+        initialize_schema(&conn).expect("migrate v2→v3");
+        let user_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user_version");
+        assert_eq!(user_version, 3, "user_version must advance to 3");
+        let purged: Option<i64> = conn
+            .query_row(
+                "SELECT purged_at_ms FROM calls WHERE call_id = 'legacy-call'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("select purged_at_ms");
+        assert!(
+            purged.is_none(),
+            "legacy rows must default to NULL for purged_at_ms"
+        );
+    }
+}
