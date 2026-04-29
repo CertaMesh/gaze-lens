@@ -54,6 +54,18 @@ pub enum LensError {
     ProfileNotFound { label: String, path: PathBuf },
     #[error("profile error: {detail}")]
     Profile { detail: String },
+    #[error(
+        "batch write partial failure on {failed}: {applied} applied, {pending} pending, {source}",
+        failed = .failed.display(),
+        applied = .applied.len(),
+        pending = .pending.len(),
+    )]
+    BatchPartial {
+        applied: Vec<PathBuf>,
+        pending: Vec<PathBuf>,
+        failed: PathBuf,
+        source: Box<LensError>,
+    },
     #[error("feature deferred: {0}")]
     FeatureDeferred(String),
     #[error("output truncated at {0:?}")]
@@ -91,6 +103,15 @@ pub fn sanitize_error(err: &LensError) -> String {
             format!("ProfileNotFound: {label} not found: {}", path.display())
         }
         LensError::Profile { detail } => format!("Profile: {detail}"),
+        LensError::BatchPartial {
+            applied, pending, ..
+        } => {
+            format!(
+                "BatchPartial: batch write failed (applied {}, pending {})",
+                applied.len(),
+                pending.len()
+            )
+        }
         LensError::FeatureDeferred(feature) => format!("FeatureDeferred: {feature}"),
         LensError::Truncated(reason) => format!("Truncated: {reason:?}"),
         LensError::Internal { .. } => "Internal: internal error".to_string(),

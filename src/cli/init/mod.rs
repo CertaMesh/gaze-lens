@@ -5,6 +5,8 @@ use clap::Args;
 
 use crate::errors::LensError;
 
+pub mod atomic;
+pub mod batch;
 pub mod prompter;
 
 const PROJECT_PROFILE: &str = r#"# Project-owned schema policy and logical source shape.
