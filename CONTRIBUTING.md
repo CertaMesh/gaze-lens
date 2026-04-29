@@ -100,3 +100,39 @@ Default CI does not run this feature in v1; enabling it in CI is a deferred deci
 ## Runtime policy fallback
 
 `serve` loads `profile.policy` when a profile names a policy TOML. Profiles without an explicit policy use the built-in fallback equivalent to an empty `[policy.database]` section, which preserves non-sensitive fields and still enables the default email detector.
+
+## Snapshot retention policy
+
+v0.2 introduces two opt-in profile fields governing snapshot lifecycle. Both default to v0.1 behavior (unlimited retention, manifest as the audit log of record per D3) when unset.
+
+Profile fields (TOML, profile-layer — NOT under `[session]`, which would collide with Gaze `ttl_secs`):
+
+```toml
+snapshot_retention_days = 30   # Option<u32>; None / unset = unlimited
+auto_purge = false             # bool; false = warn-only, true = silent purge + tombstone
+```
+
+**Merge rule (destructive-default default-deny).** When a project profile and a user profile are merged, the resolved `auto_purge` is
+
+```text
+merged_auto_purge = project.auto_purge && user.auto_purge
+```
+
+Plain conjunction. If the project file does not enable `auto_purge`, the user file CANNOT override to `true`. If the project file enables `auto_purge`, the user file MAY downgrade to warn-only by setting `auto_purge = false`. There is no third "user consent" field; rev 2 r2-patch-1 corrected an earlier draft that referenced one. Rationale: `auto_purge` is a destructive operational policy and consent must be expressed at the team-shared (project) layer.
+
+`snapshot_retention_days` itself uses standard user-overrides-project merge; the conjunction rule applies only to `auto_purge`.
+
+**Per-day friction-warning suppression.** When `auto_purge = false` and the sweep finds expired snapshots, gaze-lens emits a stderr listing of what would be purged. To avoid warning fatigue on one-shot `query` invocations, gaze-lens touches `~/.gaze-lens/.warned-YYYY-MM-DD-<profile>` on the first emission per day per profile and suppresses subsequent stderr text for the same day. A `tracing` debug event is still emitted on every sweep so operators can observe activity from logs. `auto_purge = true` info-level emissions are NOT suppressed (cheap and informational).
+
+**v0.1 posture preserved.** Profiles with neither field set produce zero sweep activity. CLI builders skip `ManifestMaintenance::open` entirely; no manifest IO, no FS scan, no warning text. v0.1.x manifests open under v0.2 binaries via the `user_version = 2 → 3` migration described in ARCHITECTURE.md §Manifest schema versioning.
+
+See ARCHITECTURE.md §ManifestMaintenance for the implementation contract and SPEC.md §Snapshot retention (v0.2 opt-in) for the surface contract.
+
+## rmcp version pin
+
+`Cargo.toml` declares `rmcp = { version = "0.2", features = [...] }`. This Cargo SemVer requirement already permits any `0.2.y` patch release without lockfile churn. Do NOT tighten this to `=0.2.x`, `~0.2`, or `^0.2.x`:
+
+- For `0.x.y` versions Cargo treats `"0.2"`, `"^0.2"`, and `"~0.2"` as equivalent — they all resolve to `>=0.2.0, <0.3.0` and pick the highest matching publish.
+- `=0.2.x` would force a literal pin, lose patch-level fixes, and create review churn every time rmcp ships a security or compatibility patch.
+
+If a future rmcp 0.3 is required, bump the requirement explicitly in a dedicated PR. The local pre-push gate will catch any compile breakage at that point.
