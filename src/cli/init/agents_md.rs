@@ -50,16 +50,17 @@ pub fn render_agents_md_patch(
                 name: "AGENTS.md end marker before start marker".to_string(),
             });
         }
-        // Bounded replace.
+        // Bounded replace. `block` ends with `\n` already, so strip a single
+        // leading `\n` from `after` to avoid emitting `END\n\n...` on rerun.
         let before = &existing[..s_idx];
         let after_end = e_idx + END_MARKER.len();
-        let after = &existing[after_end..];
+        let mut after = &existing[after_end..];
+        if let Some(stripped) = after.strip_prefix('\n') {
+            after = stripped;
+        }
         let mut out = String::with_capacity(before.len() + block.len() + after.len());
         out.push_str(before);
         out.push_str(&block);
-        if !after.is_empty() && !after.starts_with('\n') {
-            out.push('\n');
-        }
         out.push_str(after);
         return Ok(out);
     }
