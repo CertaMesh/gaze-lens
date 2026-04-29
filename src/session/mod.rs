@@ -1,3 +1,8 @@
+#[cfg(not(unix))]
+compile_error!(
+    "gaze-lens v0.1 is Unix-only. Snapshot file privacy (0600/0700) is enforced via Unix file modes; no equivalent guarantee on non-Unix platforms. See SPEC.md §threat-model."
+);
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -553,7 +558,6 @@ fn cap_string(value: String, max_bytes: usize) -> (String, bool) {
     (value[..end].to_string(), true)
 }
 
-#[cfg(unix)]
 fn set_dir_private(path: &Path) -> Result<(), LensError> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -566,12 +570,6 @@ fn set_dir_private(path: &Path) -> Result<(), LensError> {
     })
 }
 
-#[cfg(not(unix))]
-fn set_dir_private(_path: &Path) -> Result<(), LensError> {
-    Ok(())
-}
-
-#[cfg(unix)]
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), LensError> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -593,13 +591,4 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), LensError> {
             detail: err.to_string(),
             path: Some(path.to_path_buf()),
         })
-}
-
-#[cfg(not(unix))]
-fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), LensError> {
-    std::fs::write(path, bytes).map_err(|err| LensError::ManifestFinishFailed {
-        call_id: "snapshot".to_string(),
-        detail: err.to_string(),
-        path: Some(path.to_path_buf()),
-    })
 }

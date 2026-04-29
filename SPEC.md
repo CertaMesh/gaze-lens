@@ -43,7 +43,7 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 
 ### Out of scope (operator responsibility)
 
-- **Laptop disk compromise.** Snapshot files contain raw token mappings; a laptop with unencrypted disk leaks them on physical theft. Operators MUST run FileVault (macOS) or LUKS (Linux) on the laptop running gaze-lens. v1 does not implement per-snapshot encryption-at-rest; this is a v1.x hardening tracked against gaze upstream feedback.
+- **Laptop disk compromise.** Snapshot files contain raw token mappings; a laptop with unencrypted disk leaks them on physical theft. Operators MUST run FileVault (macOS) or LUKS (Linux) on the laptop running gaze-lens. v0.1 is Unix-only by build contract. v1 does not implement per-snapshot encryption-at-rest; this is a v1.x hardening tracked against gaze upstream feedback.
 - **Same-uid attacker after process compromise.** Snapshot files are 0600 in a 0700 directory; this protects against other-user attackers but not against root or same-uid compromise.
 - **SSH-side credential compromise.** gaze-lens reuses `~/.ssh/config` and the SSH agent; auth is the operator's responsibility.
 - **Database write privilege.** gaze-lens never writes; the DB user MUST be configured read-only at the database side.
