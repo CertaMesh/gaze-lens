@@ -9,8 +9,6 @@ use gaze_recognizers::{NerDetector, NerOptions, RegexDetector};
 use serde::Deserialize;
 use thiserror::Error;
 
-pub const SCHEMA_METADATA_SOURCE_CLASS: &str = "schema_metadata";
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyFile {
     #[serde(default)]

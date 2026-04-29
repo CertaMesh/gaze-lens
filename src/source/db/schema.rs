@@ -3,8 +3,6 @@ use std::sync::Mutex;
 
 use super::{ColumnInfo, TableSchema};
 
-pub const SCHEMA_METADATA_SOURCE_CLASS: &str = "schema_metadata";
-
 #[derive(Debug, Default)]
 pub struct SchemaTokenizer {
     inner: Mutex<SchemaTokenizerInner>,
@@ -17,6 +15,8 @@ struct SchemaTokenizerInner {
 }
 
 impl SchemaTokenizer {
+    // Schema metadata tokenization is presentation-only in v0.1, so no Gaze
+    // source-class constant is needed here.
     pub fn tokenize_table_schema(
         &self,
         schema: &TableSchema,
