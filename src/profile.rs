@@ -239,11 +239,35 @@ fn merge_profiles(user_profiles: Vec<Profile>, project_profiles: Vec<Profile>) -
         .into_iter()
         .filter_map(|name| match (users.get(&name), projects.get(&name)) {
             (Some(user), Some(project)) => Some(merge_one(user, project)),
-            (Some(user), None) => Some(user.clone()),
+            (Some(user), None) => Some(downgrade_user_only_profile(user)),
             (None, Some(project)) => Some(project.clone()),
             (None, None) => None,
         })
         .collect()
+}
+
+/// Profiles defined ONLY in the user file cannot enable destructive
+/// `auto_purge` — destructive operations require project-level opt-in.
+/// Force `Off` and emit a stderr warning so the operator notices.
+fn downgrade_user_only_profile(user: &Profile) -> Profile {
+    if user.auto_purge != AutoPurge::Off {
+        eprintln!(
+            "gaze-lens: warning — profile `{name}` is defined only in the user config and \
+             requested auto_purge = \"{requested}\". Destructive purge requires project-level \
+             opt-in. Forcing auto_purge = \"off\" for this profile.",
+            name = user.name,
+            requested = user.auto_purge.as_str(),
+        );
+        tracing::warn!(
+            target = "gaze_lens::profile",
+            profile = user.name,
+            requested = user.auto_purge.as_str(),
+            "user-only profile downgraded to auto_purge=off (project opt-in required)"
+        );
+    }
+    let mut downgraded = user.clone();
+    downgraded.auto_purge = AutoPurge::Off;
+    downgraded
 }
 
 fn merge_one(user: &Profile, project: &Profile) -> Profile {

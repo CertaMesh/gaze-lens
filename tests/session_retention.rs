@@ -425,6 +425,41 @@ path = "/tmp/x.sqlite"
 }
 
 #[test]
+fn auto_purge_user_only_profile_downgrades_to_off() {
+    use gaze_lens::profile::load_profiles;
+    use std::fs::write;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("project.toml");
+    let user = dir.path().join("user.toml");
+    // Project file is empty (no profiles array).
+    write(&project, "").expect("write empty project");
+    write(
+        &user,
+        r#"
+[[profiles]]
+name = "user-only"
+auto_purge = "purge"
+[profiles.source]
+kind = "sqlite"
+path = "/tmp/x.sqlite"
+"#,
+    )
+    .expect("write user");
+
+    let profiles = load_profiles(Some(&project), Some(&user)).expect("load profiles");
+    let profile = profiles
+        .into_iter()
+        .find(|p| p.name == "user-only")
+        .expect("profile user-only");
+    assert_eq!(
+        profile.auto_purge,
+        AutoPurge::Off,
+        "user-only profile must be forced to Off (project opt-in required)"
+    );
+}
+
+#[test]
 fn ulid_timestamp_used_for_age() {
     // Two rows with identical mtimes (write order, not relevant to sweep) but
     // different ULID-embedded timestamps. Sweep must see the OLD-ULID one as
