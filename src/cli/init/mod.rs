@@ -490,7 +490,43 @@ fn render_mcp_target(
     })
 }
 
-fn run_smoke_check(_args: &InitArgs, _plan: &plan::InitPlan) -> Result<(), LensError> {
-    // Implementation lands in P9.
-    Ok(())
+/// Opt-in smoke check (directive 17). Calls the in-process `check` subcommand
+/// via the same `pub async fn run(CheckArgs, Option<&Path>, Option<&Path>)`
+/// signature exposed at `src/cli/check.rs:23-27`.
+///
+/// CB-r2-2: `CheckArgs.profile` is `String` (positional, default "default"),
+/// NOT `Option<String>`. The (project_config, user_config) tuple is built
+/// once from `plan.profile_scope` so role semantics cannot drift between the
+/// caller and the smoke-check call.
+fn run_smoke_check(_args: &InitArgs, plan: &plan::InitPlan) -> Result<(), LensError> {
+    let (project_config, user_config): (Option<&Path>, Option<&Path>) = match plan.profile_scope {
+        InitScope::Project | InitScope::ProjectAutoPurge => {
+            (Some(plan.profile_path.as_path()), None)
+        }
+        InitScope::User => (None, Some(plan.profile_path.as_path())),
+    };
+    let check_args = crate::cli::check::CheckArgs {
+        profile: plan.profile_section.name.clone(),
+    };
+    let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
+        detail: err.to_string(),
+    })?;
+    runtime.block_on(crate::cli::check::run(
+        check_args,
+        project_config,
+        user_config,
+    ))
+}
+
+/// `#[doc(hidden)] pub` test entry-point so integration tests can drive
+/// `commit_plan` with a custom `BatchWriter` (e.g. `FailingWriter` for the
+/// CB6 partial-failure assertion). Mirrors the `default_for_test` exposure
+/// recipe (CB5).
+#[doc(hidden)]
+pub fn commit_plan_for_test(
+    args: &InitArgs,
+    plan: &plan::InitPlan,
+    w: &mut dyn batch::BatchWriter,
+) -> Result<(), LensError> {
+    commit_plan(args, plan, w)
 }
