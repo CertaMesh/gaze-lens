@@ -27,7 +27,7 @@ Developer mid-incident. AI agent (Claude Code, Cursor, Codex, custom) running on
 - **Pluggable spine** — source trait + frontend trait + shared session/manifest core. v1 fills DB+log sources behind an MCP frontend; v1.x adds new sources/frontends additively.
 - v1 manifest is a **gaze-lens-local SQLite manifest**, distinct from Gaze's metadata-only redaction log. Snapshot blobs (`gaze::SensitiveSnapshot`) are stored as out-of-row 0600 files referenced from the manifest. (D9)
 
-### Key v1 design constraint
+### Session lifecycle
 
 Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets v1.x add a long-running daemon mode (for SDK push ingest) without rewriting session/audit/restore.
 
