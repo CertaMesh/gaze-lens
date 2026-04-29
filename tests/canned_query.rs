@@ -201,7 +201,10 @@ fn keyword_fragments_inside_identifiers_are_allowed() {
 
         let compiled = query.compile_to_sql(&schema()).expect("compile");
 
-        assert_eq!(compiled.sql, format!("SELECT `{column_name}` FROM `users` LIMIT ?"));
+        assert_eq!(
+            compiled.sql,
+            format!("SELECT `{column_name}` FROM `users` LIMIT ?")
+        );
     }
 }
 
