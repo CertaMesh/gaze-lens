@@ -35,6 +35,15 @@ pub enum LensError {
         lens_session_id: String,
         detail: String,
     },
+    #[error(
+        "snapshot for session {lens_session_id} was purged by retention policy on {purged_at_iso8601} (retention: {retention_days} days). The audit row remains in the manifest; the raw token mappings are not recoverable."
+    )]
+    SnapshotPurged {
+        lens_session_id: String,
+        purged_at_ms: i64,
+        purged_at_iso8601: String,
+        retention_days: u32,
+    },
     #[error("scope rejected: {scope}")]
     ScopeRejected { scope: String },
     #[error("conversion failed: {0}")]
@@ -65,6 +74,9 @@ pub fn sanitize_error(err: &LensError) -> String {
         LensError::SourceError { .. } => "SourceError: source failed".to_string(),
         LensError::RedactionFailed { .. } => "RedactionFailed: redaction failed".to_string(),
         LensError::ReplayUnavailable { .. } => "ReplayUnavailable: replay unavailable".to_string(),
+        LensError::SnapshotPurged { .. } => {
+            "SnapshotPurged: snapshot purged by retention policy".to_string()
+        }
         LensError::ScopeRejected { .. } => "ScopeRejected: unsupported session scope".to_string(),
         LensError::ConvertError(err) => match err {
             LowerError::Decode { kind, .. } => {

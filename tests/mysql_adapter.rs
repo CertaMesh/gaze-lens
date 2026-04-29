@@ -1,5 +1,6 @@
 use gaze_lens::errors::LensError;
 use gaze_lens::profile::{Profile, SourceSpec};
+use gaze_lens::session::maintenance::AutoPurge;
 use gaze_lens::source::db::mysql::MysqlSource;
 
 fn mysql_profile(readonly_required: bool, password_env: &str) -> Profile {
@@ -7,6 +8,8 @@ fn mysql_profile(readonly_required: bool, password_env: &str) -> Profile {
         name: "prod".to_string(),
         policy: None,
         schema_allowlist: None,
+        snapshot_retention_days: None,
+        auto_purge: AutoPurge::Off,
         source: SourceSpec::Mysql {
             host: "127.0.0.1".to_string(),
             port: 3306,

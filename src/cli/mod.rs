@@ -9,6 +9,7 @@ pub mod demo;
 pub mod init;
 pub mod query;
 pub mod replay;
+pub mod retention;
 pub mod serve;
 
 #[derive(Debug, Parser)]

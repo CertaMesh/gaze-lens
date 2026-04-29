@@ -110,6 +110,7 @@ pub(crate) async fn build_db_session(
     let profile = load_profile(profile_name, project_config, user_config)?;
     let manifest = expand_path(manifest)?;
     let snapshot_dir = expand_path(snapshot_dir)?;
+    super::retention::apply_retention_policy(&profile, &manifest, &snapshot_dir)?;
     let (policy, pipeline) = runtime_policy(&profile)?;
     let session = Arc::new(Session::new_with_pipeline(
         &policy,

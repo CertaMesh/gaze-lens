@@ -207,9 +207,32 @@ pub fn initialize_schema(conn: &Connection) -> rusqlite::Result<()> {
             result_summary TEXT,
             snapshot_ref TEXT,
             started_at_ms INTEGER NOT NULL,
-            finished_at_ms INTEGER
+            finished_at_ms INTEGER,
+            purged_at_ms INTEGER
         );
-        PRAGMA user_version = 2;
         "#,
-    )
+    )?;
+    // Forward migration from user_version=2 (v0.1.x) → user_version=3 (v0.2.x).
+    // Existing v2 manifests gain `purged_at_ms` column with NULL default.
+    let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if user_version < 3 {
+        let has_column = column_exists(conn, "calls", "purged_at_ms")?;
+        if !has_column {
+            conn.execute_batch("ALTER TABLE calls ADD COLUMN purged_at_ms INTEGER")?;
+        }
+        conn.execute_batch("PRAGMA user_version = 3;")?;
+    }
+    Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

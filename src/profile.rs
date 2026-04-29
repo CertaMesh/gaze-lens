@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::errors::LensError;
+use crate::session::maintenance::AutoPurge;
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Profile {
@@ -13,6 +14,21 @@ pub struct Profile {
     pub policy: Option<PathBuf>,
     #[serde(default)]
     pub schema_allowlist: Option<Vec<String>>,
+    /// Snapshot retention TTL in days. `None` (default) = unlimited (D3 default).
+    /// When `Some(n)`, snapshots older than `n` days are eligible for sweep
+    /// at session start. Sweep is gated on `auto_purge` for destructive vs warn.
+    #[serde(default)]
+    pub snapshot_retention_days: Option<u32>,
+    /// Destructive operational policy. `Off` (default) = no sweep;
+    /// `Warn` = read-only scan with per-day-suppressed stderr warning;
+    /// `Purge` = silently purge expired snapshots and tombstone manifest rows.
+    ///
+    /// Merge rule is `min(project, user)` over `Off < Warn < Purge`. The user
+    /// can opt to a less destructive mode but cannot escalate above what the
+    /// project authorizes. Profiles defined ONLY in the user file are forced
+    /// to `Off` regardless — destructive ops require project-level opt-in.
+    #[serde(default)]
+    pub auto_purge: AutoPurge,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -94,6 +110,22 @@ pub fn load_profiles(
     project_config: Option<&Path>,
     user_config: Option<&Path>,
 ) -> Result<Vec<Profile>, LensError> {
+    let (profiles, warnings) = load_profiles_with_warnings(project_config, user_config)?;
+    for warning in &warnings {
+        emit_merge_warning(warning);
+    }
+    Ok(profiles)
+}
+
+/// Like [`load_profiles`], but returns merge-time warnings (e.g. user-only
+/// `auto_purge` downgrades) alongside the merged profiles instead of emitting
+/// them to stderr. CLI builders use [`load_profiles`] which prints warnings;
+/// this variant exists so tests can assert warning content directly without
+/// stderr capture.
+pub fn load_profiles_with_warnings(
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+) -> Result<(Vec<Profile>, Vec<MergeWarning>), LensError> {
     let project_config_is_explicit = project_config.is_some();
     let project_config = project_config
         .map(PathBuf::from)
@@ -109,6 +141,20 @@ pub fn load_profiles(
         project_config_is_explicit,
     )?;
     Ok(merge_profiles(user_profiles, project_profiles))
+}
+
+fn emit_merge_warning(warning: &MergeWarning) {
+    eprintln!("{}", warning.message());
+    match &warning.kind {
+        MergeWarningKind::UserOnlyAutoPurgeDowngrade { requested } => {
+            tracing::warn!(
+                target = "gaze_lens::profile",
+                profile = warning.profile,
+                requested = requested.as_str(),
+                "user-only profile downgraded to auto_purge=off (project opt-in required)"
+            );
+        }
+    }
 }
 
 pub fn load_profile(
@@ -204,7 +250,44 @@ fn line_column(input: &str, byte_index: usize) -> (usize, usize) {
     (line, column)
 }
 
-fn merge_profiles(user_profiles: Vec<Profile>, project_profiles: Vec<Profile>) -> Vec<Profile> {
+/// Warning emitted during profile merge — surfaced both via stderr (when the
+/// public [`load_profiles`] entry-point is used) and as a structured value
+/// (via [`load_profiles_with_warnings`]) so tests can assert content without
+/// stderr capture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeWarning {
+    pub profile: String,
+    pub kind: MergeWarningKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeWarningKind {
+    /// A profile defined ONLY in the user config requested a destructive
+    /// `auto_purge` mode. Destructive ops require project-level opt-in, so
+    /// `auto_purge` was forced to `Off`.
+    UserOnlyAutoPurgeDowngrade { requested: AutoPurge },
+}
+
+impl MergeWarning {
+    /// Operator-facing message, identical to the stderr line emitted by
+    /// [`load_profiles`].
+    pub fn message(&self) -> String {
+        match &self.kind {
+            MergeWarningKind::UserOnlyAutoPurgeDowngrade { requested } => format!(
+                "gaze-lens: warning — profile `{name}` is defined only in the user config and \
+                 requested auto_purge = \"{requested}\". Destructive purge requires \
+                 project-level opt-in. Forcing auto_purge = \"off\" for this profile.",
+                name = self.profile,
+                requested = requested.as_str(),
+            ),
+        }
+    }
+}
+
+fn merge_profiles(
+    user_profiles: Vec<Profile>,
+    project_profiles: Vec<Profile>,
+) -> (Vec<Profile>, Vec<MergeWarning>) {
     let mut names = BTreeSet::new();
     for profile in user_profiles.iter().chain(project_profiles.iter()) {
         names.insert(profile.name.clone());
@@ -219,18 +302,53 @@ fn merge_profiles(user_profiles: Vec<Profile>, project_profiles: Vec<Profile>) -
         .map(|profile| (profile.name.clone(), profile))
         .collect();
 
-    names
+    let mut warnings = Vec::new();
+    let merged = names
         .into_iter()
         .filter_map(|name| match (users.get(&name), projects.get(&name)) {
             (Some(user), Some(project)) => Some(merge_one(user, project)),
-            (Some(user), None) => Some(user.clone()),
+            (Some(user), None) => {
+                let (downgraded, warning) = downgrade_user_only_profile(user);
+                if let Some(warning) = warning {
+                    warnings.push(warning);
+                }
+                Some(downgraded)
+            }
             (None, Some(project)) => Some(project.clone()),
             (None, None) => None,
         })
-        .collect()
+        .collect();
+    (merged, warnings)
+}
+
+/// Profiles defined ONLY in the user file cannot enable destructive
+/// `auto_purge` — destructive operations require project-level opt-in.
+/// Force `Off` and surface a [`MergeWarning`] so the operator notices.
+fn downgrade_user_only_profile(user: &Profile) -> (Profile, Option<MergeWarning>) {
+    let warning = if user.auto_purge != AutoPurge::Off {
+        Some(MergeWarning {
+            profile: user.name.clone(),
+            kind: MergeWarningKind::UserOnlyAutoPurgeDowngrade {
+                requested: user.auto_purge,
+            },
+        })
+    } else {
+        None
+    };
+    let mut downgraded = user.clone();
+    downgraded.auto_purge = AutoPurge::Off;
+    (downgraded, warning)
 }
 
 fn merge_one(user: &Profile, project: &Profile) -> Profile {
+    // `snapshot_retention_days`: project file overrides; user fallback.
+    let snapshot_retention_days = project
+        .snapshot_retention_days
+        .or(user.snapshot_retention_days);
+    // `auto_purge`: destructive-default cap merge — `min(project, user)` over
+    // `Off < Warn < Purge`. User can downgrade; user cannot escalate above
+    // what project has authorized.
+    let auto_purge = project.auto_purge.cap_with(user.auto_purge);
     Profile {
         name: project.name.clone(),
         source: merge_source(&user.source, &project.source),
@@ -239,6 +357,8 @@ fn merge_one(user: &Profile, project: &Profile) -> Profile {
             .schema_allowlist
             .clone()
             .or_else(|| user.schema_allowlist.clone()),
+        snapshot_retention_days,
+        auto_purge,
     }
 }
 
