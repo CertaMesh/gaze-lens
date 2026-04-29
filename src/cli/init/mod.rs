@@ -5,9 +5,11 @@ use clap::{ArgAction, Args, ValueEnum};
 
 use crate::errors::LensError;
 
+pub mod agents_md;
 pub mod atomic;
 pub mod batch;
 pub mod flow;
+pub mod mcp_writer;
 pub mod plan;
 pub mod profile_writer;
 pub mod prompter;
@@ -233,106 +235,259 @@ pub fn run(
     Ok(())
 }
 
-/// commit_plan: profile → MCP → AGENTS, byte-compare-skip via `would_write`.
-/// Full body lands in P6; for now the stub writes the profile section only
-/// using a minimal serializer so existing tests keep working.
-fn commit_plan(
-    _args: &InitArgs,
+/// `commit_plan`: profile → MCP → AGENTS, byte-compare-skip via `would_write`.
+///
+/// Profile bytes are validated in-memory via `crate::profile::validate_profile_bytes`
+/// BEFORE the atomic-write rename (MS1) — preserves the no-bad-TOML-on-disk
+/// guarantee. CB-r2-4: self-crate path is `crate::*`, NOT `gaze_lens::*`.
+///
+/// Errors are wrapped in `LensError::BatchPartial` so callers see what landed,
+/// what didn't, and which step failed (CB6).
+pub(crate) fn commit_plan(
+    args: &InitArgs,
     plan: &plan::InitPlan,
     w: &mut dyn batch::BatchWriter,
 ) -> Result<(), LensError> {
-    // P5/P6 will replace this body with the canonical multi-target writer.
-    // For now: write a minimal valid profile so tests/cli_init.rs file-write
-    // assertions keep working and the legacy --write-all path still functions.
+    let mut applied: Vec<PathBuf> = Vec::new();
+    let mut pending: Vec<PathBuf> = plan_destinations(plan);
+    let mut unchanged: Vec<PathBuf> = Vec::new();
+
+    // 1. Profile dir for user-scope (gaze-lens-owned only — CB8).
     if matches!(plan.profile_scope, InitScope::User)
         && let Some(parent) = plan.profile_path.parent()
     {
         atomic::create_dir_0700_if_missing(parent)?;
     }
-    let bytes = render_minimal_profile(&plan.profile_section).into_bytes();
-    if atomic::would_write(&plan.profile_path, &bytes) {
-        if !plan.profile_path.exists() || _args.allow_overwrite || _args.write_all {
-            w.write(&plan.profile_path, &bytes)?;
-            println!("wrote {}", plan.profile_path.display());
-        } else {
-            return Err(LensError::Profile {
-                detail: format!(
-                    "{} already exists; refusing to overwrite",
-                    plan.profile_path.display()
-                ),
-            });
-        }
+
+    // 2. Render profile TOML.
+    let existing_profile = std::fs::read_to_string(&plan.profile_path).ok();
+    let new_profile_bytes = profile_writer::render_profile_toml(
+        existing_profile.as_deref(),
+        &plan.profile_section,
+        args.allow_overwrite || args.write_all,
+    )
+    .map_err(|e| match e {
+        profile_writer::RenderError::Parse {
+            line,
+            column,
+            source_msg,
+            ..
+        } => LensError::Profile {
+            detail: format!(
+                "malformed {} at line {line}, column {column}: {source_msg}",
+                plan.profile_path.display(),
+            ),
+        },
+        other => LensError::Profile {
+            detail: other.to_string(),
+        },
+    })?
+    .into_bytes();
+
+    // 2.pre — MS1: in-memory schema-drift insurance BEFORE atomic_write rename.
+    // CB-r2-4: self-crate path inside lib code is `crate::*`.
+    crate::profile::validate_profile_bytes(&new_profile_bytes, &plan.profile_path)?;
+
+    let profile_changed = atomic::would_write(&plan.profile_path, &new_profile_bytes);
+    if profile_changed {
+        write_one(
+            w,
+            &mut applied,
+            &mut pending,
+            &plan.profile_path,
+            &new_profile_bytes,
+        )?;
     } else {
+        unchanged.push(plan.profile_path.clone());
+        if let Some(idx) = pending.iter().position(|p| p == &plan.profile_path) {
+            pending.remove(idx);
+        }
+    }
+
+    // 3. MCP target dirs — third-party = read-only assert (CB8); project repo
+    // dirs = leave alone.
+    for target in &plan.mcp_targets {
+        if let Some(parent) = target.path.parent() {
+            if is_lens_owned_path(parent, plan) {
+                atomic::create_dir_0700_if_missing(parent)?;
+            } else if is_third_party_dotdir(parent) {
+                if !parent.exists() {
+                    // Codex / Cursor user-scope dir doesn't exist yet. Create
+                    // 0o700 (we own the act of creating it; only an existing
+                    // operator-set mode is sacrosanct).
+                    atomic::create_dir_0700_if_missing(parent)?;
+                } else {
+                    atomic::assert_dir_0700_or_warn(parent)?;
+                }
+            }
+        }
+    }
+
+    // 4. MCP rendering + byte-compare + write (CB7).
+    for target in &plan.mcp_targets {
+        let existing = std::fs::read_to_string(&target.path).ok();
+        let rendered = render_mcp_target(target, existing.as_deref(), args.allow_overwrite)?;
+        let bytes = rendered.into_bytes();
+        if atomic::would_write(&target.path, &bytes) {
+            write_one(w, &mut applied, &mut pending, &target.path, &bytes)?;
+        } else {
+            unchanged.push(target.path.clone());
+            if let Some(idx) = pending.iter().position(|p| p == &target.path) {
+                pending.remove(idx);
+            }
+        }
+    }
+
+    // 5. AGENTS.md (+ optional CLAUDE.md). Bounded markers — full impl lands
+    // in P7. Until P7's renderer is wired, skip the AGENTS step in commit
+    // (the in-memory plan still records the intent for preview).
+    if let Some(patch) = &plan.agents_md {
+        let existing = std::fs::read_to_string(&patch.path).ok();
+        let rendered = crate::cli::init::agents_md::render_agents_md_patch(
+            existing.as_deref(),
+            &plan.profile_section.name,
+        )
+        .map_err(|e| LensError::Profile {
+            detail: e.to_string(),
+        })?;
+        let bytes = rendered.into_bytes();
+        if atomic::would_write(&patch.path, &bytes) {
+            write_one(w, &mut applied, &mut pending, &patch.path, &bytes)?;
+        } else {
+            unchanged.push(patch.path.clone());
+            if let Some(idx) = pending.iter().position(|p| p == &patch.path) {
+                pending.remove(idx);
+            }
+        }
+        if let Some(cm) = &patch.also_claude_md {
+            let existing = std::fs::read_to_string(cm).ok();
+            let rendered = crate::cli::init::agents_md::render_agents_md_patch(
+                existing.as_deref(),
+                &plan.profile_section.name,
+            )
+            .map_err(|e| LensError::Profile {
+                detail: e.to_string(),
+            })?;
+            let bytes = rendered.into_bytes();
+            if atomic::would_write(cm, &bytes) {
+                write_one(w, &mut applied, &mut pending, cm, &bytes)?;
+            } else {
+                unchanged.push(cm.clone());
+            }
+        }
+    }
+
+    // 6. Idempotency UX: when nothing changed, print "no changes".
+    let total = applied.len() + unchanged.len();
+    if !applied.is_empty() {
+        for p in &applied {
+            println!("wrote {}", p.display());
+        }
+    }
+    if applied.is_empty() && unchanged.len() == total && total > 0 {
         println!("no changes");
     }
     Ok(())
 }
 
-fn render_minimal_profile(s: &plan::ProfileSection) -> String {
-    use plan::AutoPurgeChoice;
-    let mut out = String::new();
-    out.push_str("[[profiles]]\n");
-    out.push_str(&format!("name = {:?}\n", s.name));
-    if !s.schema_allowlist.is_empty() {
-        let items: Vec<String> = s
-            .schema_allowlist
-            .iter()
-            .map(|c| format!("{c:?}"))
-            .collect();
-        out.push_str(&format!("schema_allowlist = [{}]\n", items.join(", ")));
+fn write_one(
+    w: &mut dyn batch::BatchWriter,
+    applied: &mut Vec<PathBuf>,
+    pending: &mut Vec<PathBuf>,
+    dest: &Path,
+    contents: &[u8],
+) -> Result<(), LensError> {
+    match w.write(dest, contents) {
+        Ok(()) => {
+            applied.push(dest.to_path_buf());
+            if let Some(idx) = pending.iter().position(|p| p == dest) {
+                pending.remove(idx);
+            }
+            Ok(())
+        }
+        Err(e) => Err(LensError::BatchPartial {
+            applied: applied.clone(),
+            pending: pending.clone(),
+            failed: dest.to_path_buf(),
+            source: Box::new(e),
+        }),
     }
-    if let Some(d) = s.snapshot_retention_days {
-        out.push_str(&format!("snapshot_retention_days = {d}\n"));
+}
+
+fn plan_destinations(plan: &plan::InitPlan) -> Vec<PathBuf> {
+    let mut paths = vec![plan.profile_path.clone()];
+    for t in &plan.mcp_targets {
+        paths.push(t.path.clone());
     }
-    match s.auto_purge {
-        AutoPurgeChoice::Off => {}
-        AutoPurgeChoice::Warn => out.push_str("auto_purge = \"warn\"\n"),
-        AutoPurgeChoice::Purge => out.push_str("auto_purge = \"purge\"\n"),
+    if let Some(p) = &plan.agents_md {
+        paths.push(p.path.clone());
+        if let Some(cm) = &p.also_claude_md {
+            paths.push(cm.clone());
+        }
     }
-    out.push_str("\n[profiles.source]\n");
-    let kind_str = match s.source_kind {
-        SourceKind::Mysql => "mysql",
-        SourceKind::Postgres => "postgres",
-        SourceKind::Sqlite => "sqlite",
-        SourceKind::SshLog => "ssh_log",
+    paths
+}
+
+fn is_lens_owned_path(parent: &Path, _plan: &plan::InitPlan) -> bool {
+    parent
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n == ".gaze-lens")
+        .unwrap_or(false)
+}
+
+fn is_third_party_dotdir(parent: &Path) -> bool {
+    parent
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n == ".codex" || n == ".cursor")
+        .unwrap_or(false)
+}
+
+fn render_mcp_target(
+    target: &plan::McpTarget,
+    existing: Option<&str>,
+    allow_overwrite: bool,
+) -> Result<String, LensError> {
+    let result = match target.client {
+        McpClient::Codex => mcp_writer::render_codex_toml(
+            existing,
+            &target.profile_name,
+            &target.command,
+            &target.args,
+            allow_overwrite,
+        ),
+        McpClient::ClaudeCode => mcp_writer::render_claude_code_json(
+            existing,
+            &target.profile_name,
+            &target.command,
+            &target.args,
+            allow_overwrite,
+        ),
+        McpClient::Cursor => mcp_writer::render_cursor_json(
+            existing,
+            &target.profile_name,
+            &target.command,
+            &target.args,
+            allow_overwrite,
+        ),
     };
-    out.push_str(&format!("kind = \"{kind_str}\"\n"));
-    if let Some(h) = &s.source_host {
-        out.push_str(&format!("host = {h:?}\n"));
-    }
-    if let Some(p) = s.source_port {
-        out.push_str(&format!("port = {p}\n"));
-    }
-    if let Some(d) = &s.source_database {
-        out.push_str(&format!("database = {d:?}\n"));
-    }
-    if let Some(u) = &s.source_username {
-        out.push_str(&format!("username = {u:?}\n"));
-    }
-    if let Some(env) = &s.source_password_env {
-        out.push_str(&format!("password_env = {env:?}\n"));
-    }
-    if let Some(h) = &s.source_ssh_host {
-        out.push_str(&format!("ssh_host = {h:?}\n"));
-    }
-    if let Some(p) = s.source_local_port {
-        out.push_str(&format!("local_port = {p}\n"));
-    }
-    if let Some(p) = &s.source_path {
-        out.push_str(&format!("path = {:?}\n", p.display().to_string()));
-    }
-    if matches!(s.source_kind, SourceKind::Mysql | SourceKind::Postgres) {
-        out.push_str("readonly_required = true\n");
-    }
-    if !s.source_json_text_columns.is_empty() && matches!(s.source_kind, SourceKind::Sqlite) {
-        let items: Vec<String> = s
-            .source_json_text_columns
-            .iter()
-            .map(|c| format!("{c:?}"))
-            .collect();
-        out.push_str(&format!("json_text_columns = [{}]\n", items.join(", ")));
-    }
-    out
+    result.map_err(|e| match e {
+        profile_writer::RenderError::Parse {
+            line,
+            column,
+            source_msg,
+            ..
+        } => LensError::Profile {
+            detail: format!(
+                "malformed {} at line {line}, column {column}: {source_msg}",
+                target.path.display(),
+            ),
+        },
+        other => LensError::Profile {
+            detail: other.to_string(),
+        },
+    })
 }
 
 fn run_smoke_check(_args: &InitArgs, _plan: &plan::InitPlan) -> Result<(), LensError> {
