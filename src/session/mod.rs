@@ -17,6 +17,7 @@ use crate::source::db::schema::SchemaTokenizer;
 use crate::source::{FakeSource, FakeSourceAdapter, Source, SourceOutput, ToolArgs};
 use crate::value::{LensRow, LensValue, LowerError};
 
+pub mod maintenance;
 pub mod manifest;
 pub mod restore;
 
