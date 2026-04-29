@@ -9,6 +9,7 @@ pub mod atomic;
 pub mod batch;
 pub mod flow;
 pub mod plan;
+pub mod profile_writer;
 pub mod prompter;
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
