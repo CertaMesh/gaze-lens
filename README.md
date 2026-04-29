@@ -19,23 +19,39 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 
 ## Install
 
-`gaze-lens` builds with stable Rust 1.89+.
+### One-line first-run (try the demo)
 
-### Prebuilt binaries (v0.1.1+)
+> v0.2.0 binaries publish on tag — until v0.2.0 ships, build from source via the snippet in [Building from source](#building-from-source) below.
 
-Future `v*.*.*` releases publish prebuilt binaries and shell/PowerShell installers to the [GitHub releases page](https://github.com/PIInuts/gaze-lens/releases). v0.1.0 ships without binaries; the next release tag will start attaching them automatically.
+```sh
+curl -L https://github.com/PIInuts/gaze-lens/releases/download/v0.2.0/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+./gaze-lens demo
+```
 
-### Source build
+`gaze-lens demo` tokenizes a small canned dataset (3 emails, 2 phones, 1 SSN-shaped string) and inline-restores it in a single process — both sections print side by side. The demo writes nothing to `~/.gaze-lens/`; everything lives in a tempdir that is wiped on exit. No follow-up `gaze-lens replay <id>` is required.
+
+The v0.2.0 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary. v0.2.0 also publishes Linux (`x86_64-unknown-linux-gnu`) + Intel macOS (`x86_64-apple-darwin`) builds via cargo-dist on tag.
+
+### Prebuilt binaries
+
+Releases attach prebuilt tarballs to the [GitHub releases page](https://github.com/PIInuts/gaze-lens/releases). v0.2.0 publishes the full Linux + macOS matrix on tag.
+
+### Building from source
 
 ```sh
 git clone https://github.com/PIInuts/gaze-lens
 cd gaze-lens
-cargo install --path .
+cargo build --release
+./target/release/gaze-lens demo
 ```
 
 The `gaze` and `gaze-recognizers` crates are wired as local path dependencies during v1 development. See [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-path-dependency) for the expected checkout layout.
 
+`gaze-lens` builds with stable Rust 1.89+.
+
 ## Quickstart
+
+After running `gaze-lens demo` to confirm the install works, point it at a real source:
 
 ```sh
 # 1. Scaffold a project profile next to your repo and a user-local transport file.
@@ -52,7 +68,7 @@ gaze-lens query --profile prod --table users --limit 5
 gaze-lens replay <session_ulid>
 ```
 
-`gaze-lens` ships five CLI subcommands: `init`, `check`, `query`, `replay`, `serve`. See [docs/profiles.md](./docs/profiles.md) for profile schema and [docs/replay.md](./docs/replay.md) for replay + snapshot handling.
+`gaze-lens` ships six CLI subcommands: `init`, `check`, `query`, `replay`, `serve`, `demo`. See [docs/profiles.md](./docs/profiles.md) for profile schema and [docs/replay.md](./docs/replay.md) for replay + snapshot handling.
 
 ## Use it from your agent
 
