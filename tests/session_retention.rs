@@ -466,7 +466,7 @@ path = "/tmp/x.sqlite"
 
 #[test]
 fn auto_purge_user_only_profile_downgrades_to_off() {
-    use gaze_lens::profile::load_profiles;
+    use gaze_lens::profile::{MergeWarningKind, load_profiles_with_warnings};
     use std::fs::write;
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -487,7 +487,8 @@ path = "/tmp/x.sqlite"
     )
     .expect("write user");
 
-    let profiles = load_profiles(Some(&project), Some(&user)).expect("load profiles");
+    let (profiles, warnings) =
+        load_profiles_with_warnings(Some(&project), Some(&user)).expect("load profiles");
     let profile = profiles
         .into_iter()
         .find(|p| p.name == "user-only")
@@ -496,6 +497,49 @@ path = "/tmp/x.sqlite"
         profile.auto_purge,
         AutoPurge::Off,
         "user-only profile must be forced to Off (project opt-in required)"
+    );
+
+    // The merge step must emit exactly one warning naming the offending
+    // profile and explaining that the destructive purge was downgraded.
+    // `MergeWarning::message()` is the same string `load_profiles` writes to
+    // stderr, so asserting on it covers the operator-visible warning without
+    // needing stderr capture in tests.
+    assert_eq!(
+        warnings.len(),
+        1,
+        "expected exactly one user-only downgrade warning, got: {warnings:?}"
+    );
+    let warning = &warnings[0];
+    assert_eq!(
+        warning.profile, "user-only",
+        "warning must name the downgraded profile"
+    );
+    assert!(
+        matches!(
+            warning.kind,
+            MergeWarningKind::UserOnlyAutoPurgeDowngrade {
+                requested: AutoPurge::Purge
+            }
+        ),
+        "warning must record the originally-requested auto_purge mode, got: {:?}",
+        warning.kind
+    );
+    let message = warning.message();
+    assert!(
+        message.contains("user-only"),
+        "operator-facing message must name the profile: {message}"
+    );
+    assert!(
+        message.contains("auto_purge"),
+        "operator-facing message must mention auto_purge: {message}"
+    );
+    assert!(
+        message.contains("project-level opt-in"),
+        "operator-facing message must explain destructive-purge opt-in requirement: {message}"
+    );
+    assert!(
+        message.contains("\"off\""),
+        "operator-facing message must state the forced auto_purge=off result: {message}"
     );
 }
 
