@@ -23,9 +23,17 @@ pub struct RestoredCall {
     pub snapshot_ref: PathBuf,
 }
 
+/// Replay every successful tool call in a session.
+///
+/// `retention_days` is the active profile's `snapshot_retention_days` value
+/// (or `0` when the profile has no retention configured). It is propagated
+/// into [`LensError::SnapshotPurged`] when a tombstoned row is encountered,
+/// so the operator sees the concrete policy that retired the mappings
+/// rather than a placeholder.
 pub fn restore_whole_session(
     manifest_path: &Path,
     lens_session_id: &str,
+    retention_days: u32,
 ) -> Result<RestoredSession, LensError> {
     let conn = Connection::open(manifest_path).map_err(|err| LensError::ReplayUnavailable {
         lens_session_id: lens_session_id.to_string(),
@@ -72,7 +80,7 @@ pub fn restore_whole_session(
                 lens_session_id: lens_session_id.to_string(),
                 purged_at_ms,
                 purged_at_iso8601: format_iso8601_ms(purged_at_ms),
-                retention_days_repr: "unknown (read from active profile)".to_string(),
+                retention_days,
             });
         }
         let snapshot_ref = match snapshot_ref {

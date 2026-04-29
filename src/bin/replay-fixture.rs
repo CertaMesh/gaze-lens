@@ -45,7 +45,7 @@ fn restore() -> Result<(), String> {
     let manifest = required_path("--manifest")?;
     let lens_session = required_value("--lens-session")?;
     let restored =
-        restore_whole_session(&manifest, &lens_session).map_err(|err| err.to_string())?;
+        restore_whole_session(&manifest, &lens_session, 0).map_err(|err| err.to_string())?;
     let saw_canary = restored
         .calls
         .iter()

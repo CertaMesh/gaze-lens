@@ -36,13 +36,13 @@ pub enum LensError {
         detail: String,
     },
     #[error(
-        "snapshot for session {lens_session_id} was purged at {purged_at_iso8601} by retention policy (snapshot_retention_days = {retention_days_repr}). The session's tokenized audit record is still in the manifest; the raw token mappings are not recoverable."
+        "snapshot for session {lens_session_id} was purged by retention policy on {purged_at_iso8601} (retention: {retention_days} days). The audit row remains in the manifest; the raw token mappings are not recoverable."
     )]
     SnapshotPurged {
         lens_session_id: String,
         purged_at_ms: i64,
         purged_at_iso8601: String,
-        retention_days_repr: String,
+        retention_days: u32,
     },
     #[error("scope rejected: {scope}")]
     ScopeRejected { scope: String },

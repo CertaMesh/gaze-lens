@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use gaze_lens::cli::retention::apply_retention_policy;
+use gaze_lens::errors::LensError;
 use gaze_lens::profile::{Profile, SourceSpec};
 use gaze_lens::session::maintenance::{AutoPurge, ManifestMaintenance};
 use gaze_lens::session::manifest::initialize_schema;
@@ -308,13 +309,52 @@ fn sweep_off_is_noop() {
 }
 
 #[test]
+fn replay_returns_snapshot_purged_for_tombstoned_row() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let id = ulid_at_ms(now - (30 * MS_PER_DAY)).to_string();
+    let purged_at = now - MS_PER_DAY;
+    fx.insert_call(
+        "call-tombstoned",
+        &id,
+        None,
+        "ok",
+        now - (30 * MS_PER_DAY),
+        Some(purged_at),
+    );
+
+    let err = restore_whole_session(&fx.manifest, &id, 14)
+        .expect_err("replay against tombstoned row should error");
+    match err {
+        LensError::SnapshotPurged {
+            lens_session_id,
+            purged_at_ms,
+            purged_at_iso8601,
+            retention_days,
+        } => {
+            assert_eq!(lens_session_id, id);
+            assert_eq!(purged_at_ms, purged_at);
+            assert!(
+                purged_at_iso8601.contains('T') && purged_at_iso8601.ends_with('Z'),
+                "iso8601 should be RFC3339-shaped: {purged_at_iso8601}"
+            );
+            assert_eq!(
+                retention_days, 14,
+                "concrete retention_days must come through to the error"
+            );
+        }
+        other => panic!("expected SnapshotPurged, got {other:?}"),
+    }
+}
+
+#[test]
 fn status_not_ok_rows_ignored_by_replay() {
     let fx = Fixture::new();
     let now = now_ms();
     let id = ulid_at_ms(now).to_string();
     fx.insert_call("call-err", &id, None, "error", now, None);
 
-    let restored = restore_whole_session(&fx.manifest, &id)
+    let restored = restore_whole_session(&fx.manifest, &id, 0)
         .expect("replay should succeed even with only error rows");
     assert!(
         restored.calls.is_empty(),
