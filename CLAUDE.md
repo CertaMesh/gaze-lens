@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-`gaze-lens` is a v1.0 PII-safe read-access tool for live production investigation by AI agents, built on the Gaze pseudonymization engine.
+`gaze-lens` is a v0.1 PII-safe read-access tool for live production investigation by AI agents, built on the Gaze pseudonymization engine.
 
 ## Public surface (locked at v1)
 
@@ -101,4 +101,4 @@ For full architectural detail, file-by-file mining verdicts, and the 16 locked d
 
 ## Status
 
-v1.0 ships from source. Crates.io publish + prebuilt binaries are tracked separately (cargo-dist workflow in progress). The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
+v0.1 ships from source. Crates.io publish + prebuilt binaries are tracked separately (cargo-dist workflow in progress). The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.

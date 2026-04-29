@@ -26,10 +26,10 @@ Releases are tag-driven through [cargo-dist](https://opensource.axo.dev/cargo-di
 
 1. Bump the package version in `Cargo.toml`.
 2. Commit the version bump.
-3. Create a matching SemVer tag, for example `git tag v1.0.1`.
-4. Push the tag with `git push origin v1.0.1`.
+3. Create a matching SemVer tag, for example `git tag v0.1.1`.
+4. Push the tag with `git push origin v0.1.1`.
 
-The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured macOS, Linux, and Windows archives, generates shell and PowerShell installers, and uploads everything to the GitHub release for that tag. v1.0.0 shipped without binaries; v1.0.1 and later tags will publish them automatically.
+The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured macOS, Linux, and Windows archives, generates shell and PowerShell installers, and uploads everything to the GitHub release for that tag. v0.1.0 ships without binaries; v0.1.1 and later tags will publish them automatically.
 
 The release workflow requires a repository secret named `GAZE_REPO_TOKEN` on `PIInuts/gaze-lens` so Cargo can fetch the private `PIInuts/gaze` dependency. Use a fine-grained PAT scoped to `PIInuts/gaze` with read-only repository access, then add it in GitHub under Settings -> Secrets and variables -> Actions -> New repository secret.
 
