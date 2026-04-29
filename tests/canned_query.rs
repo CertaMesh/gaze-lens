@@ -225,6 +225,18 @@ fn whole_identifier_sql_keywords_are_rejected_case_insensitively() {
 }
 
 #[test]
+fn missing_column_allowed_field_deserializes_default_deny() {
+    let column: ColumnInfo = serde_json::from_value(serde_json::json!({
+        "name_token": "email",
+        "data_type": "varchar",
+        "nullable": false
+    }))
+    .expect("column info");
+
+    assert!(!column.allowed);
+}
+
+#[test]
 fn limit_cap_clamps_to_schema_limit() {
     let query = CannedQuery {
         table: "users".to_string(),

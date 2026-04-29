@@ -19,7 +19,7 @@ pub struct ColumnInfo {
     pub name_token: String,
     pub data_type: String,
     pub nullable: bool,
-    #[serde(default = "default_column_allowed")]
+    #[serde(default)]
     pub allowed: bool,
 }
 
@@ -414,8 +414,4 @@ impl PlaceholderState {
             }
         }
     }
-}
-
-fn default_column_allowed() -> bool {
-    true
 }
