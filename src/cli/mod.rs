@@ -11,7 +11,7 @@ pub mod replay;
 pub mod serve;
 
 #[derive(Debug, Parser)]
-#[command(name = "gaze-lens")]
+#[command(name = "gaze-lens", version, propagate_version = true)]
 pub struct Cli {
     #[arg(long, env = "GAZE_LENS_PROJECT_CONFIG")]
     pub project_config: Option<PathBuf>,
