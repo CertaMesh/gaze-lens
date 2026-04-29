@@ -139,8 +139,7 @@ fn non_interactive_ssh_log_without_source_host_errors_at_runtime() {
 #[test]
 fn source_json_text_columns_flag_accepted_as_csv() {
     // Directive 18: `--source-json-text-columns metadata,payload` parses into
-    // Vec<String>. Reject a malformed token isn't necessary here — the
-    // flag-accepted check is enough. Real semantic check lives in the renderer.
+    // Vec<String>. Real semantic check lives in the renderer.
     let out = bin()
         .args([
             "init",
@@ -152,6 +151,10 @@ fn source_json_text_columns_flag_accepted_as_csv() {
             "sqlite",
             "--source-path",
             "/tmp/x.db",
+            "--scope",
+            "user",
+            "--no-mcp-config",
+            "--no-agents-md",
             "--source-json-text-columns",
             "metadata,payload",
         ])

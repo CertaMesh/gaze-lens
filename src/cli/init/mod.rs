@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::{ArgAction, Args, ValueEnum};
@@ -7,38 +7,9 @@ use crate::errors::LensError;
 
 pub mod atomic;
 pub mod batch;
+pub mod flow;
+pub mod plan;
 pub mod prompter;
-
-const PROJECT_PROFILE: &str = r#"# Project-owned schema policy and logical source shape.
-[[profiles]]
-name = "prod"
-schema_allowlist = ["id", "created_at", "updated_at"]
-
-[profiles.source]
-kind = "mysql"
-host = "prod-db.internal"
-port = 3306
-database = "app"
-username = "gaze_ro"
-password_env = "GAZE_LENS_DB_PASSWORD"
-readonly_required = true
-"#;
-
-const USER_PROFILE: &str = r#"# User-owned transport overrides for the same profile.
-[[profiles]]
-name = "prod"
-
-[profiles.source]
-kind = "mysql"
-host = "127.0.0.1"
-port = 13306
-database = "app"
-username = "gaze_ro"
-password_env = "GAZE_LENS_DB_PASSWORD"
-ssh_host = "deploy@prod.example.com"
-local_port = 13306
-readonly_required = true
-"#;
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum SourceKind {
@@ -220,71 +191,150 @@ pub fn run(
 ) -> Result<(), LensError> {
     args.validate()?;
 
-    // Legacy v0.2.0 body kept until P4 lands the guided flow. The only changes
-    // are: validate() runs at the top, and the new flag matrix is parsed by clap.
-    let project_path = expand_path(project_config.unwrap_or_else(|| Path::new(".gaze-lens.toml")))?;
-    let user_path =
-        expand_path(user_config.unwrap_or_else(|| Path::new("~/.gaze-lens/profiles.toml")))?;
-    let files = [
-        ("project profile", project_path, PROJECT_PROFILE),
-        ("user profile", user_path, USER_PROFILE),
-    ];
+    let env = flow::InitEnv::detect(
+        project_config.map(PathBuf::from),
+        user_config.map(PathBuf::from),
+    )?;
 
-    for (label, path, contents) in &files {
-        println!("--- {label}: {} ---\n{contents}", path.display());
+    // Directive 10: TTY check covers stdin AND stdout. `--non-interactive` and
+    // `--print-only` are explicit opt-outs of the guard.
+    if !args.non_interactive
+        && !args.print_only
+        && (!std::io::stdin().is_terminal() || !std::io::stdout().is_terminal())
+    {
+        return Err(LensError::Profile {
+            detail: "stdin or stdout is not a tty; rerun with --non-interactive (with required flags) or --print-only".into(),
+        });
     }
+
+    let plan = if args.non_interactive {
+        let mut p = prompter::FakePrompter::new();
+        flow::run_guided(&args, &mut p, &env)?
+    } else {
+        let mut p = prompter::DialoguerPrompter::new();
+        flow::run_guided(&args, &mut p, &env)?
+    };
+
+    // Always render preview so operators see what will be written.
+    let preview = flow::render_preview(&plan);
+    print!("{preview}");
 
     if args.print_only {
         return Ok(());
     }
 
-    let confirmed = args.write_all || prompt_confirm()?;
-    if !confirmed {
-        println!("No files written.");
-        return Ok(());
-    }
+    let mut writer = batch::RealBatchWriter;
+    commit_plan(&args, &plan, &mut writer)?;
 
-    for (_, path, _) in &files {
-        if path.exists() {
-            return Err(LensError::Profile {
-                detail: format!("{} already exists; refusing to overwrite", path.display()),
-            });
-        }
-    }
-    for (_, path, contents) in &files {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| LensError::Profile {
-                detail: format!("failed to create {}: {err}", parent.display()),
-            })?;
-        }
-        std::fs::write(path, contents).map_err(|err| LensError::Profile {
-            detail: format!("failed to write {}: {err}", path.display()),
-        })?;
-        println!("wrote {}", path.display());
+    if args.smoke_check {
+        run_smoke_check(&args, &plan)?;
     }
     Ok(())
 }
 
-fn prompt_confirm() -> Result<bool, LensError> {
-    print!("Write these files? [y/N] ");
-    std::io::stdout()
-        .flush()
-        .map_err(|err| LensError::Profile {
-            detail: err.to_string(),
-        })?;
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .map_err(|err| LensError::Profile {
-            detail: err.to_string(),
-        })?;
-    Ok(matches!(input.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
+/// commit_plan: profile → MCP → AGENTS, byte-compare-skip via `would_write`.
+/// Full body lands in P6; for now the stub writes the profile section only
+/// using a minimal serializer so existing tests keep working.
+fn commit_plan(
+    _args: &InitArgs,
+    plan: &plan::InitPlan,
+    w: &mut dyn batch::BatchWriter,
+) -> Result<(), LensError> {
+    // P5/P6 will replace this body with the canonical multi-target writer.
+    // For now: write a minimal valid profile so tests/cli_init.rs file-write
+    // assertions keep working and the legacy --write-all path still functions.
+    if matches!(plan.profile_scope, InitScope::User)
+        && let Some(parent) = plan.profile_path.parent()
+    {
+        atomic::create_dir_0700_if_missing(parent)?;
+    }
+    let bytes = render_minimal_profile(&plan.profile_section).into_bytes();
+    if atomic::would_write(&plan.profile_path, &bytes) {
+        if !plan.profile_path.exists() || _args.allow_overwrite || _args.write_all {
+            w.write(&plan.profile_path, &bytes)?;
+            println!("wrote {}", plan.profile_path.display());
+        } else {
+            return Err(LensError::Profile {
+                detail: format!(
+                    "{} already exists; refusing to overwrite",
+                    plan.profile_path.display()
+                ),
+            });
+        }
+    } else {
+        println!("no changes");
+    }
+    Ok(())
 }
 
-fn expand_path(path: &Path) -> Result<PathBuf, LensError> {
-    shellexpand::full(&path.to_string_lossy())
-        .map(|path| PathBuf::from(path.into_owned()))
-        .map_err(|err| LensError::Profile {
-            detail: err.to_string(),
-        })
+fn render_minimal_profile(s: &plan::ProfileSection) -> String {
+    use plan::AutoPurgeChoice;
+    let mut out = String::new();
+    out.push_str("[[profiles]]\n");
+    out.push_str(&format!("name = {:?}\n", s.name));
+    if !s.schema_allowlist.is_empty() {
+        let items: Vec<String> = s
+            .schema_allowlist
+            .iter()
+            .map(|c| format!("{c:?}"))
+            .collect();
+        out.push_str(&format!("schema_allowlist = [{}]\n", items.join(", ")));
+    }
+    if let Some(d) = s.snapshot_retention_days {
+        out.push_str(&format!("snapshot_retention_days = {d}\n"));
+    }
+    match s.auto_purge {
+        AutoPurgeChoice::Off => {}
+        AutoPurgeChoice::Warn => out.push_str("auto_purge = \"warn\"\n"),
+        AutoPurgeChoice::Purge => out.push_str("auto_purge = \"purge\"\n"),
+    }
+    out.push_str("\n[profiles.source]\n");
+    let kind_str = match s.source_kind {
+        SourceKind::Mysql => "mysql",
+        SourceKind::Postgres => "postgres",
+        SourceKind::Sqlite => "sqlite",
+        SourceKind::SshLog => "ssh_log",
+    };
+    out.push_str(&format!("kind = \"{kind_str}\"\n"));
+    if let Some(h) = &s.source_host {
+        out.push_str(&format!("host = {h:?}\n"));
+    }
+    if let Some(p) = s.source_port {
+        out.push_str(&format!("port = {p}\n"));
+    }
+    if let Some(d) = &s.source_database {
+        out.push_str(&format!("database = {d:?}\n"));
+    }
+    if let Some(u) = &s.source_username {
+        out.push_str(&format!("username = {u:?}\n"));
+    }
+    if let Some(env) = &s.source_password_env {
+        out.push_str(&format!("password_env = {env:?}\n"));
+    }
+    if let Some(h) = &s.source_ssh_host {
+        out.push_str(&format!("ssh_host = {h:?}\n"));
+    }
+    if let Some(p) = s.source_local_port {
+        out.push_str(&format!("local_port = {p}\n"));
+    }
+    if let Some(p) = &s.source_path {
+        out.push_str(&format!("path = {:?}\n", p.display().to_string()));
+    }
+    if matches!(s.source_kind, SourceKind::Mysql | SourceKind::Postgres) {
+        out.push_str("readonly_required = true\n");
+    }
+    if !s.source_json_text_columns.is_empty() && matches!(s.source_kind, SourceKind::Sqlite) {
+        let items: Vec<String> = s
+            .source_json_text_columns
+            .iter()
+            .map(|c| format!("{c:?}"))
+            .collect();
+        out.push_str(&format!("json_text_columns = [{}]\n", items.join(", ")));
+    }
+    out
+}
+
+fn run_smoke_check(_args: &InitArgs, _plan: &plan::InitPlan) -> Result<(), LensError> {
+    // Implementation lands in P9.
+    Ok(())
 }
