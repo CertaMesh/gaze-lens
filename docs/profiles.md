@@ -12,6 +12,10 @@ When both files define the same profile, the project file owns PII policy and sc
 
 This lets teams commit the PII policy while each operator keeps laptop-specific transport in their home directory.
 
+## Session Policy
+
+Only `conversation` scope is supported in v0.1. `persistent` is reserved for v1.x.
+
 ## Schema Policy
 
 Schema names are presentation-sensitive metadata. `schema` and `list_tables` tokenize table and column names through the `schema_metadata` source class unless names are allowlisted.

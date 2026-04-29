@@ -19,7 +19,7 @@ pub struct ColumnInfo {
     pub name_token: String,
     pub data_type: String,
     pub nullable: bool,
-    #[serde(default = "default_column_allowed")]
+    #[serde(default)]
     pub allowed: bool,
 }
 
@@ -365,9 +365,7 @@ fn has_sql_keyword(column: &str) -> bool {
     const KEYWORDS: &[&str] = &[
         "alter", "delete", "drop", "insert", "select", "truncate", "union", "update",
     ];
-    column
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .any(|part| KEYWORDS.contains(&part.to_ascii_lowercase().as_str()))
+    KEYWORDS.contains(&column.to_ascii_lowercase().as_str())
 }
 
 fn operator_matches_type(op: WhereOp, data_type: &str) -> bool {
@@ -416,8 +414,4 @@ impl PlaceholderState {
             }
         }
     }
-}
-
-fn default_column_allowed() -> bool {
-    true
 }

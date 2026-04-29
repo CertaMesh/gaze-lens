@@ -9,8 +9,6 @@ use gaze_recognizers::{NerDetector, NerOptions, RegexDetector};
 use serde::Deserialize;
 use thiserror::Error;
 
-pub const SCHEMA_METADATA_SOURCE_CLASS: &str = "schema_metadata";
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyFile {
     #[serde(default)]
@@ -103,8 +101,10 @@ pub enum PolicyError {
     InvalidAction { column: String, action: String },
     #[error("unknown pii class `{class}` for column `{column}`")]
     UnknownPiiClass { column: String, class: String },
-    #[error("invalid session scope `{0}`")]
-    InvalidSessionScope(String),
+    #[error(
+        "policy.session.scope = \"{scope}\" is not supported in v0.1; only \"conversation\" is accepted. See SPEC.md §session-lifecycle."
+    )]
+    UnsupportedSessionScope { scope: String },
     #[error("pipeline build failed: {0}")]
     Pipeline(#[from] gaze::Error),
     #[error("recognizer build failed: {0}")]
@@ -117,11 +117,12 @@ impl PolicyFile {
     }
 
     pub fn to_gaze_policy(&self) -> Result<gaze::Policy, PolicyError> {
-        let scope = match self.session.scope.as_str() {
-            "ephemeral" => gaze::SessionScope::Ephemeral,
-            "conversation" => gaze::SessionScope::Conversation,
-            "persistent" => gaze::SessionScope::Persistent,
-            other => return Err(PolicyError::InvalidSessionScope(other.to_string())),
+        let scope = if self.session.scope.eq_ignore_ascii_case("conversation") {
+            gaze::SessionScope::Conversation
+        } else {
+            return Err(PolicyError::UnsupportedSessionScope {
+                scope: self.session.scope.clone(),
+            });
         };
         Ok(gaze::Policy {
             session: gaze::SessionPolicy {

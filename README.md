@@ -6,7 +6,7 @@ PII-safe read-access for live production investigation by AI agents.
 
 Built on the [Gaze](https://github.com/PIInuts) pseudonymization engine. Part of the [PIInuts](https://github.com/PIInuts) product family — every product in the family is named `gaze-X`.
 
-> **Status:** v1.0. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
+> **Status:** v0.1. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
 
 ## Why
 
@@ -21,9 +21,9 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 
 `gaze-lens` builds with stable Rust 1.89+.
 
-### Prebuilt binaries (v1.0.1+)
+### Prebuilt binaries (v0.1.1+)
 
-Future `v*.*.*` releases publish prebuilt binaries and shell/PowerShell installers to the [GitHub releases page](https://github.com/PIInuts/gaze-lens/releases). v1.0.0 shipped without binaries; the next release tag will start attaching them automatically.
+Future `v*.*.*` releases publish prebuilt binaries and shell/PowerShell installers to the [GitHub releases page](https://github.com/PIInuts/gaze-lens/releases). v0.1.0 ships without binaries; the next release tag will start attaching them automatically.
 
 ### Source build
 

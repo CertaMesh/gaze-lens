@@ -13,6 +13,8 @@ fn schema() -> TableSchema {
             column("email", "varchar"),
             column("age", "int"),
             column("created_at", "datetime"),
+            column("select_count", "int"),
+            column("user_select", "varchar"),
         ],
     }
 }
@@ -183,6 +185,58 @@ fn rejects_malicious_column_before_sql_construction() {
         query.compile_to_sql(&schema()),
         Err(QueryError::UnsafeColumn(_))
     ));
+}
+
+#[test]
+fn keyword_fragments_inside_identifiers_are_allowed() {
+    for column_name in ["select_count", "user_select"] {
+        let query = CannedQuery {
+            table: "users".to_string(),
+            columns: Some(vec![column_name.to_string()]),
+            r#where: None,
+            where_combinator: None,
+            order_by: None,
+            limit: Some(1),
+        };
+
+        let compiled = query.compile_to_sql(&schema()).expect("compile");
+
+        assert_eq!(
+            compiled.sql,
+            format!("SELECT `{column_name}` FROM `users` LIMIT ?")
+        );
+    }
+}
+
+#[test]
+fn whole_identifier_sql_keywords_are_rejected_case_insensitively() {
+    for column_name in ["select", "SELECT", "Select"] {
+        let query = CannedQuery {
+            table: "users".to_string(),
+            columns: Some(vec![column_name.to_string()]),
+            r#where: None,
+            where_combinator: None,
+            order_by: None,
+            limit: None,
+        };
+
+        assert_eq!(
+            query.compile_to_sql(&schema()).expect_err("keyword"),
+            QueryError::UnsafeColumn(column_name.to_string())
+        );
+    }
+}
+
+#[test]
+fn missing_column_allowed_field_deserializes_default_deny() {
+    let column: ColumnInfo = serde_json::from_value(serde_json::json!({
+        "name_token": "email",
+        "data_type": "varchar",
+        "nullable": false
+    }))
+    .expect("column info");
+
+    assert!(!column.allowed);
 }
 
 #[test]
