@@ -58,6 +58,12 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 1. **DB queries** — sqlx-backed (MySQL / Postgres / SQLite). Read-only. v1 query is a **canned structured shape** (`{table, columns?, where?, order_by?, limit?}`) compiled to safe parameterized SQL by gaze-lens. **No raw SQL strings in v1.** Raw SQL behind opt-in profile flag is a v1.x candidate. MCP tools: `query`, `schema`, `list_tables`. (D5, D1)
 2. **App logs** — plain file tail / grep over SSH. `gaze-lens` shells out to `ssh user@host tail -n 500 /var/log/app.log` (or `grep`), streams stdout, pseudonymizes per Gaze policy. Remote tail/grep is implemented as gaze-lens-local SSH command construction with strict shell-quoting and `--`-separated host arguments — not as a lift of debug-proxy code. (D16) MCP tools: `log_tail`, `log_grep`.
 
+## CLI subcommand surface
+
+v1 ships 5 CLI subcommands: `serve`, `init`, `query`, `replay`, `check`. v0.2 permits one new CLI subcommand `demo` (PR 5). The 5 MCP tools surface remains locked.
+
+The `demo` subcommand is a CLI-only inline-replay helper for adopters; it does not extend the MCP `frontend::mcp::McpFrontend` tool list and does not introduce a new data source. Adding any further subcommand or any new MCP tool still requires a SPEC amendment PR.
+
 ## Audit + restore
 
 - Every MCP and CLI retrieval call writes to a **gaze-lens-local SQLite manifest** (D9). Manifest schema is gaze-lens's own; it coexists with Gaze's metadata-only redaction log but is not the same data plane (per Codex r1 unique insight).
@@ -65,6 +71,23 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 - Default Gaze session scope is `Scope::Conversation(<lens_session_id>)`; gaze-lens rejects `Scope::Ephemeral` at session construction because `Session::export()` rejects it. (D10)
 - Tool args (SQL `where` AST, grep patterns, table/column names) are tokenized via the same `Pipeline::redact` path as result data **before** manifest write. Manifest never stores raw args. Raw args are reconstructable on operator replay via the session snapshot. (D7)
 - Schema metadata (table/column names) flows through Gaze with a `schema_metadata` source class. This is presentation privacy for schema/list output, not an access-control grant. Query access is governed by each column's `ColumnInfo.allowed` value during canned-query validation. Default-deny posture; allowlist common safe names via `[schema] allow_columns = [...]`. Tokens are session-stable. (D2)
+
+## Snapshot retention (v0.2 opt-in)
+
+v0.2 introduces two profile fields governing snapshot lifecycle. Both are opt-in; v0.1 default-unlimited behavior is preserved when neither is set.
+
+- `snapshot_retention_days: Option<u32>` — when set, snapshots whose ULID-embedded creation timestamp is older than `retention_days * 86_400_000` ms are subject to a startup sweep. `None` (default) = unlimited; manifest remains the operator's audit log of record per D3.
+- `auto_purge: bool` — `false` (default) emits warn-only stderr listings of expired snapshots that would be purged. `true` performs a best-effort `remove_file` on each expired snapshot and writes a `purged_at_ms` tombstone on the corresponding `calls` row. The manifest row is preserved; only `snapshot_ref` is cleared. Replay of a tombstoned row produces a structured `LensError::SnapshotPurged` citing the policy — never a silent FS-only delete.
+
+**Profile merge rule (destructive-default default-deny).** When merging a project profile file with a user profile file, the resolved `auto_purge` is
+
+```text
+merged_auto_purge = project.auto_purge && user.auto_purge
+```
+
+Plain conjunction. If the project file does not enable `auto_purge`, the user file cannot override to `true`. If the project file enables `auto_purge`, the user file may downgrade to warn-only by setting `auto_purge = false`. Consent for a destructive operational policy must be expressed at the team-shared (project) layer.
+
+`snapshot_retention_days` itself merges by user-overrides-project (standard merge); the destructive-conjunction rule applies only to `auto_purge`.
 
 ## Anti-features (locked)
 
