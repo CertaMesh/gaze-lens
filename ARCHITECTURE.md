@@ -78,6 +78,39 @@ From plan rev 2 §4 PR1 acceptance.
   4. `manifest.finish_call(...)` stores tokenized args, status, result summary, snapshot reference.
   5. If begin/finish fails, no raw output is returned.
 
+### Manifest schema versioning
+
+The `calls` table version is tracked via SQLite `PRAGMA user_version`. v0.1.x manifests use `user_version = 2`. v0.2 bumps this to `user_version = 3` by adding one nullable column:
+
+```sql
+ALTER TABLE calls ADD COLUMN purged_at_ms INTEGER;
+```
+
+SQLite's `ADD COLUMN` semantics give every existing v2 row a `NULL` value for the new column without rewriting page content; the migration is O(catalog), not O(rows). v0.1.x → v0.2 upgrades are automatic on first manifest open. Rollback is supported: a v0.1.x build opening a v0.2 manifest reads only the columns it knows about, ignoring `purged_at_ms`. New schema additions in v0.2.x must follow the same nullable-column pattern (or bump `user_version` again with an explicit migration step).
+
+### ManifestMaintenance
+
+Snapshot retention sweeping is implemented as a separate `ManifestMaintenance` type, distinct from `Session::new_with_pipeline`. The split is deliberate: session construction is a hot path on every CLI invocation and MCP frontend boot; the destructive sweep belongs on a different code path so it can be reasoned about and tested in isolation.
+
+```rust
+pub struct ManifestMaintenance { /* conn, manifest_path, snapshot_dir */ }
+
+impl ManifestMaintenance {
+    pub fn open(manifest_path: &Path, snapshot_dir: &Path) -> Result<Self, LensError>;
+    pub fn sweep_expired_snapshots(
+        &self,
+        retention_days: u32,
+        auto_purge: bool,
+    ) -> Result<SweepReport, LensError>;
+}
+```
+
+`open` opens the manifest at rest (no Gaze pipeline, no source connections). `sweep_expired_snapshots` walks `calls` rows with `status = 'ok'`, `snapshot_ref IS NOT NULL`, and `purged_at_ms IS NULL`, derives age from the ULID-embedded ms timestamp on the snapshot filename (FS-independent, deterministic), and either lists or removes plus tombstones expired entries depending on `auto_purge`.
+
+CLI builders (`src/cli/query.rs`, `src/cli/serve.rs`) invoke `ManifestMaintenance::open(...).sweep_expired_snapshots(...)` BEFORE constructing the `Session`. This ordering matters: a sweep failure must not silently take a session down, and a sweep that emits friction-warning stderr should appear before any tool dispatch output.
+
+When the active profile has `snapshot_retention_days = None`, CLI builders skip the maintenance call entirely — no manifest open, no sweep, zero IO. v0.1 default-unlimited semantics are preserved.
+
 ## File-by-file mining verdict (debug-proxy → gaze-lens)
 
 From scratchpad 442 mining audit + Codex r1 hardening notes.
