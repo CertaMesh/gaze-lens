@@ -63,6 +63,12 @@ struct ProfileFile {
     profiles: Vec<Profile>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ProfileShape {
+    name: Option<String>,
+    source: Option<toml::Value>,
+}
+
 impl Profile {
     pub fn resolve_password(&self) -> Result<String, LensError> {
         let env = match &self.source {
@@ -88,6 +94,7 @@ pub fn load_profiles(
     project_config: Option<&Path>,
     user_config: Option<&Path>,
 ) -> Result<Vec<Profile>, LensError> {
+    let project_config_is_explicit = project_config.is_some();
     let project_config = project_config
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(".gaze-lens.toml"));
@@ -95,8 +102,12 @@ pub fn load_profiles(
         .map(PathBuf::from)
         .unwrap_or_else(default_user_config_path);
 
-    let user_profiles = read_profiles_if_exists(&user_config)?;
-    let project_profiles = read_profiles_if_exists(&project_config)?;
+    let user_profiles = read_profiles_if_exists(&user_config, "user profile config", false)?;
+    let project_profiles = read_profiles_if_exists(
+        &project_config,
+        "project profile config",
+        project_config_is_explicit,
+    )?;
     Ok(merge_profiles(user_profiles, project_profiles))
 }
 
@@ -113,18 +124,84 @@ pub fn load_profile(
         })
 }
 
-fn read_profiles_if_exists(path: &Path) -> Result<Vec<Profile>, LensError> {
+fn read_profiles_if_exists(
+    path: &Path,
+    label: &str,
+    required: bool,
+) -> Result<Vec<Profile>, LensError> {
     let expanded = expand_path(path)?;
     if !expanded.exists() {
+        if required {
+            return Err(LensError::ProfileNotFound {
+                label: label.to_string(),
+                path: expanded,
+            });
+        }
         return Ok(Vec::new());
     }
     let input = std::fs::read_to_string(&expanded).map_err(|err| LensError::Profile {
-        detail: format!("failed to read {}: {err}", expanded.display()),
+        detail: format!("failed to read {label} {}: {err}", expanded.display()),
     })?;
-    let file: ProfileFile = toml::from_str(&input).map_err(|err| LensError::Profile {
-        detail: format!("failed to parse {}: {err}", expanded.display()),
-    })?;
+    validate_profile_shape(&input, label, &expanded)?;
+    let file: ProfileFile =
+        toml::from_str(&input).map_err(|err| profile_parse_error(label, &expanded, &input, err))?;
     Ok(file.profiles)
+}
+
+fn validate_profile_shape(input: &str, label: &str, path: &Path) -> Result<(), LensError> {
+    let file: ProfileShapeFile =
+        toml::from_str(input).map_err(|err| profile_parse_error(label, path, input, err))?;
+    for (index, profile) in file.profiles.into_iter().enumerate() {
+        let profile_name = profile
+            .name
+            .unwrap_or_else(|| format!("<profile {}>", index + 1));
+        if profile.source.is_none() {
+            return Err(LensError::Profile {
+                detail: format!(
+                    "{label} {} profile `{profile_name}` is missing required field `source`",
+                    path.display()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ProfileShapeFile {
+    #[serde(default)]
+    profiles: Vec<ProfileShape>,
+}
+
+fn profile_parse_error(label: &str, path: &Path, input: &str, err: toml::de::Error) -> LensError {
+    let location = err
+        .span()
+        .map(|span| line_column(input, span.start))
+        .map(|(line, column)| format!(" at line {line}, column {column}"))
+        .unwrap_or_default();
+    LensError::Profile {
+        detail: format!(
+            "failed to parse {label} {}{location}: {err}",
+            path.display()
+        ),
+    }
+}
+
+fn line_column(input: &str, byte_index: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut column = 1;
+    for (index, ch) in input.char_indices() {
+        if index >= byte_index {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
 }
 
 fn merge_profiles(user_profiles: Vec<Profile>, project_profiles: Vec<Profile>) -> Vec<Profile> {
