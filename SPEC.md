@@ -60,7 +60,7 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 
 ## CLI subcommand surface
 
-v1 ships 5 CLI subcommands: `serve`, `init`, `query`, `replay`, `check`. v0.2 permits one new CLI subcommand `demo` (PR 5). The 5 MCP tools surface remains locked.
+v0.2 ships 6 CLI subcommands: `serve`, `init`, `query`, `replay`, `check`, `demo`. The 5 MCP tools surface remains locked.
 
 The `demo` subcommand is a CLI-only inline-replay helper for adopters; it does not extend the MCP `frontend::mcp::McpFrontend` tool list and does not introduce a new data source. Adding any further subcommand or any new MCP tool still requires a SPEC amendment PR.
 

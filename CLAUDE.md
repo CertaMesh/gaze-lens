@@ -9,9 +9,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The product surface is exactly:
 
 - **5 MCP tools:** `query`, `schema`, `list_tables`, `log_tail`, `log_grep`.
-- **5 CLI subcommands:** `serve`, `init`, `query`, `replay`, `check`.
+- **6 CLI subcommands:** `serve`, `init`, `query`, `replay`, `check`, `demo`.
 
-Adding a 6th tool or subcommand requires a SPEC amendment PR, not an impl PR. Internal helpers are fine; do not wire them through `frontend::mcp::McpFrontend` without updating [SPEC.md](./SPEC.md).
+`demo` is a CLI-only inline-replay helper introduced in v0.2.0 (SPEC §"CLI subcommand surface"); it tokenizes a canned in-memory dataset, restores it in the same process via `gaze::Session::import`, and exits without touching `~/.gaze-lens/`. It does not extend the MCP tool list and does not introduce a new data source. Adding any further subcommand, or any new MCP tool, requires a SPEC amendment PR — not an impl PR. Internal helpers are fine; do not wire them through `frontend::mcp::McpFrontend` without updating [SPEC.md](./SPEC.md).
 
 ## Non-negotiables
 

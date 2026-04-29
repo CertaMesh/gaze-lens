@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 use crate::errors::LensError;
 
 pub mod check;
+pub mod demo;
 pub mod init;
 pub mod query;
 pub mod replay;
@@ -30,6 +31,9 @@ pub enum Cmd {
     Replay(replay::ReplayArgs),
     Check(check::CheckArgs),
     Serve(serve::ServeArgs),
+    /// Run a quick PII-redaction demonstration; tokenizes seeded canned data and
+    /// inline-restores it. No persistent state.
+    Demo(demo::DemoArgs),
 }
 
 pub fn run(cli: Cli) -> Result<(), LensError> {
@@ -74,6 +78,12 @@ pub fn run(cli: Cli) -> Result<(), LensError> {
                 cli.project_config.as_deref(),
                 cli.user_config.as_deref(),
             ))
+        }
+        Cmd::Demo(args) => {
+            let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
+                detail: err.to_string(),
+            })?;
+            runtime.block_on(demo::run(args))
         }
     }
 }
