@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# gaze-lens pre-push gate.
+#
+# Runs the same checks the release workflow would run, locally, before
+# the push leaves your machine. Catches lint/format/test regressions
+# without burning GitHub Actions minutes.
+#
+# Activate per clone (one-time):
+#   git config core.hooksPath .githooks
+#
+# Emergency bypass (use sparingly — WIP backups only):
+#   SKIP_HOOK=1 git push ...
+
+set -euo pipefail
+
+if [[ "${SKIP_HOOK:-0}" == "1" ]]; then
+  echo "⚠  SKIP_HOOK=1 set — pre-push gate bypassed."
+  echo "   You are pushing without running fmt/clippy/test locally."
+  echo "   Only do this for WIP-branch backups; never for shared branches or tags."
+  exit 0
+fi
+
+echo "▶  pre-push gate: cargo fmt --check"
+if ! cargo fmt --check; then
+  echo
+  echo "✗  cargo fmt --check failed. Run 'cargo fmt' to fix, then push again."
+  echo "   (Bypass with SKIP_HOOK=1 git push if you really mean it.)"
+  exit 1
+fi
+
+echo "▶  pre-push gate: cargo clippy --all-targets --no-deps -- -D warnings"
+if ! cargo clippy --all-targets --no-deps -- -D warnings; then
+  echo
+  echo "✗  cargo clippy failed. Fix warnings and push again."
+  exit 1
+fi
+
+echo "▶  pre-push gate: cargo test --all-targets"
+if ! cargo test --all-targets; then
+  echo
+  echo "✗  cargo test failed. Fix tests and push again."
+  exit 1
+fi
+
+echo "✓  pre-push gate clean. Pushing."

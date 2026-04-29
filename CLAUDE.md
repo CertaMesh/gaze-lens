@@ -38,6 +38,9 @@ cargo test --doc                              # doc tests
 cargo fmt --check
 cargo clippy --all-targets --no-deps -- -D warnings
 
+# One-time per clone — activate the local pre-push gate
+git config core.hooksPath .githooks
+
 # Feature-gated integration tests (require docker)
 cargo build --features integration-postgres
 cargo test --all-targets --features integration-postgres
@@ -49,6 +52,8 @@ cargo run -- check --profile dev
 cargo run -- query --profile dev --table users --limit 5
 cargo run -- serve --profile dev    # MCP stdio server
 ```
+
+Local pre-push gate runs `fmt --check` + `clippy -D warnings` + `test --all-targets`. See [CONTRIBUTING.md §Local pre-push hook](./CONTRIBUTING.md#local-pre-push-hook).
 
 `gaze` and `gaze-recognizers` are local path-deps under `../../../../Workspace/bets/Gaze/crates/`. Pin the Gaze checkout to a specific tag — see [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-path-dependency).
 

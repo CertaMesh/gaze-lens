@@ -8,6 +8,26 @@
 4. Test suite green before each commit; fix-and-commit-separately on failure.
 5. Stage specific files by name; never `git add -A`.
 
+## Local pre-push hook
+
+The repo ships a pre-push hook at `.githooks/pre-push` that runs `cargo fmt --check`, `cargo clippy --all-targets --no-deps -- -D warnings`, and `cargo test --all-targets` before any `git push`. It catches the same regressions the release workflow would catch, locally, without needing GitHub Actions minutes.
+
+Activate it once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The setting is local to the clone (stored in `.git/config`, not committed) so each contributor opts in.
+
+Emergency bypass for WIP-branch backups:
+
+```sh
+SKIP_HOOK=1 git push origin my-feature
+```
+
+Do not bypass for shared branches or tags; the hook exists to keep main and release tags green.
+
 ## Gaze dependency pin
 
 `Cargo.toml` pins `gaze` and `gaze-recognizers` to a specific `PIInuts/gaze` Git revision. Do not silently float to an arbitrary Gaze checkout. When adopting new Gaze features, update the `rev = "..."` SHA in `Cargo.toml` and bump the gaze-lens patch version in the same PR.
