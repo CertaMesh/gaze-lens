@@ -266,6 +266,69 @@ fn default_unlimited_is_no_op() {
 }
 
 #[test]
+fn merge_user_cannot_enable_auto_purge_when_project_disables() {
+    use gaze_lens::profile::load_profiles;
+    use std::fs::write;
+
+    fn project_user_pair(
+        project_auto_purge: bool,
+        user_auto_purge: bool,
+    ) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = dir.path().join("project.toml");
+        let user = dir.path().join("user.toml");
+        write(
+            &project,
+            format!(
+                r#"
+[[profiles]]
+name = "p"
+auto_purge = {project_auto_purge}
+[profiles.source]
+kind = "sqlite"
+path = "/tmp/x.sqlite"
+"#
+            ),
+        )
+        .expect("write project");
+        write(
+            &user,
+            format!(
+                r#"
+[[profiles]]
+name = "p"
+auto_purge = {user_auto_purge}
+[profiles.source]
+kind = "sqlite"
+path = "/tmp/x.sqlite"
+"#
+            ),
+        )
+        .expect("write user");
+        (dir, project, user)
+    }
+
+    // Truth table for `merged = project AND user`
+    for (project, user, expected) in [
+        (false, false, false),
+        (false, true, false),
+        (true, false, false),
+        (true, true, true),
+    ] {
+        let (_dir, project_path, user_path) = project_user_pair(project, user);
+        let profiles = load_profiles(Some(&project_path), Some(&user_path)).expect("load profiles");
+        let profile = profiles
+            .into_iter()
+            .find(|p| p.name == "p")
+            .expect("profile p");
+        assert_eq!(
+            profile.auto_purge, expected,
+            "project={project} user={user} -> expected {expected}"
+        );
+    }
+}
+
+#[test]
 fn ulid_timestamp_used_for_age() {
     // Two rows with identical mtimes (write order, not relevant to sweep) but
     // different ULID-embedded timestamps. Sweep must see the OLD-ULID one as
