@@ -92,7 +92,8 @@ fn query_rejects_unknown_table() {
         .expect("run query");
 
     assert!(!output.status.success(), "stdout: {}", stdout(&output));
-    assert!(stderr(&output).contains("unknown table"));
+    assert!(stderr(&output).contains("SourceError: source failed"));
+    assert!(!stderr(&output).contains("missing"));
 }
 
 fn seed_sqlite(path: &std::path::Path) {

@@ -59,6 +59,38 @@ fn check_reports_invalid_policy() {
     assert!(stderr(&output).contains("failed to parse policy"));
 }
 
+#[test]
+fn malformed_toml_exits_nonzero_with_hint() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join(".gaze-lens.toml");
+    std::fs::write(
+        &project,
+        r#"
+            [[profiles]
+            name = "local"
+        "#,
+    )
+    .expect("profile");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+        ])
+        .output()
+        .expect("check");
+
+    let stderr = stderr(&output);
+    assert!(!output.status.success(), "stdout: {}", stdout(&output));
+    assert!(stderr.contains(&project.display().to_string()), "{stderr}");
+    assert!(stderr.contains("line "), "{stderr}");
+    assert!(stderr.contains("column "), "{stderr}");
+}
+
 fn seed_sqlite(path: &std::path::Path) {
     let conn = Connection::open(path).expect("sqlite");
     conn.execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY);")

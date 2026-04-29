@@ -41,6 +41,8 @@ pub enum LensError {
     ConvertError(#[from] LowerError),
     #[error("profile environment variable missing: {env}")]
     ProfileEnvMissing { env: String },
+    #[error("profile config not found ({label}): {path}")]
+    ProfileNotFound { label: String, path: PathBuf },
     #[error("profile error: {detail}")]
     Profile { detail: String },
     #[error("feature deferred: {0}")]
@@ -73,7 +75,10 @@ pub fn sanitize_error(err: &LensError) -> String {
         LensError::ProfileEnvMissing { env } => {
             format!("ProfileEnvMissing: missing environment variable {env}")
         }
-        LensError::Profile { .. } => "Profile: profile error".to_string(),
+        LensError::ProfileNotFound { label, path } => {
+            format!("ProfileNotFound: {label} not found: {}", path.display())
+        }
+        LensError::Profile { detail } => format!("Profile: {detail}"),
         LensError::FeatureDeferred(feature) => format!("FeatureDeferred: {feature}"),
         LensError::Truncated(reason) => format!("Truncated: {reason:?}"),
         LensError::Internal { .. } => "Internal: internal error".to_string(),

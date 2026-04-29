@@ -153,14 +153,59 @@ fn missing_env_var_reports_env_name_without_raw_value() {
 }
 
 #[test]
-fn absent_files_load_empty_profiles() {
+fn malformed_toml_returns_line_col() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let profiles = load_profiles(
-        Some(&temp.path().join("missing-project.toml")),
-        Some(&temp.path().join("missing-user.toml")),
-    )
-    .expect("profiles");
-    assert!(profiles.is_empty());
+    let project = temp.path().join(".gaze-lens.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]
+            name = "prod"
+        "#,
+    );
+
+    let err = load_profiles(Some(&project), None).expect_err("malformed toml");
+    let message = err.to_string();
+
+    assert!(message.contains("project profile config"), "{message}");
+    assert!(
+        message.contains(&project.display().to_string()),
+        "{message}"
+    );
+    assert!(message.contains("line "), "{message}");
+    assert!(message.contains("column "), "{message}");
+}
+
+#[test]
+fn missing_required_field_names_field_and_profile() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "prod"
+        "#,
+    );
+
+    let err = load_profiles(Some(&project), None).expect_err("missing source");
+    let message = err.to_string();
+
+    assert!(message.contains("source"), "{message}");
+    assert!(message.contains("prod"), "{message}");
+}
+
+#[test]
+fn explicit_nonexistent_project_config_errors() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("missing-project.toml");
+
+    let err = load_profiles(Some(&project), None).expect_err("missing project config");
+    assert!(matches!(
+        err,
+        LensError::ProfileNotFound { ref label, ref path }
+            if label == "project profile config" && path == &project
+    ));
 }
 
 #[test]
