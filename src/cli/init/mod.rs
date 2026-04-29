@@ -5,6 +5,8 @@ use clap::Args;
 
 use crate::errors::LensError;
 
+pub mod prompter;
+
 const PROJECT_PROFILE: &str = r#"# Project-owned schema policy and logical source shape.
 [[profiles]]
 name = "prod"
