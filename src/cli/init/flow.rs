@@ -121,6 +121,9 @@ pub fn run_guided<P: Prompter>(
     // Step 3 — source params (per kind).
     let mut section = build_profile_section_skeleton(args, &name, kind);
     populate_source_params(&mut section, args, kind, p)?;
+    // D15 / directive 13 / CB-r2-3 — validate host BEFORE any FS commit so a
+    // dash-prefixed `--source-host -evil` can't slip into the rendered TOML.
+    validate_section_hosts(&section)?;
 
     // Step 4 — scope.
     let scope = match args.scope {
@@ -391,6 +394,41 @@ fn build_agents_md_patch<P: Prompter>(
         path,
         also_claude_md,
     }))
+}
+
+/// D15 + CB-r2-3: route hosts through `validate_ssh_host` BEFORE the plan
+/// reaches `commit_plan`. Single source of truth — same validator that
+/// `serve` and `check` use (`src/source/ssh_tunnel.rs:72`).
+///
+/// - `SourceKind::SshLog`: `source_host` is the SSH host (TOML field `host`
+///   per `src/profile.rs:70-73`); validate it.
+/// - `SourceKind::{Mysql, Postgres}` with `source_ssh_host` set: validate the
+///   tunnel jump host (TOML field `ssh_host`). The DB host (`source_host`)
+///   is not an SSH target so it's not run through this validator.
+/// - `SourceKind::Sqlite`: no host fields; nothing to validate.
+fn validate_section_hosts(section: &ProfileSection) -> Result<(), LensError> {
+    match section.source_kind {
+        SourceKind::SshLog => {
+            if let Some(host) = section.source_host.as_deref() {
+                crate::source::ssh_tunnel::validate_ssh_host(host).map_err(|err| {
+                    LensError::Profile {
+                        detail: format!("invalid ssh host: {err}"),
+                    }
+                })?;
+            }
+        }
+        SourceKind::Mysql | SourceKind::Postgres => {
+            if let Some(host) = section.source_ssh_host.as_deref() {
+                crate::source::ssh_tunnel::validate_ssh_host(host).map_err(|err| {
+                    LensError::Profile {
+                        detail: format!("invalid ssh host: {err}"),
+                    }
+                })?;
+            }
+        }
+        SourceKind::Sqlite => {}
+    }
+    Ok(())
 }
 
 fn prompt_to_lens(err: PromptError) -> LensError {

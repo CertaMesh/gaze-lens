@@ -99,7 +99,7 @@ fn ssh_log_non_interactive_renders_host_and_path() {
     args.non_interactive = true;
     args.profile = Some("p".into());
     args.source_kind = Some(SourceKind::SshLog);
-    args.source_host = Some("deploy@h".into());
+    args.source_host = Some("deploy.example.com".into());
     args.source_path = Some("/var/log/app.log".into());
     args.scope = Some(InitScope::User);
     args.no_mcp_config = true;
@@ -112,7 +112,7 @@ fn ssh_log_non_interactive_renders_host_and_path() {
     ));
     assert_eq!(
         plan.profile_section.source_host.as_deref(),
-        Some("deploy@h")
+        Some("deploy.example.com")
     );
     assert_eq!(
         plan.profile_section.source_path.as_deref(),
