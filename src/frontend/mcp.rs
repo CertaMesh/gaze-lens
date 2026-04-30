@@ -105,6 +105,15 @@ impl McpFrontend {
         serde_json::to_value(result).map_err(|err| err.to_string())
     }
 
+    #[doc(hidden)]
+    pub async fn call_tool_result_for_test(
+        &self,
+        tool_name: &str,
+        args: serde_json::Value,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.to_call_tool_result(tool_name, Ok(args)).await
+    }
+
     #[tool(name = "query", description = "Run a canned structured DB query.")]
     async fn query(
         &self,
