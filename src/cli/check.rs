@@ -14,7 +14,6 @@ use crate::source::db::sqlite::SqliteSource;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 
 use super::check_trust::{TrustFormat, build_report, render_text};
-use super::serve::runtime_policy;
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {
@@ -54,7 +53,7 @@ async fn run_with_writer(
         &format!("profile: ok ({})", profile.name),
     )?;
 
-    let policy = validate_policy(&profile)?;
+    let validated_policy = validate_policy(&profile)?;
     write_status_line(json_mode, out, stderr, "policy: ok")?;
 
     if args.explain_risk {
@@ -74,7 +73,7 @@ async fn run_with_writer(
 
         let manifest = default_manifest_path();
         let snapshot_dir = default_snapshot_dir();
-        let parsed_policy = policy.parsed.as_ref().map(|parsed| {
+        let parsed_policy = validated_policy.parsed.as_ref().map(|parsed| {
             (
                 parsed.path.as_path(),
                 parsed.raw_bytes.as_slice(),
@@ -109,7 +108,7 @@ async fn run_with_writer(
     validate_source(&profile).await?;
     writeln!(out, "source: ok").map_err(write_error)?;
 
-    let _ = runtime_policy(&profile)?;
+    let _pipeline = validated_policy.pipeline;
     writeln!(out, "pipeline: ok").map_err(write_error)?;
     Ok(())
 }
@@ -177,6 +176,7 @@ fn render_secret_error(out: &mut dyn Write, err: &LensError) -> Result<(), LensE
 
 struct ValidatedPolicy {
     parsed: Option<ParsedPolicy>,
+    pipeline: gaze::Pipeline,
 }
 
 struct ParsedPolicy {
@@ -194,10 +194,13 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
         let _ = policy.to_gaze_policy().map_err(|err| LensError::Profile {
             detail: err.to_string(),
         })?;
-        let _ = build_pipeline(&policy).map_err(|err| LensError::Profile {
+        let pipeline = build_pipeline(&policy).map_err(|err| LensError::Profile {
             detail: format!("failed to build policy pipeline: {err}"),
         })?;
-        return Ok(ValidatedPolicy { parsed: None });
+        return Ok(ValidatedPolicy {
+            parsed: None,
+            pipeline,
+        });
     };
     let path = shellexpand::full(&path.to_string_lossy())
         .map(|path| std::path::PathBuf::from(path.into_owned()))
@@ -219,7 +222,7 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
     let _ = policy.to_gaze_policy().map_err(|err| LensError::Profile {
         detail: err.to_string(),
     })?;
-    let _ = build_pipeline(&policy).map_err(|err| LensError::Profile {
+    let pipeline = build_pipeline(&policy).map_err(|err| LensError::Profile {
         detail: format!("failed to build policy pipeline: {err}"),
     })?;
     Ok(ValidatedPolicy {
@@ -228,6 +231,7 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
             raw_bytes,
             toml,
         }),
+        pipeline,
     })
 }
 
