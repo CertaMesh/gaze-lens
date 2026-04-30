@@ -10,11 +10,13 @@ use crate::errors::LensError;
 pub mod agents_md;
 pub mod atomic;
 pub mod batch;
+pub mod discovery;
 pub mod flow;
 pub mod mcp_writer;
 pub mod plan;
 pub mod profile_writer;
 pub mod prompter;
+pub mod ssh_exec;
 
 thread_local! {
     static ORPHAN_WARNINGS_FOR_TEST: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -140,6 +142,18 @@ pub struct InitArgs {
     /// Run an in-process `check` after the batch write. Opt-in only (directive 17).
     #[arg(long)]
     pub smoke_check: bool,
+    /// SSH login host used once during init to read a remote Laravel .env.
+    #[arg(long, conflicts_with = "print_only", requires = "discover_env_path")]
+    pub discover_ssh_host: Option<String>,
+    /// Absolute remote .env path to read via SSH during init.
+    #[arg(long, requires = "discover_ssh_host")]
+    pub discover_env_path: Option<PathBuf>,
+    /// Type-the-host-twice consent for storing the discovered prod credential.
+    #[arg(long, requires = "discover_ssh_host")]
+    pub accept_prod_rw: Option<String>,
+    /// Opt into TOFU for first-contact SSH host keys.
+    #[arg(long, requires = "discover_ssh_host")]
+    pub allow_new_ssh_host: bool,
 }
 
 impl InitArgs {
@@ -199,7 +213,7 @@ impl InitArgs {
                     detail: "--non-interactive requires --profile <name>".into(),
                 });
             }
-            if self.source_kind.is_none() {
+            if self.source_kind.is_none() && self.discover_ssh_host.is_none() {
                 return Err(LensError::Profile {
                     detail:
                         "--non-interactive requires --source-kind <mysql|postgres|sqlite|ssh-log>"
@@ -221,6 +235,20 @@ impl InitArgs {
                     });
                 }
             }
+        }
+        if let Some(confirm) = &self.accept_prod_rw {
+            let host = self.discover_ssh_host.as_deref().unwrap_or("");
+            if confirm != host {
+                return Err(LensError::Profile {
+                    detail: "--accept-prod-rw value must equal --discover-ssh-host (type-the-host-twice consent)".into(),
+                });
+            }
+        }
+        if self.discover_ssh_host.is_some() && self.non_interactive && self.accept_prod_rw.is_none()
+        {
+            return Err(LensError::Profile {
+                detail: "--non-interactive discovery requires --accept-prod-rw=<host> (Path A only); interactive Path B/C selection unavailable without TTY".into(),
+            });
         }
         Ok(())
     }
@@ -257,6 +285,10 @@ impl InitArgs {
             print_only: false,
             write_all: false,
             smoke_check: false,
+            discover_ssh_host: None,
+            discover_env_path: None,
+            accept_prod_rw: None,
+            allow_new_ssh_host: false,
         }
     }
 }

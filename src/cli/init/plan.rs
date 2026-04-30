@@ -8,6 +8,13 @@ use std::path::PathBuf;
 
 use crate::cli::init::{InitScope, McpClient, SourceKind};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CredentialClass {
+    #[default]
+    ManuallyEntered,
+    ProdRwCloned,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSection {
     pub name: String,
@@ -26,6 +33,11 @@ pub struct ProfileSection {
     pub policy_path: Option<PathBuf>,
     pub schema_allowlist: Vec<String>,
     pub snapshot_retention_days: Option<u32>,
+    pub discovered_from_ssh_host: Option<String>,
+    pub discovered_from_path: Option<PathBuf>,
+    pub discovered_at: Option<time::OffsetDateTime>,
+    pub discovered_ssh_host_key_fingerprint: Option<String>,
+    pub credential_class: CredentialClass,
     /// CB2: enum, never bool. `Purge` only when scope == ProjectAutoPurge AND
     /// the operator confirms the destructive prompt.
     pub auto_purge: AutoPurgeChoice,

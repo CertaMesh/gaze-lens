@@ -20,10 +20,13 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::cli::init::discovery::{DISCOVERY_PATH_CHOICES, DiscoveryPath};
 use crate::cli::init::plan::{
-    AgentsMdPatch, AutoPurgeChoice, InitPlan, McpTarget, PlannedSecret, ProfileSection,
+    AgentsMdPatch, AutoPurgeChoice, CredentialClass, InitPlan, McpTarget, PlannedSecret,
+    ProfileSection,
 };
 use crate::cli::init::prompter::{PromptError, Prompter};
+use crate::cli::init::ssh_exec::SshExec;
 use crate::cli::init::{InitArgs, InitScope, McpClient, SecretBackendChoice, SourceKind};
 use crate::errors::LensError;
 
@@ -35,6 +38,7 @@ pub struct InitEnv {
     pub cwd: PathBuf,
     pub project_config: Option<PathBuf>,
     pub user_config: Option<PathBuf>,
+    pub ssh_exec: Box<dyn SshExec>,
 }
 
 impl InitEnv {
@@ -56,6 +60,7 @@ impl InitEnv {
             cwd,
             project_config,
             user_config,
+            ssh_exec: Box::new(crate::cli::init::ssh_exec::RealSsh),
         })
     }
 
@@ -71,7 +76,13 @@ impl InitEnv {
             cwd: cwd.into(),
             project_config,
             user_config,
+            ssh_exec: Box::new(crate::cli::init::ssh_exec::MockSsh::default()),
         }
+    }
+
+    pub fn with_ssh_exec(mut self, ssh_exec: Box<dyn SshExec>) -> Self {
+        self.ssh_exec = ssh_exec;
+        self
     }
 }
 
@@ -109,20 +120,50 @@ pub fn run_guided<P: Prompter>(
     };
 
     // Step 2 — source kind.
-    let kind = match args.source_kind {
-        Some(k) => k,
-        None => {
-            require_interactive(args)?;
-            let i = p
-                .select("Source kind?", SOURCE_KINDS)
-                .map_err(prompt_to_lens)?;
-            kind_from_index(i)
+    let discovery = match (&args.discover_ssh_host, &args.discover_env_path) {
+        (Some(host), Some(path)) => Some((host.as_str(), path.as_path())),
+        (None, None) => None,
+        _ => {
+            return Err(LensError::Profile {
+                detail: "--discover-ssh-host requires --discover-env-path".into(),
+            });
+        }
+    };
+    if discovery.is_some() && args.print_only {
+        return Err(LensError::Profile {
+            detail: "--print-only conflicts with --discover-ssh-host".into(),
+        });
+    }
+
+    let kind = if discovery.is_some() {
+        args.source_kind.unwrap_or(SourceKind::Mysql)
+    } else {
+        match args.source_kind {
+            Some(k) => k,
+            None => {
+                require_interactive(args)?;
+                let i = p
+                    .select("Source kind?", SOURCE_KINDS)
+                    .map_err(prompt_to_lens)?;
+                kind_from_index(i)
+            }
         }
     };
 
     // Step 3 — source params (per kind).
     let mut section = build_profile_section_skeleton(args, &name, kind);
-    populate_source_params(&mut section, args, kind, p)?;
+    if let Some((host, path)) = discovery {
+        populate_discovered_source_params(
+            &mut section,
+            args,
+            host,
+            path,
+            env.ssh_exec.as_ref(),
+            p,
+        )?;
+    } else {
+        populate_source_params(&mut section, args, kind, p)?;
+    }
     // D15 / directive 13 / CB-r2-3 — validate host BEFORE any FS commit so a
     // dash-prefixed `--source-host -evil` can't slip into the rendered TOML.
     validate_section_hosts(&section)?;
@@ -233,7 +274,132 @@ fn build_profile_section_skeleton(args: &InitArgs, name: &str, kind: SourceKind)
         policy_path: None,
         schema_allowlist: Vec::new(),
         snapshot_retention_days: None,
+        discovered_from_ssh_host: None,
+        discovered_from_path: None,
+        discovered_at: None,
+        discovered_ssh_host_key_fingerprint: None,
+        credential_class: CredentialClass::ManuallyEntered,
         auto_purge: AutoPurgeChoice::Off,
+    }
+}
+
+fn populate_discovered_source_params<P: Prompter>(
+    section: &mut ProfileSection,
+    args: &InitArgs,
+    host: &str,
+    path: &Path,
+    ssh: &dyn SshExec,
+    p: &mut P,
+) -> Result<(), LensError> {
+    crate::source::ssh_tunnel::validate_ssh_login_host(host).map_err(|err| LensError::Profile {
+        detail: format!("invalid ssh host: {err}"),
+    })?;
+    crate::cli::init::discovery::validate_env_path(path)?;
+    let raw = ssh.cat_capped(host, path, args.allow_new_ssh_host)?;
+    if raw.truncated {
+        return Err(LensError::Profile {
+            detail: format!(".env at {} exceeds 64 KiB cap; refusing", path.display()),
+        });
+    }
+    let text = std::str::from_utf8(&raw.bytes).map_err(|_| LensError::Profile {
+        detail: ".env content is not UTF-8".into(),
+    })?;
+    let mut vars = crate::cli::init::discovery::parse_env(text)?;
+    if vars.is_empty() {
+        return Err(LensError::Profile {
+            detail: "no DB_* keys found in remote .env".into(),
+        });
+    }
+    let (meta, mut password) = crate::cli::init::discovery::extract_db(&mut vars)?;
+    section.source_kind = args.source_kind.or(meta.kind).unwrap_or(SourceKind::Mysql);
+    section.source_host = meta.host.clone();
+    section.source_port = meta.source_port_or_default(section.source_kind);
+    section.source_database = meta.database.clone();
+    section.discovered_from_ssh_host = Some(host.to_string());
+    section.discovered_from_path = Some(path.to_path_buf());
+    section.discovered_at = Some(time::OffsetDateTime::now_utc());
+    section.discovered_ssh_host_key_fingerprint =
+        ssh.host_key_fingerprint(host, args.allow_new_ssh_host).ok();
+
+    let chosen = if args.accept_prod_rw.is_some() {
+        DiscoveryPath::AsIs
+    } else {
+        require_interactive(args)?;
+        let i = p
+            .select(
+                "Use discovered database credential?",
+                DISCOVERY_PATH_CHOICES,
+            )
+            .map_err(prompt_to_lens)?;
+        match i {
+            0 => DiscoveryPath::HostDbOnly,
+            1 => DiscoveryPath::AsIs,
+            _ => DiscoveryPath::Abort,
+        }
+    };
+
+    match chosen {
+        DiscoveryPath::Abort => Err(LensError::Profile {
+            detail: "discovery aborted by operator; rerun with the right host/path or create a readonly user manually".into(),
+        }),
+        DiscoveryPath::AsIs => {
+            let pw = password.take().filter(|z| !z.is_empty()).ok_or_else(|| {
+                LensError::Profile {
+                    detail: "Path A unavailable: discovered DB_PASSWORD is empty".into(),
+                }
+            })?;
+            if args.accept_prod_rw.is_none() {
+                let expected = meta.username.as_deref().unwrap_or("");
+                let typed = p
+                    .input("Type discovered DB username to store production credential?", None)
+                    .map_err(prompt_to_lens)?;
+                if typed != expected {
+                    return Err(LensError::Profile {
+                        detail: "discovery aborted by operator; rerun with the right host/path or create a readonly user manually".into(),
+                    });
+                }
+            }
+            section.source_username = meta.username.clone();
+            section.source_password_env = None;
+            section.source_secret = Some(PlannedSecret::Keyring {
+                service: args
+                    .source_password_keyring_service
+                    .clone()
+                    .unwrap_or_else(|| "gaze-lens".into()),
+                account: args
+                    .source_password_keyring_account
+                    .clone()
+                    .unwrap_or_else(|| section.name.clone()),
+                write_value: Some(pw),
+            });
+            section.credential_class = CredentialClass::ProdRwCloned;
+            Ok(())
+        }
+        DiscoveryPath::HostDbOnly => {
+            drop(password);
+            require_interactive(args)?;
+            let username = p
+                .input("Readonly database username?", meta.username.as_deref())
+                .map_err(prompt_to_lens)?;
+            let password = p
+                .password("Readonly database password for keyring?")
+                .map_err(prompt_to_lens)?;
+            section.source_username = Some(username);
+            section.source_password_env = None;
+            section.source_secret = Some(PlannedSecret::Keyring {
+                service: args
+                    .source_password_keyring_service
+                    .clone()
+                    .unwrap_or_else(|| "gaze-lens".into()),
+                account: args
+                    .source_password_keyring_account
+                    .clone()
+                    .unwrap_or_else(|| section.name.clone()),
+                write_value: Some(zeroize::Zeroizing::new(password)),
+            });
+            section.credential_class = CredentialClass::ManuallyEntered;
+            Ok(())
+        }
     }
 }
 
@@ -544,6 +710,7 @@ pub fn _resolve_profile_path(scope: InitScope, env_home: &Path, env_cwd: &Path) 
         cwd: env_cwd.to_path_buf(),
         project_config: None,
         user_config: None,
+        ssh_exec: Box::new(crate::cli::init::ssh_exec::MockSsh::default()),
     };
     resolve_profile_path(scope, &env)
 }

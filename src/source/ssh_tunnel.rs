@@ -91,6 +91,44 @@ pub fn validate_ssh_host(host: &str) -> Result<&str, SshError> {
     Ok(host)
 }
 
+pub fn validate_ssh_login_host(host: &str) -> Result<&str, SshError> {
+    if host.is_empty() {
+        return Err(invalid_host(host, "empty host"));
+    }
+    if host.len() > 253 {
+        return Err(invalid_host(host, "host exceeds DNS length limit"));
+    }
+    if host.starts_with('-') {
+        return Err(invalid_host(host, "host cannot start with '-'"));
+    }
+    if host.matches('@').count() > 1 {
+        return Err(invalid_host(host, "host may contain at most one '@'"));
+    }
+    for part in host.split('@') {
+        if part.is_empty() {
+            return Err(invalid_host(host, "user and host parts cannot be empty"));
+        }
+        if part.starts_with('-') {
+            return Err(invalid_host(
+                host,
+                "user and host parts cannot start with '-'",
+            ));
+        }
+        if part.bytes().any(|byte| {
+            !matches!(
+                byte,
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'
+            )
+        }) {
+            return Err(invalid_host(
+                host,
+                "host may only contain ASCII letters, digits, '.', '_', '-', and one '@'",
+            ));
+        }
+    }
+    Ok(host)
+}
+
 pub fn validate_ssh_path(path: &str) -> Result<&str, SshError> {
     // v1 deliberately accepts only exact ASCII paths. Operators needing
     // Unicode, globbing, or remote expansion can get those in a later
@@ -130,6 +168,23 @@ pub fn validate_ssh_path(path: &str) -> Result<&str, SshError> {
         ));
     }
     Ok(path)
+}
+
+pub(crate) fn remote_argv(
+    host: &str,
+    command_argv: &[&str],
+    path: &str,
+) -> Result<Vec<String>, SshError> {
+    let host = validate_ssh_login_host(host)?;
+    let path = validate_ssh_path(path)?;
+    let mut argv = Vec::with_capacity(3 + command_argv.len());
+    argv.push("ssh".to_string());
+    argv.push("--".to_string());
+    argv.push(host.to_string());
+    argv.extend(command_argv.iter().map(|part| (*part).to_string()));
+    argv.push("--".to_string());
+    argv.push(path.to_string());
+    Ok(argv)
 }
 
 pub fn open_argv(spec: &TunnelSpec) -> Result<Vec<String>, SshError> {
@@ -187,5 +242,42 @@ fn invalid_path(path: &str, reason: &'static str) -> SshError {
     SshError::InvalidPath {
         path: path.to_string(),
         reason,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_ssh_login_host_accepts_user_at_host() {
+        assert_eq!(
+            validate_ssh_login_host("deploy@app01").unwrap(),
+            "deploy@app01"
+        );
+        assert_eq!(validate_ssh_login_host("app01").unwrap(), "app01");
+    }
+
+    #[test]
+    fn validate_ssh_login_host_rejects_dash_and_multi_at() {
+        assert!(validate_ssh_login_host("-oProxyCommand=sh").is_err());
+        assert!(validate_ssh_login_host("deploy@app@other").is_err());
+        assert!(validate_ssh_login_host("deploy@-app").is_err());
+    }
+
+    #[test]
+    fn remote_argv_builds_canonical_shape() {
+        let argv = remote_argv("deploy@app01", &["cat"], "/var/www/app/.env").unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "ssh",
+                "--",
+                "deploy@app01",
+                "cat",
+                "--",
+                "/var/www/app/.env"
+            ]
+        );
     }
 }

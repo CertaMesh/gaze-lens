@@ -13,6 +13,16 @@ pub struct Profile {
     pub name: String,
     pub source: SourceSpec,
     #[serde(default)]
+    pub discovered_from_ssh_host: Option<String>,
+    #[serde(default)]
+    pub discovered_from_path: Option<PathBuf>,
+    #[serde(default)]
+    pub discovered_at: Option<String>,
+    #[serde(default)]
+    pub discovered_ssh_host_key_fingerprint: Option<String>,
+    #[serde(default)]
+    pub credential_class: Option<String>,
+    #[serde(default)]
     pub policy: Option<PathBuf>,
     #[serde(default)]
     pub schema_allowlist: Option<Vec<String>>,
@@ -570,6 +580,26 @@ fn merge_one(user: &Profile, project: &Profile) -> Profile {
     Profile {
         name: project.name.clone(),
         source: merge_source(&user.source, &project.source),
+        discovered_from_ssh_host: project
+            .discovered_from_ssh_host
+            .clone()
+            .or_else(|| user.discovered_from_ssh_host.clone()),
+        discovered_from_path: project
+            .discovered_from_path
+            .clone()
+            .or_else(|| user.discovered_from_path.clone()),
+        discovered_at: project
+            .discovered_at
+            .clone()
+            .or_else(|| user.discovered_at.clone()),
+        discovered_ssh_host_key_fingerprint: project
+            .discovered_ssh_host_key_fingerprint
+            .clone()
+            .or_else(|| user.discovered_ssh_host_key_fingerprint.clone()),
+        credential_class: project
+            .credential_class
+            .clone()
+            .or_else(|| user.credential_class.clone()),
         policy: project.policy.clone().or_else(|| user.policy.clone()),
         schema_allowlist: project
             .schema_allowlist

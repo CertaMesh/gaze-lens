@@ -6,7 +6,7 @@ use tokio::process::Command;
 
 use crate::errors::LensError;
 use crate::session::TruncatedAt;
-use crate::source::ssh_tunnel::{validate_ssh_host, validate_ssh_path};
+use crate::source::ssh_tunnel::{remote_argv, validate_ssh_host, validate_ssh_path};
 
 pub const HARD_CAP_LINES: usize = 10_000;
 pub const BOUNDED_TAIL_FOR_GREP: usize = 10_000;
@@ -167,16 +167,9 @@ impl SshLogSource {
 }
 
 pub fn tail_argv(host: &str, path: &str, lines: usize) -> Vec<String> {
-    vec![
-        "ssh".to_string(),
-        "--".to_string(),
-        host.to_string(),
-        "tail".to_string(),
-        "-n".to_string(),
-        lines.min(HARD_CAP_LINES).to_string(),
-        "--".to_string(),
-        path.to_string(),
-    ]
+    let capped_lines = lines.min(HARD_CAP_LINES).to_string();
+    remote_argv(host, &["tail", "-n", &capped_lines], path)
+        .expect("SshLogSource validates host/path before tail_argv")
 }
 
 pub fn split_and_cap_lines(raw: &[u8], max_line_bytes: usize) -> Vec<String> {
@@ -200,7 +193,9 @@ pub fn split_and_cap_lines_with_truncation(
     (lines, truncated)
 }
 
-async fn read_capped<R>(reader: R, max_bytes: usize) -> Result<Vec<u8>, std::io::Error>
+/// Used by `tail` and `cat` shell-outs; cap defends against unbounded remote
+/// stdout under `tokio::time::timeout`.
+pub(crate) async fn read_capped<R>(reader: R, max_bytes: usize) -> Result<Vec<u8>, std::io::Error>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
