@@ -7,8 +7,9 @@
 use clap::ValueEnum;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::errors::LensError;
 use crate::profile::{Profile, SecretSpec, SourceSpec};
@@ -415,6 +416,7 @@ pub fn recognizer_pack_from_parsed(
 }
 
 pub fn render_text(report: &TrustReport, out: &mut dyn Write) -> std::io::Result<()> {
+    validate_rendered_profile_name(&report.profile)?;
     if report.output_surface.recognizer_pack.default_empty {
         writeln!(
             out,
@@ -582,6 +584,21 @@ pub fn render_text(report: &TrustReport, out: &mut dyn Write) -> std::io::Result
         )?;
     }
     Ok(())
+}
+
+fn validate_rendered_profile_name(name: &str) -> std::io::Result<()> {
+    static PROFILE_NAME: OnceLock<regex::Regex> = OnceLock::new();
+    let regex = PROFILE_NAME.get_or_init(|| {
+        regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$").expect("trust report profile regex")
+    });
+    if regex.is_match(name) {
+        Ok(())
+    } else {
+        Err(Error::new(
+            ErrorKind::InvalidInput,
+            "trust report profile name contains unsupported characters",
+        ))
+    }
 }
 
 fn collect_output_surface(profile: &Profile, recognizer_pack: RecognizerPack) -> OutputSurface {
