@@ -17,8 +17,8 @@ integration-postgres = []
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive", "env"] }
 dialoguer = { version = "0.11", default-features = false, features = ["password"] }
-gaze = { git = "https://github.com/PIInuts/gaze.git", rev = "d4bec8c14a8caab0b25b5beb23822830dec80fbc" }
-gaze-recognizers = { git = "https://github.com/PIInuts/gaze.git", rev = "d4bec8c14a8caab0b25b5beb23822830dec80fbc" }
+gaze            = { git = "https://github.com/PIInuts/gaze.git", tag = "v0.6.4", version = "0.6.4" }
+gaze-recognizers = { git = "https://github.com/PIInuts/gaze.git", tag = "v0.6.4", version = "0.6.4" }
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 rmcp = { version = "0.2", features = ["client", "transport-io"] }
 regex = "1"
