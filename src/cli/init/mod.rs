@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,10 @@ pub mod mcp_writer;
 pub mod plan;
 pub mod profile_writer;
 pub mod prompter;
+
+thread_local! {
+    static ORPHAN_WARNINGS_FOR_TEST: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum SourceKind {
@@ -414,10 +419,10 @@ fn commit_plan_with_prompter(
         if atomic::would_write(&write.path, &write.bytes) {
             if let Err(err) = write_one(w, &mut applied, &mut pending, &write.path, &write.bytes) {
                 if let Some((service, account)) = &keyring_entry_committed {
-                    eprintln!(
+                    emit_orphan_warning(format!(
                         "gaze-lens warning: keyring entry service=`{service}` account=`{account}` was written, but profile file commit failed at {}. The keyring entry is now orphaned. To recover: re-run `gaze-lens init --allow-overwrite` after fixing the file-write issue, OR delete the keyring entry manually.",
                         write.path.display()
-                    );
+                    ));
                 }
                 return Err(err);
             }
@@ -440,6 +445,11 @@ fn commit_plan_with_prompter(
         println!("no changes");
     }
     Ok(())
+}
+
+fn emit_orphan_warning(message: String) {
+    eprintln!("{message}");
+    ORPHAN_WARNINGS_FOR_TEST.with(|warnings| warnings.borrow_mut().push(message));
 }
 
 fn keyring_preflight_and_write(
@@ -816,4 +826,11 @@ pub fn run_with_prompter_for_test<P: prompter::Prompter>(
 ) -> Result<(), LensError> {
     args.validate()?;
     run_with_prompter_and_env(args, env, p, out)
+}
+
+/// `#[doc(hidden)] pub` test entry-point for asserting operator warnings that
+/// production still emits to stderr.
+#[doc(hidden)]
+pub fn take_orphan_warnings_for_test() -> Vec<String> {
+    ORPHAN_WARNINGS_FOR_TEST.with(|warnings| std::mem::take(&mut *warnings.borrow_mut()))
 }

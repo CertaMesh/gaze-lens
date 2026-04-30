@@ -2,13 +2,14 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use gaze_lens::cli::init::batch::RealBatchWriter;
+use gaze_lens::cli::init::batch::{FailingWriter, RealBatchWriter};
 use gaze_lens::cli::init::flow::{InitEnv, run_guided};
 use gaze_lens::cli::init::prompter::FakePrompter;
 use gaze_lens::cli::init::{
     InitArgs, InitScope, SecretBackendChoice, SourceKind, commit_plan_for_test,
-    run_with_prompter_for_test,
+    run_with_prompter_for_test, take_orphan_warnings_for_test,
 };
+use gaze_lens::errors::LensError;
 use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi, CredentialPersistence};
 
 #[derive(Default)]
@@ -201,6 +202,50 @@ fn existing_keyring_entry_interactive_decline_leaves_old_value() {
         !env.home.join(".gaze-lens").join("profiles.toml").exists(),
         "profile file must not be written"
     );
+}
+
+#[test]
+fn keyring_real_write_then_file_commit_fail_emits_orphan_warning() {
+    install_builder();
+    let dir = tempfile::tempdir().unwrap();
+    let (args, env) = keyring_args(&dir);
+    let service = args.source_password_keyring_service.clone().unwrap();
+    let account = args.source_password_keyring_account.clone().unwrap();
+    let mut p = FakePrompter::new()
+        .with_confirm(true)
+        .with_password("orphan-warning-secret");
+    let plan = run_guided(&args, &mut p, &env).expect("plan");
+    let mut writer = FailingWriter::new(0);
+    let _ = take_orphan_warnings_for_test();
+
+    let err = commit_plan_for_test(&args, &plan, &mut writer).expect_err("file commit fails");
+    let warnings = take_orphan_warnings_for_test();
+    let warning = warnings.join("\n");
+
+    assert!(matches!(err, LensError::BatchPartial { .. }), "{err:?}");
+    assert_eq!(
+        get_secret(&service, &account).as_deref(),
+        Some("orphan-warning-secret"),
+        "keyring entry should remain as an orphan"
+    );
+    assert!(warning.contains("orphaned"), "{warning}");
+    assert!(
+        warning.contains("re-run `gaze-lens init --allow-overwrite`"),
+        "{warning}"
+    );
+    assert!(
+        warning.contains("delete the keyring entry manually"),
+        "{warning}"
+    );
+    assert!(
+        warning.contains(&format!("service=`{service}`")),
+        "{warning}"
+    );
+    assert!(
+        warning.contains(&format!("account=`{account}`")),
+        "{warning}"
+    );
+    assert!(!warning.contains("orphan-warning-secret"), "{warning}");
 }
 
 #[derive(Debug)]
