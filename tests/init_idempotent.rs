@@ -77,3 +77,119 @@ fn rerun_no_changes() {
     let stdout2 = String::from_utf8_lossy(&out2.stdout);
     assert!(stdout2.contains("no changes"), "got: {stdout2}");
 }
+
+#[test]
+fn mcp_enabled_rerun_no_changes_without_suffix() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    let project_config = project.join(".gaze-lens.toml");
+
+    let common = [
+        "--project-config",
+        project_config.to_str().unwrap(),
+        "init",
+        "--non-interactive",
+        "--profile",
+        "x",
+        "--source-kind",
+        "sqlite",
+        "--source-path",
+        "/tmp/x.db",
+        "--scope",
+        "project",
+        "--client",
+        "claude-code",
+        "--no-agents-md",
+        "--write-all",
+    ];
+
+    let out1 = Command::cargo_bin("gaze-lens")
+        .unwrap()
+        .env("HOME", &home)
+        .current_dir(&project)
+        .args(common)
+        .output()
+        .unwrap();
+    assert!(
+        out1.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out1.stderr)
+    );
+
+    let out2 = Command::cargo_bin("gaze-lens")
+        .unwrap()
+        .env("HOME", &home)
+        .current_dir(&project)
+        .args(common)
+        .output()
+        .unwrap();
+    assert!(
+        out2.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    assert!(stdout2.contains("no changes"), "got: {stdout2}");
+
+    let mcp: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
+            .unwrap();
+    let servers = mcp["mcpServers"].as_object().unwrap();
+    assert!(servers.contains_key("gaze-lens"));
+    assert!(
+        !servers.contains_key("gaze-lens-x"),
+        "same profile rerun must not add a suffix entry"
+    );
+}
+
+#[test]
+fn second_profile_same_client_adds_suffix_without_touching_primary() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    let project_config = project.join(".gaze-lens.toml");
+
+    for profile in ["alpha", "beta"] {
+        let out = Command::cargo_bin("gaze-lens")
+            .unwrap()
+            .env("HOME", &home)
+            .current_dir(&project)
+            .args([
+                "--project-config",
+                project_config.to_str().unwrap(),
+                "init",
+                "--non-interactive",
+                "--profile",
+                profile,
+                "--source-kind",
+                "sqlite",
+                "--source-path",
+                "/tmp/x.db",
+                "--scope",
+                "project",
+                "--client",
+                "claude-code",
+                "--no-agents-md",
+                "--write-all",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let mcp: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
+            .unwrap();
+    let servers = mcp["mcpServers"].as_object().unwrap();
+    assert_eq!(servers["gaze-lens"]["args"][2], "alpha");
+    assert_eq!(servers["gaze-lens-beta"]["args"][2], "beta");
+}

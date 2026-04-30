@@ -5,10 +5,10 @@
 //! - **Claude Code** (`<cwd>/.mcp.json`): `{"mcpServers": {"<key>": {...}}}`.
 //! - **Cursor** (project or user `.cursor/mcp.json`): same shape as Claude Code.
 //!
-//! Each renderer chooses the entry key at write-time (directive 19): if no
-//! existing `gaze-lens` key, use it; otherwise suffix to `gaze-lens-<profile>`.
-//! Existing entries with the SAME profile name + same command/args are no-ops
-//! (caller's `would_write` byte-compare skips the write).
+//! Each renderer chooses the entry key at write-time (directive 19): the
+//! primary `gaze-lens` key is reused when it already contains the same
+//! `command` + `args`; a per-profile suffix is only used for additional
+//! profiles when the primary points at another profile.
 
 use std::path::PathBuf;
 
@@ -36,15 +36,60 @@ fn line_column_from_input(input: &str, byte_index: usize) -> (usize, usize) {
     (line, column)
 }
 
-fn entry_key_for(existing_keys: &[&str], profile_name: &str) -> String {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExistingEntry {
+    command: Option<String>,
+    args: Vec<String>,
+}
+
+impl ExistingEntry {
+    fn matches(&self, command: &str, args: &[String]) -> bool {
+        self.command.as_deref() == Some(command) && self.args == args
+    }
+
+    fn profile_name(&self) -> Option<&str> {
+        self.args
+            .windows(2)
+            .find_map(|pair| (pair[0] == "--profile").then_some(pair[1].as_str()))
+    }
+}
+
+fn entry_key_for(
+    primary: Option<&ExistingEntry>,
+    suffix: Option<&ExistingEntry>,
+    profile_name: &str,
+    command: &str,
+    cmd_args: &[String],
+    allow_overwrite: bool,
+) -> Result<String, RenderError> {
     let suffix_key = format!("{PRIMARY_KEY}-{profile_name}");
-    if !existing_keys.contains(&PRIMARY_KEY) {
-        PRIMARY_KEY.to_string()
-    } else if !existing_keys.iter().any(|k| *k == suffix_key) {
-        suffix_key
-    } else {
-        // Both occupied → operator must rerun with --allow-overwrite.
-        suffix_key
+    let Some(primary) = primary else {
+        return Ok(PRIMARY_KEY.to_string());
+    };
+
+    if primary.matches(command, cmd_args) {
+        return Ok(PRIMARY_KEY.to_string());
+    }
+
+    if primary.profile_name() == Some(profile_name) {
+        if allow_overwrite {
+            return Ok(PRIMARY_KEY.to_string());
+        }
+        return Err(RenderError::Collision {
+            name: format!("MCP entry `{PRIMARY_KEY}`"),
+        });
+    }
+
+    if allow_overwrite {
+        return Ok(PRIMARY_KEY.to_string());
+    }
+
+    match suffix {
+        None => Ok(suffix_key),
+        Some(entry) if entry.matches(command, cmd_args) => Ok(suffix_key),
+        Some(_) => Err(RenderError::Collision {
+            name: format!("MCP entry `{suffix_key}`"),
+        }),
     }
 }
 
@@ -85,47 +130,17 @@ pub fn render_codex_toml(
             source_msg: "mcp_servers is not a table".into(),
         })?;
 
-    let existing_keys: Vec<&str> = servers.iter().map(|(k, _)| k).collect();
     let suffix_key = format!("{PRIMARY_KEY}-{profile_name}");
-    let key = entry_key_for(&existing_keys, profile_name);
-
-    // If the chosen key already exists and we're not allowed to overwrite,
-    // and the existing entry is for a DIFFERENT profile (collision), error.
-    if servers.contains_key(&key) && !allow_overwrite {
-        // Compare existing args[2] with profile_name. If matches, treat as
-        // no-op (will be dropped by would_write); if differs, collision.
-        let existing_profile = servers
-            .get(&key)
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get("args"))
-            .and_then(|i| i.as_array())
-            .and_then(|a| a.iter().nth(2))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if existing_profile != profile_name {
-            return Err(RenderError::Collision {
-                name: format!("codex MCP entry `{key}`"),
-            });
-        }
-        // Same profile name → caller's would_write will detect no-op via byte
-        // compare. We still rewrite the table here (idempotent).
-    }
-    // Belt-and-braces: if PRIMARY_KEY exists for a DIFFERENT profile, choose
-    // the suffixed key instead (directive 19 dispatch at write-time).
-    let final_key = if servers.contains_key(PRIMARY_KEY)
-        && servers
-            .get(PRIMARY_KEY)
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get("args"))
-            .and_then(|i| i.as_array())
-            .and_then(|a| a.iter().nth(2))
-            .and_then(|v| v.as_str())
-            != Some(profile_name)
-    {
-        suffix_key
-    } else {
-        key
-    };
+    let primary = servers.get(PRIMARY_KEY).and_then(toml_entry);
+    let suffix = servers.get(&suffix_key).and_then(toml_entry);
+    let final_key = entry_key_for(
+        primary.as_ref(),
+        suffix.as_ref(),
+        profile_name,
+        command,
+        cmd_args,
+        allow_overwrite,
+    )?;
 
     let mut entry = Table::new();
     entry.insert("command", toml_edit::value(command));
@@ -137,6 +152,24 @@ pub fn render_codex_toml(
     servers.insert(&final_key, Item::Table(entry));
 
     Ok(doc.to_string())
+}
+
+fn toml_entry(item: &Item) -> Option<ExistingEntry> {
+    let table = item.as_table()?;
+    let command = table
+        .get("command")
+        .and_then(|i| i.as_str())
+        .map(str::to_string);
+    let args = table
+        .get("args")
+        .and_then(|i| i.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(ExistingEntry { command, args })
 }
 
 /// Claude Code `.mcp.json` writer. Key = "mcpServers" object.
@@ -197,40 +230,17 @@ fn render_mcp_json(
             source_msg: "mcpServers is not an object".into(),
         })?;
 
-    let existing_keys: Vec<&str> = servers.keys().map(|s| s.as_str()).collect();
     let suffix_key = format!("{PRIMARY_KEY}-{profile_name}");
-    let initial_key = entry_key_for(&existing_keys, profile_name);
-
-    let final_key = if servers.contains_key(PRIMARY_KEY)
-        && servers
-            .get(PRIMARY_KEY)
-            .and_then(|v| v.as_object())
-            .and_then(|o| o.get("args"))
-            .and_then(|v| v.as_array())
-            .and_then(|a| a.get(2))
-            .and_then(|v| v.as_str())
-            != Some(profile_name)
-    {
-        suffix_key.clone()
-    } else {
-        initial_key
-    };
-
-    if servers.contains_key(&final_key) && !allow_overwrite {
-        let existing_profile = servers
-            .get(&final_key)
-            .and_then(|v| v.as_object())
-            .and_then(|o| o.get("args"))
-            .and_then(|v| v.as_array())
-            .and_then(|a| a.get(2))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if existing_profile != profile_name {
-            return Err(RenderError::Collision {
-                name: format!("MCP entry `{final_key}`"),
-            });
-        }
-    }
+    let primary = servers.get(PRIMARY_KEY).and_then(json_entry);
+    let suffix = servers.get(&suffix_key).and_then(json_entry);
+    let final_key = entry_key_for(
+        primary.as_ref(),
+        suffix.as_ref(),
+        profile_name,
+        command,
+        cmd_args,
+        allow_overwrite,
+    )?;
 
     let mut entry = Map::new();
     entry.insert("command".into(), Value::String(command.to_string()));
@@ -245,4 +255,22 @@ fn render_mcp_json(
         source_msg: format!("serialize: {e}"),
     })?;
     Ok(out + "\n")
+}
+
+fn json_entry(value: &Value) -> Option<ExistingEntry> {
+    let obj = value.as_object()?;
+    let command = obj
+        .get("command")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let args = obj
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(ExistingEntry { command, args })
 }

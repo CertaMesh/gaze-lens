@@ -31,14 +31,51 @@ fn second_profile_renders_under_suffixed_key() {
 }
 
 #[test]
-fn existing_gaze_lens_entry_collision_without_overwrite() {
-    // Same key, different profile, no overwrite → Collision.
-    let existing = r#"{"mcpServers":{"gaze-lens":{"command":"gaze-lens","args":["serve","--profile","prod"]},"gaze-lens-dev":{"command":"gaze-lens","args":["serve","--profile","dev"]}}}"#;
-    // Plan adds another "dev" profile; both PRIMARY_KEY and suffix_key occupy.
-    // Renderer chooses suffixed key, finds same-name match → no-op (success).
+fn same_profile_same_command_args_reuses_primary_key() {
+    let existing = r#"{"mcpServers":{"gaze-lens":{"command":"gaze-lens","args":["serve","--profile","dev"]}}}"#;
     let out =
         render_claude_code_json(Some(existing), "dev", COMMAND, &args_for("dev"), false).unwrap();
-    assert!(out.contains(r#""gaze-lens-dev""#));
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let servers = v["mcpServers"].as_object().unwrap();
+    assert!(servers.contains_key("gaze-lens"));
+    assert!(
+        !servers.contains_key("gaze-lens-dev"),
+        "same profile + same command/args must not suffix"
+    );
+}
+
+#[test]
+fn same_profile_different_command_collides_without_overwrite() {
+    let existing = r#"{"mcpServers":{"gaze-lens":{"command":"/opt/gaze-lens","args":["serve","--profile","dev"]}}}"#;
+    let err =
+        render_claude_code_json(Some(existing), "dev", COMMAND, &args_for("dev"), false)
+            .unwrap_err();
+    assert!(err.to_string().contains("MCP entry `gaze-lens`"));
+}
+
+#[test]
+fn same_profile_different_command_overwrites_primary_with_allow_overwrite() {
+    let existing = r#"{"mcpServers":{"gaze-lens":{"command":"/opt/gaze-lens","args":["serve","--profile","dev"]}}}"#;
+    let out =
+        render_claude_code_json(Some(existing), "dev", COMMAND, &args_for("dev"), true).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let servers = v["mcpServers"].as_object().unwrap();
+    assert_eq!(servers["gaze-lens"]["command"], "gaze-lens");
+    assert!(
+        !servers.contains_key("gaze-lens-dev"),
+        "allow-overwrite for same profile should update primary"
+    );
+}
+
+#[test]
+fn existing_gaze_lens_entry_with_matching_suffix_is_idempotent() {
+    let existing = r#"{"mcpServers":{"gaze-lens":{"command":"gaze-lens","args":["serve","--profile","prod"]},"gaze-lens-dev":{"command":"gaze-lens","args":["serve","--profile","dev"]}}}"#;
+    let out =
+        render_claude_code_json(Some(existing), "dev", COMMAND, &args_for("dev"), false).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let servers = v["mcpServers"].as_object().unwrap();
+    assert_eq!(servers.len(), 2);
+    assert_eq!(servers["gaze-lens-dev"]["args"][2], "dev");
 }
 
 #[test]
