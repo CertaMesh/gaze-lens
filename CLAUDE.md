@@ -11,6 +11,8 @@ The product surface is exactly:
 - **5 MCP tools:** `query`, `schema`, `list_tables`, `log_tail`, `log_grep`.
 - **6 CLI subcommands:** `serve`, `init`, `query`, `replay`, `check`, `demo`.
 
+`serve` exposes all configured profiles through one MCP server by default. `serve --profile dev` remains supported as a one-profile restrict-list, and `serve --profile prod --profile staging` exposes only those profiles. Every MCP tool call must carry `profile: string`; adding tools or subcommands is still a SPEC-level change.
+
 `demo` is a CLI-only inline-replay helper introduced in v0.2.0 (SPEC §"CLI subcommand surface"); it tokenizes a canned in-memory dataset, restores it in the same process via `gaze::Session::import`, and exits without touching `~/.gaze-lens/`. It does not extend the MCP tool list and does not introduce a new data source. Adding any further subcommand, or any new MCP tool, requires a SPEC amendment PR — not an impl PR. Internal helpers are fine; do not wire them through `frontend::mcp::McpFrontend` without updating [SPEC.md](./SPEC.md).
 
 ## Non-negotiables
@@ -50,7 +52,8 @@ cargo test --all-targets --features integration-mysql
 cargo run -- init --profile dev
 cargo run -- check --profile dev
 cargo run -- query --profile dev --table users --limit 5
-cargo run -- serve --profile dev    # MCP stdio server
+cargo run -- serve                  # MCP stdio server, all profiles
+cargo run -- serve --profile dev    # MCP stdio server, dev restrict-list
 ```
 
 Local pre-push gate runs `fmt --check` + `clippy -D warnings` + `test --all-targets`. See [CONTRIBUTING.md §Local pre-push hook](./CONTRIBUTING.md#local-pre-push-hook).
