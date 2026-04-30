@@ -296,6 +296,18 @@ fn trust_report_text_warns_on_default_empty_policy() {
 }
 
 #[test]
+fn trust_report_text_rejects_terminal_escape_in_profile_name() {
+    let report = gaze_lens::cli::check_trust::TrustReport::stub_for_test("prod\u{1b}[2K");
+    let mut out = Vec::new();
+
+    let err = gaze_lens::cli::check_trust::render_text(&report, &mut out).expect_err("render");
+    let text = String::from_utf8(out).expect("utf8");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(!text.contains("\u{1b}[2K"), "{text}");
+}
+
+#[test]
 fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
@@ -805,6 +817,11 @@ fn sqlite_profile(name: &str, path: std::path::PathBuf) -> Profile {
             json_text_columns: Vec::new(),
         },
         policy: None,
+        discovered_from_ssh_host: None,
+        discovered_from_path: None,
+        discovered_at: None,
+        discovered_ssh_host_key_fingerprint: None,
+        credential_class: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
@@ -826,6 +843,11 @@ fn postgres_env_profile(name: &str, env: &str) -> Profile {
             readonly_required: true,
         },
         policy: None,
+        discovered_from_ssh_host: None,
+        discovered_from_path: None,
+        discovered_at: None,
+        discovered_ssh_host_key_fingerprint: None,
+        credential_class: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
