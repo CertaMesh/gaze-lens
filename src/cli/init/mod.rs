@@ -248,18 +248,54 @@ pub(crate) fn commit_plan(
     plan: &plan::InitPlan,
     w: &mut dyn batch::BatchWriter,
 ) -> Result<(), LensError> {
+    // Phase A: render + validate every candidate destination before the first
+    // write. This is the atomicity contract for parse/collision failures:
+    // malformed MCP JSON/TOML, malformed AGENTS markers, profile parse errors,
+    // or name collisions return here with zero file writes.
+    let writes = render_plan_writes(args, plan)?;
+
+    // Phase B: ordered write/rename. Only write bytes that differ.
     let mut applied: Vec<PathBuf> = Vec::new();
-    let mut pending: Vec<PathBuf> = plan_destinations(plan);
+    let mut pending: Vec<PathBuf> = writes.iter().map(|write| write.path.clone()).collect();
     let mut unchanged: Vec<PathBuf> = Vec::new();
 
-    // 1. Profile dir for user-scope (gaze-lens-owned only — CB8).
-    if matches!(plan.profile_scope, InitScope::User)
-        && let Some(parent) = plan.profile_path.parent()
-    {
-        atomic::create_dir_0700_if_missing(parent)?;
+    for write in &writes {
+        ensure_parent_dir_for_write(&write.path, plan)?;
+        if atomic::would_write(&write.path, &write.bytes) {
+            write_one(w, &mut applied, &mut pending, &write.path, &write.bytes)?;
+        } else {
+            unchanged.push(write.path.clone());
+            if let Some(idx) = pending.iter().position(|p| p == &write.path) {
+                pending.remove(idx);
+            }
+        }
     }
 
-    // 2. Render profile TOML.
+    // Idempotency UX: when nothing changed, print "no changes".
+    let total = applied.len() + unchanged.len();
+    if !applied.is_empty() {
+        for p in &applied {
+            println!("wrote {}", p.display());
+        }
+    }
+    if applied.is_empty() && unchanged.len() == total && total > 0 {
+        println!("no changes");
+    }
+    Ok(())
+}
+
+struct RenderedWrite {
+    path: PathBuf,
+    bytes: Vec<u8>,
+}
+
+fn render_plan_writes(
+    args: &InitArgs,
+    plan: &plan::InitPlan,
+) -> Result<Vec<RenderedWrite>, LensError> {
+    let mut writes = Vec::new();
+
+    // Profile TOML first in write order, but still only rendered/validated here.
     let existing_profile = std::fs::read_to_string(&plan.profile_path).ok();
     let new_profile_bytes = profile_writer::render_profile_toml(
         existing_profile.as_deref(),
@@ -287,60 +323,22 @@ pub(crate) fn commit_plan(
     // 2.pre — MS1: in-memory schema-drift insurance BEFORE atomic_write rename.
     // CB-r2-4: self-crate path inside lib code is `crate::*`.
     crate::profile::validate_profile_bytes(&new_profile_bytes, &plan.profile_path)?;
+    writes.push(RenderedWrite {
+        path: plan.profile_path.clone(),
+        bytes: new_profile_bytes,
+    });
 
-    let profile_changed = atomic::would_write(&plan.profile_path, &new_profile_bytes);
-    if profile_changed {
-        write_one(
-            w,
-            &mut applied,
-            &mut pending,
-            &plan.profile_path,
-            &new_profile_bytes,
-        )?;
-    } else {
-        unchanged.push(plan.profile_path.clone());
-        if let Some(idx) = pending.iter().position(|p| p == &plan.profile_path) {
-            pending.remove(idx);
-        }
-    }
-
-    // 3. MCP target dirs — third-party = read-only assert (CB8); project repo
-    // dirs = leave alone.
-    for target in &plan.mcp_targets {
-        if let Some(parent) = target.path.parent() {
-            if is_lens_owned_path(parent, plan) {
-                atomic::create_dir_0700_if_missing(parent)?;
-            } else if is_third_party_dotdir(parent) {
-                if !parent.exists() {
-                    // Codex / Cursor user-scope dir doesn't exist yet. Create
-                    // 0o700 (we own the act of creating it; only an existing
-                    // operator-set mode is sacrosanct).
-                    atomic::create_dir_0700_if_missing(parent)?;
-                } else {
-                    atomic::assert_dir_0700_or_warn(parent)?;
-                }
-            }
-        }
-    }
-
-    // 4. MCP rendering + byte-compare + write (CB7).
+    // MCP JSON/TOML render validates existing config parse and entry collisions.
     for target in &plan.mcp_targets {
         let existing = std::fs::read_to_string(&target.path).ok();
         let rendered = render_mcp_target(target, existing.as_deref(), args.allow_overwrite)?;
-        let bytes = rendered.into_bytes();
-        if atomic::would_write(&target.path, &bytes) {
-            write_one(w, &mut applied, &mut pending, &target.path, &bytes)?;
-        } else {
-            unchanged.push(target.path.clone());
-            if let Some(idx) = pending.iter().position(|p| p == &target.path) {
-                pending.remove(idx);
-            }
-        }
+        writes.push(RenderedWrite {
+            path: target.path.clone(),
+            bytes: rendered.into_bytes(),
+        });
     }
 
-    // 5. AGENTS.md (+ optional CLAUDE.md). Bounded markers — full impl lands
-    // in P7. Until P7's renderer is wired, skip the AGENTS step in commit
-    // (the in-memory plan still records the intent for preview).
+    // AGENTS.md (+ optional CLAUDE.md) marker integrity is validated here.
     if let Some(patch) = &plan.agents_md {
         let existing = std::fs::read_to_string(&patch.path).ok();
         let rendered = crate::cli::init::agents_md::render_agents_md_patch(
@@ -350,15 +348,10 @@ pub(crate) fn commit_plan(
         .map_err(|e| LensError::Profile {
             detail: e.to_string(),
         })?;
-        let bytes = rendered.into_bytes();
-        if atomic::would_write(&patch.path, &bytes) {
-            write_one(w, &mut applied, &mut pending, &patch.path, &bytes)?;
-        } else {
-            unchanged.push(patch.path.clone());
-            if let Some(idx) = pending.iter().position(|p| p == &patch.path) {
-                pending.remove(idx);
-            }
-        }
+        writes.push(RenderedWrite {
+            path: patch.path.clone(),
+            bytes: rendered.into_bytes(),
+        });
         if let Some(cm) = &patch.also_claude_md {
             let existing = std::fs::read_to_string(cm).ok();
             let rendered = crate::cli::init::agents_md::render_agents_md_patch(
@@ -368,24 +361,31 @@ pub(crate) fn commit_plan(
             .map_err(|e| LensError::Profile {
                 detail: e.to_string(),
             })?;
-            let bytes = rendered.into_bytes();
-            if atomic::would_write(cm, &bytes) {
-                write_one(w, &mut applied, &mut pending, cm, &bytes)?;
-            } else {
-                unchanged.push(cm.clone());
-            }
+            writes.push(RenderedWrite {
+                path: cm.clone(),
+                bytes: rendered.into_bytes(),
+            });
         }
     }
 
-    // 6. Idempotency UX: when nothing changed, print "no changes".
-    let total = applied.len() + unchanged.len();
-    if !applied.is_empty() {
-        for p in &applied {
-            println!("wrote {}", p.display());
+    Ok(writes)
+}
+
+fn ensure_parent_dir_for_write(path: &Path, plan: &plan::InitPlan) -> Result<(), LensError> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if is_lens_owned_path(parent, plan) {
+        atomic::create_dir_0700_if_missing(parent)?;
+    } else if is_third_party_dotdir(parent) {
+        if !parent.exists() {
+            // Codex / Cursor user-scope dir doesn't exist yet. Create 0o700
+            // because we own this creation; existing operator-set modes remain
+            // sacrosanct and go through the read-only warning path.
+            atomic::create_dir_0700_if_missing(parent)?;
+        } else {
+            atomic::assert_dir_0700_or_warn(parent)?;
         }
-    }
-    if applied.is_empty() && unchanged.len() == total && total > 0 {
-        println!("no changes");
     }
     Ok(())
 }
@@ -412,20 +412,6 @@ fn write_one(
             source: Box::new(e),
         }),
     }
-}
-
-fn plan_destinations(plan: &plan::InitPlan) -> Vec<PathBuf> {
-    let mut paths = vec![plan.profile_path.clone()];
-    for t in &plan.mcp_targets {
-        paths.push(t.path.clone());
-    }
-    if let Some(p) = &plan.agents_md {
-        paths.push(p.path.clone());
-        if let Some(cm) = &p.also_claude_md {
-            paths.push(cm.clone());
-        }
-    }
-    paths
 }
 
 fn is_lens_owned_path(parent: &Path, _plan: &plan::InitPlan) -> bool {

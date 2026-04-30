@@ -2,6 +2,7 @@
 
 use std::os::unix::fs::PermissionsExt;
 
+use assert_cmd::Command;
 use gaze_lens::cli::init::atomic::{
     assert_dir_0700_or_warn, atomic_write, create_dir_0700_if_missing, would_write,
 };
@@ -77,4 +78,136 @@ fn create_dir_0700_if_missing_idempotent_when_already_0700() {
     create_dir_0700_if_missing(&lens_owned).unwrap();
     let mode = std::fs::metadata(&lens_owned).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o700);
+}
+
+#[test]
+fn malformed_mcp_config_fails_before_profile_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let project = dir.path().join("project");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    let profile = project.join(".gaze-lens.toml");
+    std::fs::write(project.join(".mcp.json"), "{ broken json").unwrap();
+
+    let output = Command::cargo_bin("gaze-lens")
+        .unwrap()
+        .env("HOME", &home)
+        .current_dir(&project)
+        .args([
+            "--project-config",
+            profile.to_str().unwrap(),
+            "init",
+            "--non-interactive",
+            "--profile",
+            "p",
+            "--source-kind",
+            "sqlite",
+            "--source-path",
+            "/tmp/x.db",
+            "--scope",
+            "project",
+            "--client",
+            "claude-code",
+            "--no-agents-md",
+            "--write-all",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        !profile.exists(),
+        "profile must not be written after MCP validation failure"
+    );
+}
+
+#[test]
+fn malformed_agents_markers_fail_before_profile_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let project = dir.path().join("project");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    let profile = project.join(".gaze-lens.toml");
+    std::fs::write(
+        project.join("AGENTS.md"),
+        "<!-- gaze-lens:init:start -->\nbody\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("gaze-lens")
+        .unwrap()
+        .env("HOME", &home)
+        .current_dir(&project)
+        .args([
+            "--project-config",
+            profile.to_str().unwrap(),
+            "init",
+            "--non-interactive",
+            "--profile",
+            "p",
+            "--source-kind",
+            "sqlite",
+            "--source-path",
+            "/tmp/x.db",
+            "--scope",
+            "project",
+            "--no-mcp-config",
+            "--write-all",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        !profile.exists(),
+        "profile must not be written after AGENTS marker validation failure"
+    );
+}
+
+#[test]
+fn mcp_same_profile_command_collision_fails_before_profile_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let project = dir.path().join("project");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    let profile = project.join(".gaze-lens.toml");
+    std::fs::write(
+        project.join(".mcp.json"),
+        r#"{"mcpServers":{"gaze-lens":{"command":"/opt/gaze-lens","args":["serve","--profile","p"]}}}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("gaze-lens")
+        .unwrap()
+        .env("HOME", &home)
+        .current_dir(&project)
+        .args([
+            "--project-config",
+            profile.to_str().unwrap(),
+            "init",
+            "--non-interactive",
+            "--profile",
+            "p",
+            "--source-kind",
+            "sqlite",
+            "--source-path",
+            "/tmp/x.db",
+            "--scope",
+            "project",
+            "--client",
+            "claude-code",
+            "--no-agents-md",
+            "--write-all",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        !profile.exists(),
+        "profile must not be written after MCP entry collision"
+    );
 }
