@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use gaze_lens::cli::check::{CheckArgs, run_with_writer_for_test, validate_secret};
 use gaze_lens::errors::LensError;
+use gaze_lens::frontend::mcp::McpFrontend;
 use gaze_lens::profile::{Profile, SecretSpec, SourceSpec};
 use gaze_lens::session::maintenance::AutoPurge;
 use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi, CredentialPersistence};
@@ -30,6 +31,149 @@ fn trust_report_json_shape_is_stable() {
     assert_eq!(v["input_surface"]["query_mode"], "canned-structured");
     assert!(v["process_surface"].get("profile_under_review").is_some());
     assert!(v["process_surface"].get("serve_default_scope").is_some());
+}
+
+#[test]
+fn collect_input_surface_lists_locked_mcp_tools_from_const() {
+    let profile = sqlite_profile("local", std::path::PathBuf::from("fixture.sqlite"));
+
+    let surface = gaze_lens::cli::check_trust::collect_input_surface(&profile);
+
+    assert_eq!(surface.mcp_tools, McpFrontend::public_tool_names());
+    assert_eq!(
+        surface.cli_subcommands,
+        ["init", "query", "replay", "check", "serve", "demo"]
+    );
+}
+
+#[test]
+fn secret_locator_keyring_redacts_value() {
+    let profile = keyring_profile("prod", "gaze-lens-prod", "readonly");
+
+    let locator = gaze_lens::cli::check_trust::secret_locator(&profile.source);
+
+    assert_eq!(locator.backend, "keyring");
+    assert_eq!(locator.identity, "service=gaze-lens-prod account=readonly");
+}
+
+#[test]
+fn secret_locator_no_leak_fuzzy() {
+    let sentinel = random_hex_32_bytes();
+    let env = format!("GAZE_LENS_TRUST_REPORT_SECRET_{}", ulid::Ulid::new());
+    unsafe {
+        std::env::set_var(&env, &sentinel);
+    }
+    let profile = postgres_env_profile("prod", &env);
+
+    let report = gaze_lens::cli::check_trust::build_report(
+        &profile,
+        std::path::Path::new("/proc/self/mem"),
+        std::path::Path::new("/tmp/gaze-lens-snapshots"),
+        None,
+    )
+    .expect("report");
+    let json = serde_json::to_string(&report).expect("json");
+    let debug = format!("{report:?}");
+
+    assert!(!json.contains(&sentinel), "{json}");
+    assert!(!debug.contains(&sentinel), "{debug}");
+    assert_eq!(report.at_rest_surface.secret_backend.backend, "env");
+    assert_eq!(
+        report.at_rest_surface.secret_backend.identity,
+        format!("var={env}")
+    );
+
+    let err = std::fs::read_to_string("/proc/self/mem").expect_err("force error");
+    let err = LensError::Internal {
+        detail: format!("read manifest: {err}"),
+    };
+    assert!(!err.to_string().contains(&sentinel), "{err}");
+}
+
+#[test]
+fn secret_locator_sqlite_says_not_required() {
+    let profile = sqlite_profile("local", std::path::PathBuf::from("fixture.sqlite"));
+
+    let locator = gaze_lens::cli::check_trust::secret_locator(&profile.source);
+
+    assert_eq!(locator.backend, "none");
+    assert_eq!(locator.identity, "not required");
+}
+
+#[test]
+fn source_transport_omits_secret_for_postgres() {
+    let sentinel = random_hex_32_bytes();
+    let env = format!("GAZE_LENS_TRUST_REPORT_TRANSPORT_{}", ulid::Ulid::new());
+    unsafe {
+        std::env::set_var(&env, &sentinel);
+    }
+    let profile = postgres_env_profile("prod", &env);
+
+    let transport = gaze_lens::cli::check_trust::source_transport(&profile.source);
+    for key in [
+        "host",
+        "port",
+        "database",
+        "username",
+        "ssh_host",
+        "local_port",
+        "readonly_required",
+    ] {
+        assert!(
+            transport.get(key).is_some(),
+            "missing `{key}` in {transport}"
+        );
+    }
+    let json = serde_json::to_string(&transport).expect("json");
+    assert!(!json.contains("password"), "{json}");
+    assert!(!json.contains("secret"), "{json}");
+    assert!(!json.contains(&sentinel), "{json}");
+}
+
+#[test]
+fn sqlite_json_text_policy_surfaced_for_sqlite_profiles() {
+    let profile = Profile {
+        source: SourceSpec::Sqlite {
+            path: std::path::PathBuf::from("fixture.sqlite"),
+            readonly_required: true,
+            json_text_columns: vec!["events.payload".into(), "audit.context".into()],
+        },
+        ..sqlite_profile("local", std::path::PathBuf::from("fixture.sqlite"))
+    };
+    let postgres = postgres_env_profile("prod", "GAZE_LENS_TRUST_REPORT_UNUSED");
+
+    assert_eq!(
+        gaze_lens::cli::check_trust::collect_input_surface(&profile).sqlite_json_text_policy,
+        Some(vec!["events.payload".into(), "audit.context".into()])
+    );
+    assert_eq!(
+        gaze_lens::cli::check_trust::collect_input_surface(&postgres).sqlite_json_text_policy,
+        None
+    );
+}
+
+#[test]
+fn collect_handoff_surface_lists_six_residual_risks() {
+    let handoff = gaze_lens::cli::check_trust::collect_handoff_surface();
+    let ids: Vec<_> = handoff.residual_risks.iter().map(|risk| risk.id).collect();
+
+    assert_eq!(handoff.residual_risks.len(), 6);
+    for id in [
+        "disk_encryption",
+        "db_user_privileges",
+        "ssh_auth",
+        "backup_exclusion",
+        "cross_profile_correlation",
+        "binary_attestation",
+    ] {
+        assert!(ids.contains(&id), "missing {id}: {ids:?}");
+    }
+    assert!(
+        handoff
+            .residual_risks
+            .iter()
+            .all(|risk| !risk.mitigation.is_empty())
+    );
 }
 
 #[test]
@@ -328,6 +472,46 @@ fn keyring_profile(name: &str, service: &str, account: &str) -> Profile {
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     }
+}
+
+fn sqlite_profile(name: &str, path: std::path::PathBuf) -> Profile {
+    Profile {
+        name: name.to_string(),
+        source: SourceSpec::Sqlite {
+            path,
+            readonly_required: true,
+            json_text_columns: Vec::new(),
+        },
+        policy: None,
+        schema_allowlist: None,
+        snapshot_retention_days: None,
+        auto_purge: AutoPurge::Off,
+    }
+}
+
+fn postgres_env_profile(name: &str, env: &str) -> Profile {
+    Profile {
+        name: name.to_string(),
+        source: SourceSpec::Postgres {
+            host: "127.0.0.1".to_string(),
+            port: 5432,
+            database: "app".to_string(),
+            username: "ro".to_string(),
+            password_env: Some(env.to_string()),
+            secret: None,
+            ssh_host: Some("db-bastion.example".to_string()),
+            local_port: Some(15432),
+            readonly_required: true,
+        },
+        policy: None,
+        schema_allowlist: None,
+        snapshot_retention_days: None,
+        auto_purge: AutoPurge::Off,
+    }
+}
+
+fn random_hex_32_bytes() -> String {
+    format!("{}{}", ulid::Ulid::new(), ulid::Ulid::new())
 }
 
 fn write_keyring_profile(path: &std::path::Path, name: &str, service: &str, account: &str) {
