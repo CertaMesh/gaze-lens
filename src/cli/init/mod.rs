@@ -1,4 +1,5 @@
 use std::io::IsTerminal;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::{ArgAction, Args, ValueEnum};
@@ -278,34 +279,100 @@ pub fn run(
         });
     }
 
-    let plan = if args.non_interactive {
+    if args.non_interactive {
         let mut p = prompter::FakePrompter::new();
-        flow::run_guided(&args, &mut p, &env)?
+        let mut out = std::io::stdout();
+        run_with_prompter_and_env(&args, &env, &mut p, &mut out)?;
     } else {
         let mut p = prompter::DialoguerPrompter::new();
-        flow::run_guided(&args, &mut p, &env)?
-    };
+        let mut out = std::io::stdout();
+        run_with_prompter_and_env(&args, &env, &mut p, &mut out)?;
+    }
+    Ok(())
+}
+
+fn run_with_prompter_and_env<P: prompter::Prompter>(
+    args: &InitArgs,
+    env: &flow::InitEnv,
+    p: &mut P,
+    out: &mut dyn Write,
+) -> Result<(), LensError> {
+    let plan = flow::run_guided(args, p, env)?;
 
     // Always render preview so operators see what will be written.
     let preview = flow::render_preview(&plan);
-    print!("{preview}");
+    write!(out, "{preview}").map_err(|err| LensError::Internal {
+        detail: format!("failed to write init preview: {err}"),
+    })?;
 
     if args.print_only {
         return Ok(());
     }
 
+    confirm_keyring_overwrite_if_needed(args, &plan, p)?;
+
     let mut writer = batch::RealBatchWriter;
     if args.non_interactive || args.allow_overwrite {
-        commit_plan(&args, &plan, &mut writer)?;
+        commit_plan(args, &plan, &mut writer)?;
     } else {
         let mut migration_prompter = prompter::DialoguerPrompter::new();
-        commit_plan_with_prompter(&args, &plan, &mut writer, Some(&mut migration_prompter))?;
+        commit_plan_with_prompter(args, &plan, &mut writer, Some(&mut migration_prompter))?;
     }
 
     if args.smoke_check {
-        run_smoke_check(&args, &plan)?;
+        run_smoke_check_with_writer(&plan, out)?;
     }
     Ok(())
+}
+
+fn confirm_keyring_overwrite_if_needed<P: prompter::Prompter>(
+    args: &InitArgs,
+    plan: &plan::InitPlan,
+    p: &mut P,
+) -> Result<(), LensError> {
+    if args.non_interactive || args.write_all || !args.allow_overwrite {
+        return Ok(());
+    }
+    let Some(plan::PlannedSecret::Keyring {
+        service,
+        account,
+        write_value: Some(value),
+    }) = plan.profile_section.source_secret.as_ref()
+    else {
+        return Ok(());
+    };
+    let entry = keyring::Entry::new(service, account)
+        .map_err(|err| crate::profile::map_keyring_error(err, service, account))?;
+    match entry.get_password() {
+        Ok(existing) if existing == value.as_str() => Ok(()),
+        Ok(_) => {
+            let ok = p
+                .confirm(
+                    &format!(
+                        "Replace existing keyring entry service=`{service}` account=`{account}`?"
+                    ),
+                    false,
+                )
+                .map_err(prompt_to_lens)?;
+            if ok {
+                Ok(())
+            } else {
+                Err(LensError::Profile {
+                    detail: format!(
+                        "keyring entry service=`{service}` account=`{account}` was not replaced"
+                    ),
+                })
+            }
+        }
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(crate::profile::map_keyring_error(err, service, account)),
+    }
+}
+
+fn prompt_to_lens(err: prompter::PromptError) -> LensError {
+    LensError::Profile {
+        detail: err.to_string(),
+    }
 }
 
 /// `commit_plan`: profile → MCP → AGENTS, byte-compare-skip via `would_write`.
@@ -701,7 +768,10 @@ fn migration_decision(
 /// NOT `Option<String>`. The (project_config, user_config) tuple is built
 /// once from `plan.profile_scope` so role semantics cannot drift between the
 /// caller and the smoke-check call.
-fn run_smoke_check(_args: &InitArgs, plan: &plan::InitPlan) -> Result<(), LensError> {
+fn run_smoke_check_with_writer(
+    plan: &plan::InitPlan,
+    out: &mut dyn Write,
+) -> Result<(), LensError> {
     let (project_config, user_config): (Option<&Path>, Option<&Path>) = match plan.profile_scope {
         InitScope::Project | InitScope::ProjectAutoPurge => {
             (Some(plan.profile_path.as_path()), None)
@@ -714,10 +784,11 @@ fn run_smoke_check(_args: &InitArgs, plan: &plan::InitPlan) -> Result<(), LensEr
     let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
         detail: err.to_string(),
     })?;
-    runtime.block_on(crate::cli::check::run(
+    runtime.block_on(crate::cli::check::run_with_writer_for_test(
         check_args,
         project_config,
         user_config,
+        out,
     ))
 }
 
@@ -732,4 +803,17 @@ pub fn commit_plan_for_test(
     w: &mut dyn batch::BatchWriter,
 ) -> Result<(), LensError> {
     commit_plan(args, plan, w)
+}
+
+/// `#[doc(hidden)] pub` test entry-point for integration tests that must drive
+/// the same `init run` control flow while scripting prompts.
+#[doc(hidden)]
+pub fn run_with_prompter_for_test<P: prompter::Prompter>(
+    args: &InitArgs,
+    env: &flow::InitEnv,
+    p: &mut P,
+    out: &mut dyn Write,
+) -> Result<(), LensError> {
+    args.validate()?;
+    run_with_prompter_and_env(args, env, p, out)
 }
