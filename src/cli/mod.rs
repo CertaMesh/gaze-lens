@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 use crate::errors::LensError;
 
 pub mod check;
+pub mod check_trust;
 pub mod demo;
 pub mod init;
 pub mod query;

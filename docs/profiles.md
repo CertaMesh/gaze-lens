@@ -93,6 +93,19 @@ Secret status output names the backend and locator only; it never prints passwor
 
 `check` has no manifest or snapshot side effects.
 
+### Trust report (`--explain-risk`)
+
+Use `check --explain-risk` for a local-only trust report that describes what the selected profile exposes and what residual risks remain:
+
+```sh
+gaze-lens --project-config .gaze-lens.toml check --profile prod --explain-risk
+gaze-lens --project-config .gaze-lens.toml check --profile prod --explain-risk --format json
+```
+
+The trust report does not connect to the source, read keyring or env password values, invoke SSH, or write the manifest. It validates the profile, policy, and Gaze pipeline, then reports the input, process, output, at-rest, and operator handoff surfaces.
+
+Text mode writes status lines and the report to stdout. JSON mode writes status lines to stderr and emits only one JSON object on stdout. The JSON object includes `report_version: 1`; the v1 field set is closed, so any field addition, removal, or rename requires `report_version: 2` with a deprecation note.
+
 ## Multi-profile MCP server
 
 `gaze-lens serve` loads every configured profile by default and exposes them

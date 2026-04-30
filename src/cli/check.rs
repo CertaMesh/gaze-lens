@@ -13,12 +13,19 @@ use crate::source::db::postgres::PostgresSource;
 use crate::source::db::sqlite::SqliteSource;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 
+use super::check_trust::{TrustFormat, build_report, render_text};
 use super::serve::runtime_policy;
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {
     #[arg(long, default_value = "default")]
     pub profile: String,
+    /// Emit the trust report: exposed surfaces, redaction posture, and residual risks.
+    #[arg(long)]
+    pub explain_risk: bool,
+    /// Output format for `--explain-risk`. Ignored otherwise.
+    #[arg(long, value_enum, default_value_t = TrustFormat::Text, requires = "explain_risk")]
+    pub format: TrustFormat,
 }
 
 pub async fn run(
@@ -27,7 +34,8 @@ pub async fn run(
     user_config: Option<&Path>,
 ) -> Result<(), LensError> {
     let mut stdout = std::io::stdout();
-    run_with_writer(args, project_config, user_config, &mut stdout).await
+    let mut stderr = std::io::stderr();
+    run_with_writer(args, project_config, user_config, &mut stdout, &mut stderr).await
 }
 
 async fn run_with_writer(
@@ -35,12 +43,58 @@ async fn run_with_writer(
     project_config: Option<&Path>,
     user_config: Option<&Path>,
     out: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<(), LensError> {
     let profile = load_profile(&args.profile, project_config, user_config)?;
-    writeln!(out, "profile: ok ({})", profile.name).map_err(write_error)?;
+    let json_mode = args.explain_risk && matches!(args.format, TrustFormat::Json);
+    write_status_line(
+        json_mode,
+        out,
+        stderr,
+        &format!("profile: ok ({})", profile.name),
+    )?;
 
-    validate_policy(&profile)?;
-    writeln!(out, "policy: ok").map_err(write_error)?;
+    let policy = validate_policy(&profile)?;
+    write_status_line(json_mode, out, stderr, "policy: ok")?;
+
+    if args.explain_risk {
+        write_status_line(
+            json_mode,
+            out,
+            stderr,
+            "secret: skipped (--explain-risk local-only)",
+        )?;
+        write_status_line(
+            json_mode,
+            out,
+            stderr,
+            "source: skipped (--explain-risk local-only)",
+        )?;
+        write_status_line(json_mode, out, stderr, "pipeline: ok")?;
+
+        let manifest = default_manifest_path();
+        let snapshot_dir = default_snapshot_dir();
+        let parsed_policy = policy.parsed.as_ref().map(|parsed| {
+            (
+                parsed.path.as_path(),
+                parsed.raw_bytes.as_slice(),
+                &parsed.toml,
+            )
+        });
+        let report = build_report(&profile, &manifest, &snapshot_dir, parsed_policy)?;
+        match args.format {
+            TrustFormat::Text => render_text(&report, out).map_err(write_error)?,
+            TrustFormat::Json => {
+                serde_json::to_writer_pretty(&mut *out, &report).map_err(|err| {
+                    LensError::Internal {
+                        detail: format!("serialize trust report: {err}"),
+                    }
+                })?;
+                writeln!(out).map_err(write_error)?;
+            }
+        }
+        return Ok(());
+    }
 
     match validate_secret(&profile).await {
         Ok(meta) => {
@@ -67,13 +121,39 @@ pub async fn run_with_writer_for_test(
     user_config: Option<&Path>,
     out: &mut dyn Write,
 ) -> Result<(), LensError> {
-    run_with_writer(args, project_config, user_config, out).await
+    let mut stderr = Vec::new();
+    run_with_writer(args, project_config, user_config, out, &mut stderr).await
+}
+
+#[doc(hidden)]
+pub async fn run_with_writers_for_test(
+    args: CheckArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+    out: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<(), LensError> {
+    run_with_writer(args, project_config, user_config, out, stderr).await
 }
 
 fn write_error(err: std::io::Error) -> LensError {
     LensError::Internal {
         detail: format!("failed to write check output: {err}"),
     }
+}
+
+fn write_status_line(
+    json_mode: bool,
+    out: &mut dyn Write,
+    stderr: &mut dyn Write,
+    line: &str,
+) -> Result<(), LensError> {
+    if json_mode {
+        writeln!(stderr, "{line}")
+    } else {
+        writeln!(out, "{line}")
+    }
+    .map_err(write_error)
 }
 
 fn render_secret_error(out: &mut dyn Write, err: &LensError) -> Result<(), LensError> {
@@ -95,32 +175,68 @@ fn render_secret_error(out: &mut dyn Write, err: &LensError) -> Result<(), LensE
     .map_err(write_error)
 }
 
-fn validate_policy(profile: &crate::profile::Profile) -> Result<(), LensError> {
+struct ValidatedPolicy {
+    parsed: Option<ParsedPolicy>,
+}
+
+struct ParsedPolicy {
+    path: std::path::PathBuf,
+    raw_bytes: Vec<u8>,
+    toml: toml::Value,
+}
+
+fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy, LensError> {
     let Some(path) = &profile.policy else {
         let policy =
             PolicyFile::from_toml("[policy.database]\n").map_err(|err| LensError::Profile {
                 detail: format!("failed to parse policy: {err}"),
             })?;
+        let _ = policy.to_gaze_policy().map_err(|err| LensError::Profile {
+            detail: err.to_string(),
+        })?;
         let _ = build_pipeline(&policy).map_err(|err| LensError::Profile {
             detail: format!("failed to build policy pipeline: {err}"),
         })?;
-        return Ok(());
+        return Ok(ValidatedPolicy { parsed: None });
     };
     let path = shellexpand::full(&path.to_string_lossy())
         .map(|path| std::path::PathBuf::from(path.into_owned()))
         .map_err(|err| LensError::Profile {
             detail: err.to_string(),
         })?;
-    let input = std::fs::read_to_string(&path).map_err(|err| LensError::Profile {
+    let raw_bytes = std::fs::read(&path).map_err(|err| LensError::Profile {
         detail: format!("failed to read policy {}: {err}", path.display()),
     })?;
-    let policy = PolicyFile::from_toml(&input).map_err(|err| LensError::Profile {
+    let input = std::str::from_utf8(&raw_bytes).map_err(|err| LensError::Profile {
         detail: format!("failed to parse policy: {err}"),
+    })?;
+    let toml: toml::Value = toml::from_str(input).map_err(|err| LensError::Profile {
+        detail: format!("failed to parse policy: {err}"),
+    })?;
+    let policy: PolicyFile = toml.clone().try_into().map_err(|err| LensError::Profile {
+        detail: format!("failed to parse policy: {err}"),
+    })?;
+    let _ = policy.to_gaze_policy().map_err(|err| LensError::Profile {
+        detail: err.to_string(),
     })?;
     let _ = build_pipeline(&policy).map_err(|err| LensError::Profile {
         detail: format!("failed to build policy pipeline: {err}"),
     })?;
-    Ok(())
+    Ok(ValidatedPolicy {
+        parsed: Some(ParsedPolicy {
+            path,
+            raw_bytes,
+            toml,
+        }),
+    })
+}
+
+fn default_manifest_path() -> std::path::PathBuf {
+    std::path::PathBuf::from("~/.gaze-lens/manifest.sqlite")
+}
+
+fn default_snapshot_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from("~/.gaze-lens/snapshots")
 }
 
 async fn validate_source(profile: &crate::profile::Profile) -> Result<(), LensError> {

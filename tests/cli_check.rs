@@ -1,13 +1,299 @@
 use assert_cmd::Command;
 use gaze_lens::cli::check::{CheckArgs, run_with_writer_for_test, validate_secret};
 use gaze_lens::errors::LensError;
+use gaze_lens::frontend::mcp::McpFrontend;
 use gaze_lens::profile::{Profile, SecretSpec, SourceSpec};
 use gaze_lens::session::maintenance::AutoPurge;
 use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi, CredentialPersistence};
 use rusqlite::Connection;
 use std::any::Any;
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::{Mutex, OnceLock};
+
+#[test]
+fn trust_report_json_shape_is_stable() {
+    use gaze_lens::cli::check_trust::{REPORT_VERSION, TrustReport};
+
+    let report = TrustReport::stub_for_test("prod");
+    let v: serde_json::Value = serde_json::to_value(&report).expect("json");
+    assert_eq!(v["report_version"], REPORT_VERSION);
+    for key in [
+        "profile",
+        "input_surface",
+        "process_surface",
+        "output_surface",
+        "at_rest_surface",
+        "handoff_surface",
+    ] {
+        assert!(v.get(key).is_some(), "missing top-level key `{key}`: {v}");
+    }
+    assert_eq!(v["input_surface"]["raw_sql"], "disabled (v1 lock, D5)");
+    assert_eq!(v["input_surface"]["query_mode"], "canned-structured");
+    assert!(v["process_surface"].get("profile_under_review").is_some());
+    assert!(v["process_surface"].get("serve_default_scope").is_some());
+}
+
+#[test]
+fn collect_input_surface_lists_locked_mcp_tools_from_const() {
+    let profile = sqlite_profile("local", std::path::PathBuf::from("fixture.sqlite"));
+
+    let surface = gaze_lens::cli::check_trust::collect_input_surface(&profile);
+
+    assert_eq!(surface.mcp_tools, McpFrontend::public_tool_names());
+    assert_eq!(
+        surface.cli_subcommands,
+        ["init", "query", "replay", "check", "serve", "demo"]
+    );
+}
+
+#[test]
+fn secret_locator_keyring_redacts_value() {
+    let profile = keyring_profile("prod", "gaze-lens-prod", "readonly");
+
+    let locator = gaze_lens::cli::check_trust::secret_locator(&profile.source);
+
+    assert_eq!(locator.backend, "keyring");
+    assert_eq!(locator.identity, "service=gaze-lens-prod account=readonly");
+}
+
+#[test]
+fn secret_locator_no_leak_fuzzy() {
+    let sentinel = random_hex_32_bytes();
+    let env = format!("GAZE_LENS_TRUST_REPORT_SECRET_{}", ulid::Ulid::new());
+    unsafe {
+        std::env::set_var(&env, &sentinel);
+    }
+    let profile = postgres_env_profile("prod", &env);
+
+    let report = gaze_lens::cli::check_trust::build_report(
+        &profile,
+        std::path::Path::new("/proc/self/mem"),
+        std::path::Path::new("/tmp/gaze-lens-snapshots"),
+        None,
+    )
+    .expect("report");
+    let json = serde_json::to_string(&report).expect("json");
+    let debug = format!("{report:?}");
+
+    assert!(!json.contains(&sentinel), "{json}");
+    assert!(!debug.contains(&sentinel), "{debug}");
+    assert_eq!(report.at_rest_surface.secret_backend.backend, "env");
+    assert_eq!(
+        report.at_rest_surface.secret_backend.identity,
+        format!("var={env}")
+    );
+
+    let err = std::fs::read_to_string("/proc/self/mem").expect_err("force error");
+    let err = LensError::Internal {
+        detail: format!("read manifest: {err}"),
+    };
+    assert!(!err.to_string().contains(&sentinel), "{err}");
+}
+
+#[test]
+fn secret_locator_sqlite_says_not_required() {
+    let profile = sqlite_profile("local", std::path::PathBuf::from("fixture.sqlite"));
+
+    let locator = gaze_lens::cli::check_trust::secret_locator(&profile.source);
+
+    assert_eq!(locator.backend, "none");
+    assert_eq!(locator.identity, "not required");
+}
+
+#[test]
+fn source_transport_omits_secret_for_postgres() {
+    let sentinel = random_hex_32_bytes();
+    let env = format!("GAZE_LENS_TRUST_REPORT_TRANSPORT_{}", ulid::Ulid::new());
+    unsafe {
+        std::env::set_var(&env, &sentinel);
+    }
+    let profile = postgres_env_profile("prod", &env);
+
+    let transport = gaze_lens::cli::check_trust::source_transport(&profile.source);
+    for key in [
+        "host",
+        "port",
+        "database",
+        "username",
+        "ssh_host",
+        "local_port",
+        "readonly_required",
+    ] {
+        assert!(
+            transport.get(key).is_some(),
+            "missing `{key}` in {transport}"
+        );
+    }
+    let json = serde_json::to_string(&transport).expect("json");
+    assert!(!json.contains("password"), "{json}");
+    assert!(!json.contains("secret"), "{json}");
+    assert!(!json.contains(&sentinel), "{json}");
+}
+
+#[test]
+fn sqlite_json_text_policy_surfaced_for_sqlite_profiles() {
+    let profile = Profile {
+        source: SourceSpec::Sqlite {
+            path: std::path::PathBuf::from("fixture.sqlite"),
+            readonly_required: true,
+            json_text_columns: vec!["events.payload".into(), "audit.context".into()],
+        },
+        ..sqlite_profile("local", std::path::PathBuf::from("fixture.sqlite"))
+    };
+    let postgres = postgres_env_profile("prod", "GAZE_LENS_TRUST_REPORT_UNUSED");
+
+    assert_eq!(
+        gaze_lens::cli::check_trust::collect_input_surface(&profile).sqlite_json_text_policy,
+        Some(vec!["events.payload".into(), "audit.context".into()])
+    );
+    assert_eq!(
+        gaze_lens::cli::check_trust::collect_input_surface(&postgres).sqlite_json_text_policy,
+        None
+    );
+}
+
+#[test]
+fn collect_handoff_surface_lists_six_residual_risks() {
+    let handoff = gaze_lens::cli::check_trust::collect_handoff_surface();
+    let ids: Vec<_> = handoff.residual_risks.iter().map(|risk| risk.id).collect();
+
+    assert_eq!(handoff.residual_risks.len(), 6);
+    for id in [
+        "disk_encryption",
+        "db_user_privileges",
+        "ssh_auth",
+        "backup_exclusion",
+        "cross_profile_correlation",
+        "binary_attestation",
+    ] {
+        assert!(ids.contains(&id), "missing {id}: {ids:?}");
+    }
+    assert!(
+        handoff
+            .residual_risks
+            .iter()
+            .all(|risk| !risk.mitigation.is_empty())
+    );
+}
+
+#[test]
+fn inspect_path_reports_mode_when_file_exists() {
+    let temp = tempfile::NamedTempFile::new().expect("tempfile");
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o600)).expect("chmod");
+
+    let artifact = gaze_lens::cli::check_trust::inspect_path(temp.path(), 0o600);
+
+    assert!(artifact.exists);
+    assert_eq!(artifact.mode_ok, Some(true));
+    assert_eq!(artifact.expected_mode, "0600");
+}
+
+#[test]
+fn inspect_path_reports_mode_mismatch() {
+    let temp = tempfile::NamedTempFile::new().expect("tempfile");
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+    let artifact = gaze_lens::cli::check_trust::inspect_path(temp.path(), 0o600);
+
+    assert!(artifact.exists);
+    assert_eq!(artifact.mode_ok, Some(false));
+    assert_eq!(artifact.expected_mode, "0600");
+}
+
+#[test]
+fn inspect_path_handles_not_yet_materialized() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let missing = temp.path().join("missing.sqlite");
+
+    let artifact = gaze_lens::cli::check_trust::inspect_path(&missing, 0o600);
+
+    assert!(!artifact.exists);
+    assert_eq!(artifact.mode_ok, None);
+    assert_eq!(artifact.expected_mode, "0600");
+}
+
+#[test]
+fn recognizer_pack_default_empty_when_policy_unset() {
+    let pack = gaze_lens::cli::check_trust::recognizer_pack_from_parsed(None, None, None);
+
+    assert!(pack.default_empty);
+    assert_eq!(pack.source, "default-empty");
+    assert_eq!(pack.policy_path, None);
+    assert_eq!(pack.policy_sha256, None);
+    assert_eq!(pack.recognizer_keys, ["database"]);
+    assert!(pack.recognizer_classes.is_empty());
+}
+
+#[test]
+fn recognizer_pack_lists_keys_and_classes_from_policy_toml() {
+    let temp = tempfile::NamedTempFile::new().expect("tempfile");
+    let raw = b"[policy.database]\nemail = true\nphone = true\n[policy.logs]\nip = true\n[ner]\nlocale = \"en\"\n";
+    std::fs::write(temp.path(), raw).expect("policy");
+    let parsed: toml::Value =
+        toml::from_str(std::str::from_utf8(raw).expect("utf8")).expect("toml");
+
+    let pack = gaze_lens::cli::check_trust::recognizer_pack_from_parsed(
+        Some(temp.path()),
+        Some(&parsed),
+        Some(raw),
+    );
+
+    assert!(!pack.default_empty);
+    assert_eq!(pack.source, "policy-toml");
+    assert_eq!(pack.policy_sha256.as_deref().expect("sha").len(), 64);
+    assert_eq!(pack.recognizer_keys, ["database", "logs"]);
+    assert_eq!(
+        pack.recognizer_classes,
+        ["database.email", "database.phone", "logs.ip"]
+    );
+}
+
+#[test]
+fn at_rest_surface_uses_passed_manifest_path_not_args_default() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest = temp.path().join("manifest.sqlite");
+    let snapshot_dir = temp.path().join("snapshots");
+    std::fs::create_dir(&snapshot_dir).expect("snapshot dir");
+    let profile = sqlite_profile("local", std::path::PathBuf::from("fixture.sqlite"));
+
+    let surface =
+        gaze_lens::cli::check_trust::collect_at_rest_surface(&profile, &manifest, &snapshot_dir);
+
+    assert_eq!(surface.manifest.path, manifest.display().to_string());
+}
+
+#[test]
+fn trust_report_text_lists_all_pillars() {
+    let report = gaze_lens::cli::check_trust::TrustReport::stub_for_test("prod");
+    let mut out = Vec::new();
+
+    gaze_lens::cli::check_trust::render_text(&report, &mut out).expect("render");
+    let text = String::from_utf8(out).expect("utf8");
+
+    for header in [
+        "Input surface",
+        "Process surface",
+        "Output surface",
+        "At-rest surface",
+        "Operator handoff",
+    ] {
+        assert!(text.contains(header), "missing {header}: {text}");
+    }
+    assert!(text.contains("raw_sql: disabled (v1 lock, D5)"), "{text}");
+    assert!(text.contains("(see src/session/mod.rs:304)"), "{text}");
+}
+
+#[test]
+fn trust_report_text_warns_on_default_empty_policy() {
+    let report = gaze_lens::cli::check_trust::TrustReport::stub_for_test("prod");
+    let mut out = Vec::new();
+
+    gaze_lens::cli::check_trust::render_text(&report, &mut out).expect("render");
+    let text = String::from_utf8(out).expect("utf8");
+
+    assert!(text.contains("WARN: no recognizer pack"), "{text}");
+}
 
 #[test]
 fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
@@ -40,6 +326,198 @@ fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
     assert!(stdout.contains("pipeline: ok"));
     assert!(!temp.path().join("manifest.sqlite").exists());
     assert!(!temp.path().join("snapshots").exists());
+}
+
+#[test]
+fn check_without_explain_risk_unchanged_backward_compat() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "profile: ok (local)\npolicy: ok\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
+    );
+}
+
+#[test]
+fn check_explain_risk_text_appends_after_status_lines() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.starts_with(
+        "profile: ok (local)\npolicy: ok\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
+    ), "{stdout}");
+    assert!(stdout.contains("Input surface"), "{stdout}");
+}
+
+#[test]
+fn check_explain_risk_json_emits_only_json_on_stdout() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json stdout");
+    assert_eq!(v["report_version"], 1);
+    let stdout = stdout(&output);
+    assert!(!stdout.contains("profile: ok"), "{stdout}");
+    assert!(stderr(&output).contains("profile: ok (local)"));
+}
+
+#[test]
+fn check_explain_risk_does_not_open_db_connection() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("does-not-exist.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+}
+
+#[test]
+fn check_explain_risk_does_not_call_resolve_password() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    write_keyring_profile(&project, "prod", "missing-service", "missing-account");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "prod",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json stdout");
+    assert_eq!(v["at_rest_surface"]["secret_backend"]["backend"], "keyring");
+    assert!(
+        v["at_rest_surface"]["secret_backend"]["identity"]
+            .as_str()
+            .expect("identity")
+            .contains("service=missing-service")
+    );
+}
+
+#[test]
+fn check_explain_risk_json_fails_loudly_when_pipeline_build_fails() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(
+        &policy,
+        r#"
+        [policy.database]
+        [[policy.database.columns]]
+        column = "email"
+        class = "email"
+        action = "explode"
+        "#,
+    )
+    .expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(!output.status.success(), "stdout: {}", stdout(&output));
+    assert!(output.stdout.is_empty(), "stdout: {}", stdout(&output));
+    assert!(stderr(&output).contains("failed to build policy pipeline"));
 }
 
 #[tokio::test]
@@ -81,6 +559,8 @@ async fn check_run_renders_secret_not_found_then_returns_error() {
     let err = run_with_writer_for_test(
         CheckArgs {
             profile: "prod".into(),
+            explain_risk: false,
+            format: gaze_lens::cli::check_trust::TrustFormat::Text,
         },
         Some(&project),
         None,
@@ -109,6 +589,8 @@ async fn check_run_renders_secret_access_denied_then_returns_error() {
     let err = run_with_writer_for_test(
         CheckArgs {
             profile: "prod".into(),
+            explain_risk: false,
+            format: gaze_lens::cli::check_trust::TrustFormat::Text,
         },
         Some(&project),
         None,
@@ -136,6 +618,8 @@ async fn check_run_renders_secret_backend_unavailable_then_returns_error() {
     let err = run_with_writer_for_test(
         CheckArgs {
             profile: "prod".into(),
+            explain_risk: false,
+            format: gaze_lens::cli::check_trust::TrustFormat::Text,
         },
         Some(&project),
         None,
@@ -305,6 +789,46 @@ fn keyring_profile(name: &str, service: &str, account: &str) -> Profile {
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     }
+}
+
+fn sqlite_profile(name: &str, path: std::path::PathBuf) -> Profile {
+    Profile {
+        name: name.to_string(),
+        source: SourceSpec::Sqlite {
+            path,
+            readonly_required: true,
+            json_text_columns: Vec::new(),
+        },
+        policy: None,
+        schema_allowlist: None,
+        snapshot_retention_days: None,
+        auto_purge: AutoPurge::Off,
+    }
+}
+
+fn postgres_env_profile(name: &str, env: &str) -> Profile {
+    Profile {
+        name: name.to_string(),
+        source: SourceSpec::Postgres {
+            host: "127.0.0.1".to_string(),
+            port: 5432,
+            database: "app".to_string(),
+            username: "ro".to_string(),
+            password_env: Some(env.to_string()),
+            secret: None,
+            ssh_host: Some("db-bastion.example".to_string()),
+            local_port: Some(15432),
+            readonly_required: true,
+        },
+        policy: None,
+        schema_allowlist: None,
+        snapshot_retention_days: None,
+        auto_purge: AutoPurge::Off,
+    }
+}
+
+fn random_hex_32_bytes() -> String {
+    format!("{}{}", ulid::Ulid::new(), ulid::Ulid::new())
 }
 
 fn write_keyring_profile(path: &std::path::Path, name: &str, service: &str, account: &str) {
