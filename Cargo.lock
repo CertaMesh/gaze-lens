@@ -1437,18 +1437,18 @@ dependencies = [
 
 [[package]]
 name = "gaze"
-version = "0.4.6"
+version = "0.6.4"
 dependencies = [
- "aho-corasick",
  "anyhow",
  "base64 0.22.1",
  "dashmap",
  "ed25519-dalek",
+ "gaze-recognizers",
+ "gaze-types",
  "hex",
  "libc",
  "rand 0.8.6",
  "regex",
- "rusqlite",
  "secrecy",
  "serde",
  "serde_json",
@@ -1496,10 +1496,10 @@ dependencies = [
 
 [[package]]
 name = "gaze-recognizers"
-version = "0.4.6"
+version = "0.6.4"
 dependencies = [
  "aho-corasick",
- "gaze",
+ "gaze-types",
  "hex",
  "ndarray 0.16.1",
  "ort",
@@ -1512,6 +1512,14 @@ dependencies = [
  "tokenizers",
  "tracing",
  "unicode-normalization",
+]
+
+[[package]]
+name = "gaze-types"
+version = "0.6.4"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

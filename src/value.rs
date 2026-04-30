@@ -125,6 +125,26 @@ fn redact_text(
     }
 }
 
+/// Convert a `gaze::Value` returned by `Pipeline::redact` into the
+/// `serde_json::Value` shape the manifest layer is built on.
+///
+/// Only scalar variants are accepted. Composite shapes (`Array`, `Object`)
+/// are rejected with `LensError::RedactionFailed` — PII redaction must not
+/// produce structured output that bypasses redaction; if it does, that's a
+/// bug we want to fail loudly on rather than silently flatten.
+pub fn gaze_value_to_json(value: &gaze::Value) -> Result<serde_json::Value, LensError> {
+    match value {
+        gaze::Value::Null => Ok(serde_json::Value::Null),
+        gaze::Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
+        gaze::Value::I64(n) => Ok(serde_json::Value::Number((*n).into())),
+        gaze::Value::String(s) => Ok(serde_json::Value::String(s.clone())),
+        gaze::Value::Array(_) | gaze::Value::Object(_) => Err(LensError::RedactionFailed {
+            detail: "gaze::Value composite shape (Array/Object) not supported in manifest"
+                .to_string(),
+        }),
+    }
+}
+
 fn validate_decimal(value: &str) -> Result<(), LowerError> {
     let value = value.trim();
     if value.is_empty() {
@@ -232,6 +252,7 @@ mod tests {
         match lowered {
             gaze::Value::String(text) => assert_eq!(text, "alice@example.com"),
             gaze::Value::I64(_) => panic!("expected string"),
+            _ => panic!("unexpected gaze::Value variant from lower_for_redaction"),
         }
     }
 
@@ -242,6 +263,7 @@ mod tests {
         match lowered {
             gaze::Value::String(text) => assert_eq!(text, "alice@example.com"),
             gaze::Value::I64(_) => panic!("expected string"),
+            _ => panic!("unexpected gaze::Value variant from lower_for_redaction"),
         }
     }
 
@@ -276,6 +298,7 @@ mod tests {
         match lowered {
             gaze::Value::I64(value) => assert_eq!(value, -42),
             gaze::Value::String(_) => panic!("expected i64"),
+            _ => panic!("unexpected gaze::Value variant from lower_for_redaction"),
         }
     }
 
@@ -306,5 +329,38 @@ mod tests {
         .lower_for_redaction()
         .expect("lower");
         assert!(lowered.is_none());
+    }
+
+    #[test]
+    fn gaze_scalar_values_convert_to_json() {
+        assert_eq!(
+            gaze_value_to_json(&gaze::Value::Null).expect("null"),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            gaze_value_to_json(&gaze::Value::Bool(true)).expect("bool"),
+            serde_json::Value::Bool(true)
+        );
+        assert_eq!(
+            gaze_value_to_json(&gaze::Value::I64(-42)).expect("i64"),
+            serde_json::Value::Number((-42_i64).into())
+        );
+        assert_eq!(
+            gaze_value_to_json(&gaze::Value::String("redacted".to_string())).expect("string"),
+            serde_json::Value::String("redacted".to_string())
+        );
+    }
+
+    #[test]
+    fn gaze_composite_values_are_rejected() {
+        let arr = gaze::Value::Array(vec![gaze::Value::I64(1)]);
+        let err = gaze_value_to_json(&arr).expect_err("array must fail");
+        assert!(matches!(err, LensError::RedactionFailed { .. }));
+
+        let mut obj_map = std::collections::BTreeMap::new();
+        obj_map.insert("k".to_string(), gaze::Value::I64(1));
+        let obj = gaze::Value::Object(obj_map);
+        let err = gaze_value_to_json(&obj).expect_err("object must fail");
+        assert!(matches!(err, LensError::RedactionFailed { .. }));
     }
 }
