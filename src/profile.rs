@@ -160,6 +160,58 @@ pub(crate) fn validate_profile_name(name: &str) -> Result<(), LensError> {
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn map_keyring_error(err: keyring::Error, service: &str, account: &str) -> LensError {
+    use keyring::Error as KeyringError;
+    match err {
+        KeyringError::NoEntry => LensError::SecretKeyringMissing {
+            service: service.to_string(),
+            account: account.to_string(),
+        },
+        KeyringError::NoStorageAccess(detail) => {
+            tracing::warn!(
+                target = "gaze_lens::profile::keyring",
+                service,
+                account,
+                detail = %detail,
+                "keyring access denied"
+            );
+            LensError::SecretKeyringDenied {
+                service: service.to_string(),
+                account: account.to_string(),
+            }
+        }
+        KeyringError::PlatformFailure(detail) => LensError::SecretBackendUnavailable {
+            backend: "platform".to_string(),
+            detail: detail.to_string(),
+        },
+        KeyringError::Ambiguous(detail) => {
+            tracing::warn!(
+                target = "gaze_lens::profile::keyring",
+                service,
+                account,
+                matches = detail.len(),
+                "keyring lookup ambiguous"
+            );
+            LensError::SecretKeyringDenied {
+                service: service.to_string(),
+                account: account.to_string(),
+            }
+        }
+        KeyringError::Invalid(_, _)
+        | KeyringError::TooLong(_, _)
+        | KeyringError::BadEncoding(_) => LensError::Profile {
+            detail: format!(
+                "keyring entry for service={service} account={account} is invalid; check the entry encoding and length"
+            ),
+        },
+        other => LensError::SecretBackendUnavailable {
+            backend: "platform".to_string(),
+            detail: other.to_string(),
+        },
+    }
+}
+
 /// MS1 (rev 3): in-memory parse of generated profile TOML BEFORE `atomic_write`
 /// renames it onto disk. Returns `LensError::Profile` with the same
 /// `failed to parse {label} {path} at line N, column M: {err}` format as the
