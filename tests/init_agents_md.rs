@@ -30,6 +30,9 @@ fn empty_existing_yields_marker_block_with_profile_substituted() {
     assert!(out.contains("<!-- gaze-lens:init:start -->"));
     assert!(out.contains("<!-- gaze-lens:init:end -->"));
     assert!(out.contains("dev"));
+    assert!(out.contains("Every MCP tool call requires a `profile` argument"));
+    assert!(out.contains("`dev`"));
+    assert!(out.contains(r#""profile": "dev""#));
     assert!(
         out.contains("6 CLI subcommands"),
         "snippet must reference SPEC subcommand count"

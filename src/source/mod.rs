@@ -171,7 +171,7 @@ impl FakeSource for InMemoryFakeSource {
     }
 }
 
-#[cfg(test)]
+#[doc(hidden)]
 pub mod test_support {
     use std::sync::{Arc, Mutex};
 

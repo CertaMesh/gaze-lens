@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use gaze_lens::cli::retention::apply_retention_policy;
+use gaze_lens::cli::serve::apply_multi_profile_retention;
 use gaze_lens::errors::LensError;
 use gaze_lens::profile::{Profile, SourceSpec};
 use gaze_lens::session::maintenance::{AutoPurge, ManifestMaintenance};
@@ -125,6 +126,25 @@ impl Fixture {
 fn profile_with_retention(retention_days: Option<u32>, auto_purge: AutoPurge) -> Profile {
     Profile {
         name: "retention-test".to_string(),
+        source: SourceSpec::Sqlite {
+            path: PathBuf::from("/tmp/unused.sqlite"),
+            readonly_required: true,
+            json_text_columns: Vec::new(),
+        },
+        policy: None,
+        schema_allowlist: None,
+        snapshot_retention_days: retention_days,
+        auto_purge,
+    }
+}
+
+fn named_profile_with_retention(
+    name: &str,
+    retention_days: Option<u32>,
+    auto_purge: AutoPurge,
+) -> Profile {
+    Profile {
+        name: name.to_string(),
         source: SourceSpec::Sqlite {
             path: PathBuf::from("/tmp/unused.sqlite"),
             readonly_required: true,
@@ -392,6 +412,92 @@ fn default_unlimited_is_no_op() {
         "ancient snapshot must not be tombstoned"
     );
     assert!(snap.exists(), "snapshot file must remain on disk");
+}
+
+#[test]
+fn multi_profile_retention_uses_min_days() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let id = ulid_at_ms(now - (5 * MS_PER_DAY)).to_string();
+    let snap = fx.write_snapshot_file(&id);
+    fx.insert_call(
+        "call-min",
+        &id,
+        Some(&snap),
+        "ok",
+        now - (5 * MS_PER_DAY),
+        None,
+    );
+    let profiles = vec![
+        named_profile_with_retention("short", Some(3), AutoPurge::Purge),
+        named_profile_with_retention("long", Some(7), AutoPurge::Purge),
+    ];
+
+    apply_multi_profile_retention(&profiles, &fx.manifest, &fx.snapshots)
+        .expect("multi profile retention");
+
+    let (snapshot_ref, purged_at_ms) = fx.read_call("call-min");
+    assert!(
+        snapshot_ref.is_none(),
+        "MIN(3, 7) should purge 5-day snapshot"
+    );
+    assert!(purged_at_ms.is_some());
+    assert!(!snap.exists());
+}
+
+#[test]
+fn multi_profile_auto_purge_caps_to_least_destructive() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let id = ulid_at_ms(now - (5 * MS_PER_DAY)).to_string();
+    let snap = fx.write_snapshot_file(&id);
+    fx.insert_call(
+        "call-and",
+        &id,
+        Some(&snap),
+        "ok",
+        now - (5 * MS_PER_DAY),
+        None,
+    );
+    let profiles = vec![
+        named_profile_with_retention("purge", Some(3), AutoPurge::Purge),
+        named_profile_with_retention("off", Some(7), AutoPurge::Off),
+    ];
+
+    apply_multi_profile_retention(&profiles, &fx.manifest, &fx.snapshots)
+        .expect("multi profile retention");
+
+    let (snapshot_ref, purged_at_ms) = fx.read_call("call-and");
+    assert!(
+        snapshot_ref.is_some(),
+        "Off in the loaded set must prevent purge"
+    );
+    assert!(purged_at_ms.is_none());
+    assert!(snap.exists());
+}
+
+#[test]
+fn multi_profile_retention_none_does_not_lower_minimum() {
+    let fx = Fixture::new();
+    let now = now_ms();
+    let id = ulid_at_ms(now - MS_PER_DAY).to_string();
+    let snap = fx.write_snapshot_file(&id);
+    fx.insert_call("call-none", &id, Some(&snap), "ok", now - MS_PER_DAY, None);
+    let profiles = vec![
+        named_profile_with_retention("unlimited", None, AutoPurge::Purge),
+        named_profile_with_retention("seven", Some(7), AutoPurge::Purge),
+    ];
+
+    apply_multi_profile_retention(&profiles, &fx.manifest, &fx.snapshots)
+        .expect("multi profile retention");
+
+    let (snapshot_ref, purged_at_ms) = fx.read_call("call-none");
+    assert!(
+        snapshot_ref.is_some(),
+        "None must behave as unlimited, leaving MIN at 7 days"
+    );
+    assert!(purged_at_ms.is_none());
+    assert!(snap.exists());
 }
 
 #[test]

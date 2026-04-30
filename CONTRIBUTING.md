@@ -79,7 +79,7 @@ Exceptions:
 
 ## Public-surface expansion rule
 
-The 5 SPEC v1 MCP tools (`query`, `schema`, `list_tables`, `log_tail`, `log_grep`) are the locked public surface. Adding a 6th requires a SPEC amendment PR, not an impl PR. Internal helper methods are fine; do not wire them through `frontend::mcp::McpFrontend` without SPEC.
+The 5 SPEC v1 MCP tools (`query`, `schema`, `list_tables`, `log_tail`, `log_grep`) are the locked public surface. Each accepts a required `profile` argument in v0.2.2; argument-schema growth is allowed under the locked tool list, but adding a 6th tool requires a SPEC amendment PR, not an impl PR. Internal helper methods are fine; do not wire them through `frontend::mcp::McpFrontend` without SPEC.
 
 ## MySQL integration tests
 

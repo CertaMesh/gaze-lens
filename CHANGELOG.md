@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.2] — TBD
+
+### Changed (BREAKING for MCP agents)
+- `gaze-lens serve` now exposes a single MCP entry covering all configured
+  profiles. Every MCP tool call (`query`, `schema`, `list_tables`, `log_tail`,
+  `log_grep`) requires a new `profile: string` argument. Existing v0.2.x agents
+  that did not send `profile` will receive `invalid_params` until updated.
+  Run `gaze-lens init` to regenerate per-host MCP config and AGENTS.md guidance.
+  CLI `query`/`demo` continue to work unchanged (single-profile mode defaults
+  the `profile` arg to the configured profile name).
+
 ## [0.2.0] — 2026-04-29
 
 ### Added

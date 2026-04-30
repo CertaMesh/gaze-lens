@@ -16,6 +16,7 @@ async fn sqlite_decodes_runtime_type_not_declared_affinity() {
 
     let rows = source
         .query(&CannedQuery {
+            profile: "test".to_string(),
             table: "items".to_string(),
             columns: Some(vec![
                 "integer_declared_text_value".to_string(),
@@ -128,6 +129,7 @@ async fn sqlite_text_json_default_denies_scalar_looking_text() {
 
     let rows = source
         .query(&CannedQuery {
+            profile: "test".to_string(),
             table: "items".to_string(),
             columns: Some(vec![
                 "json_text".to_string(),
@@ -164,6 +166,7 @@ async fn sqlite_text_json_allowlist_decodes_objects_and_arrays() {
 
     let rows = source
         .query(&CannedQuery {
+            profile: "test".to_string(),
             table: "items".to_string(),
             columns: Some(vec!["json_text".to_string(), "json_array_text".to_string()]),
             r#where: None,
@@ -191,6 +194,7 @@ async fn sqlite_text_json_allowlist_rejects_invalid_json_text() {
 
     let err = source
         .query(&CannedQuery {
+            profile: "test".to_string(),
             table: "items".to_string(),
             columns: Some(vec!["invalid_json_text".to_string()]),
             r#where: None,

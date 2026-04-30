@@ -66,6 +66,7 @@ pub async fn run(
     user_config: Option<&Path>,
 ) -> Result<(), LensError> {
     let query = CannedQuery {
+        profile: args.profile.clone(),
         table: args.table,
         columns: if args.columns.is_empty() {
             None
@@ -112,9 +113,10 @@ pub(crate) async fn build_db_session(
     let snapshot_dir = expand_path(snapshot_dir)?;
     super::retention::apply_retention_policy(&profile, &manifest, &snapshot_dir)?;
     let (policy, pipeline) = runtime_policy(&profile)?;
-    let session = Arc::new(Session::new_with_pipeline(
+    let session = Arc::new(Session::new_with_pipeline_for_profile(
         &policy,
         pipeline,
+        profile.name.clone(),
         &manifest,
         &snapshot_dir,
     )?);
@@ -137,9 +139,11 @@ pub(crate) async fn build_db_session(
         db_source,
         profile.schema_allowlist,
     ));
-    for tool_name in ["query", "schema", "list_tables"] {
-        session.register_source(tool_name, source.clone());
-    }
+    session.register_source_for_profile(
+        crate::session::SourceClass::Database,
+        &profile.name,
+        source.clone(),
+    );
     Ok(session)
 }
 

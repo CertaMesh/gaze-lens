@@ -26,17 +26,41 @@ pub struct McpFrontend {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SchemaArgs {
+    #[schemars(
+        description = "Configured profile name selecting the source to dispatch. Required. Pattern: ^[a-z0-9][a-z0-9_-]{0,63}$.",
+        regex(pattern = r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    )]
+    pub profile: String,
     pub table: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ListTablesArgs {
+    #[schemars(
+        description = "Configured profile name selecting the source to dispatch. Required. Pattern: ^[a-z0-9][a-z0-9_-]{0,63}$.",
+        regex(pattern = r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    )]
+    pub profile: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct LogTailArgs {
+    #[schemars(
+        description = "Configured profile name selecting the source to dispatch. Required. Pattern: ^[a-z0-9][a-z0-9_-]{0,63}$.",
+        regex(pattern = r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    )]
+    pub profile: String,
     #[serde(default)]
     pub lines: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct LogGrepArgs {
+    #[schemars(
+        description = "Configured profile name selecting the source to dispatch. Required. Pattern: ^[a-z0-9][a-z0-9_-]{0,63}$.",
+        regex(pattern = r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    )]
+    pub profile: String,
     pub pattern: String,
     #[serde(default)]
     pub level: Option<String>,
@@ -64,6 +88,11 @@ impl McpFrontend {
         PUBLIC_TOOLS.to_vec()
     }
 
+    #[doc(hidden)]
+    pub fn list_all_tools(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_router.list_all()
+    }
+
     pub async fn call_tool_json(
         &self,
         tool_name: &str,
@@ -74,6 +103,15 @@ impl McpFrontend {
             .await
             .map_err(|err| sanitize_error(&err))?;
         serde_json::to_value(result).map_err(|err| err.to_string())
+    }
+
+    #[doc(hidden)]
+    pub async fn call_tool_result_for_test(
+        &self,
+        tool_name: &str,
+        args: serde_json::Value,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.to_call_tool_result(tool_name, Ok(args)).await
     }
 
     #[tool(name = "query", description = "Run a canned structured DB query.")]
@@ -95,8 +133,11 @@ impl McpFrontend {
     }
 
     #[tool(name = "list_tables", description = "List tokenized table names.")]
-    async fn list_tables(&self) -> Result<CallToolResult, ErrorData> {
-        self.to_call_tool_result("list_tables", Ok(serde_json::json!({})))
+    async fn list_tables(
+        &self,
+        Parameters(args): Parameters<ListTablesArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.to_call_tool_result("list_tables", serde_json::to_value(args))
             .await
     }
 
@@ -128,6 +169,9 @@ impl McpFrontend {
             Ok(result) => serde_json::to_string(&result)
                 .map(|json| CallToolResult::success(vec![Content::text(json)]))
                 .map_err(|err| ErrorData::internal_error(err.to_string(), None)),
+            Err(err) if err.is_invalid_params() => {
+                Err(ErrorData::invalid_params(sanitize_error(&err), None))
+            }
             Err(err) => Err(ErrorData::internal_error(sanitize_error(&err), None)),
         }
     }

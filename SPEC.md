@@ -21,7 +21,7 @@ Developer mid-incident. AI agent (Claude Code, Cursor, Codex, custom) running on
 ## Architecture
 
 - **`gaze-lens` binary on the engineer's laptop.** Zero server-side install required at v1 — adoption-blocker for devs without prod-install rights.
-- **MCP server is the primary surface** (stdio). Agent connects, calls tools, gets pseudonymized results. CLI is secondary, for humans to dry-run, replay sessions, configure profiles.
+- **MCP server is the primary surface** (stdio). Agent connects, calls tools, gets pseudonymized results. CLI is secondary, for humans to dry-run, replay sessions, configure profiles. **A single `gaze-lens serve` process exposes all configured profiles; each MCP tool call carries a required `profile` argument selecting which configured source to dispatch.** (D17)
 - **`gaze-lens` owns connections + creds.** Reads from existing tooling (`.env`, Doppler, Vault, `~/.ssh/config`). Agent never sees raw connection strings.
 - **Powered by Gaze engine** (closed-source dependency) for pseudonymization, audit log, restore manifest.
 - **Pluggable spine** — source trait + frontend trait + shared session/manifest core. v1 fills DB+log sources behind an MCP frontend; v1.x adds new sources/frontends additively.
@@ -30,6 +30,18 @@ Developer mid-incident. AI agent (Claude Code, Cursor, Codex, custom) running on
 ### Session lifecycle
 
 Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets v1.x add a long-running daemon mode (for SDK push ingest) without rewriting session/audit/restore.
+
+### MCP server
+
+A single `gaze-lens serve` process binds to one MCP entry per host and exposes all configured profiles. (D17)
+
+- **One process, all profiles.** `init` writes a single MCP entry: `{ command: "gaze-lens", args: ["serve"] }`. Per-profile MCP entries from v0.2.x are deprecated; `init` rerun detects and offers to migrate them.
+- **Required `profile` argument.** Every MCP tool call carries `profile: string` selecting the source. No default. Empty / unknown profile rejected as MCP `InvalidParams` with the loaded profile list in the error message.
+- **Eager parse, lazy connect.** All profile TOML, policy files, and Gaze pipelines validated at process start. Source connections (sqlx pools, SSH validation) are deferred to first tool call referencing the profile and cached for the process lifetime. Profile reload requires restart.
+- **Single Session, per-profile Pipeline.** One shared `gaze::Session` (one `lens_session_id`) with a per-profile `gaze::Pipeline` registry. Cross-profile token correlation is intentional: the same input redacts to the same token across profiles (Conversation scope semantics, D10).
+- **Profile arg flows through `Pipeline::redact` (D7).** Routing extracts `profile` raw before redaction; the full args (with `profile` field intact) flow into `redact_args` and the manifest. Tokenized in storage, raw at dispatch.
+- **Source-class compatibility checked.** Calling `query`/`schema`/`list_tables` with a log profile (or `log_tail`/`log_grep` with a DB profile) returns `InvalidParams` with a structured profile-class mismatch error.
+- **Restrict-list `--profile`.** `gaze-lens serve --profile A --profile B` exposes only the listed profiles. Empty = all configured. Backward compatible with v0.2.x `serve --profile <name>` single-profile MCP entries (the existing entry becomes a one-element restrict-list).
 
 ## Threat model
 
@@ -48,6 +60,7 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 - **SSH-side credential compromise.** gaze-lens reuses `~/.ssh/config` and the SSH agent; auth is the operator's responsibility.
 - **Database write privilege.** gaze-lens never writes; the DB user MUST be configured read-only at the database side.
 - **Backups.** Snapshot files are not auto-uploaded; operator is responsible for excluding `~/.gaze-lens/` from cloud backups if their threat model requires it.
+- **Cross-profile token correlation.** A single MCP process running multiple profiles shares one `gaze::Session` snapshot; tokens for entities appearing in profile A and profile B collide deterministically. This is the same correlation an operator gets from running two CLI `query` calls in one Conversation-scope session and is acceptable per D10. Operators who need disjoint token spaces across profiles must run separate `gaze-lens serve` processes (one per profile group) until v2 introduces per-profile session scoping.
 
 ### v1 stop-gates
 
@@ -55,8 +68,8 @@ Session-core lifecycle is decoupled from MCP-stdio process lifecycle. This lets 
 
 ## v1 sources (cut tight)
 
-1. **DB queries** — sqlx-backed (MySQL / Postgres / SQLite). Read-only. v1 query is a **canned structured shape** (`{table, columns?, where?, order_by?, limit?}`) compiled to safe parameterized SQL by gaze-lens. **No raw SQL strings in v1.** Raw SQL behind opt-in profile flag is a v1.x candidate. MCP tools: `query`, `schema`, `list_tables`. (D5, D1)
-2. **App logs** — plain file tail / grep over SSH. `gaze-lens` shells out to `ssh user@host tail -n 500 /var/log/app.log` (or `grep`), streams stdout, pseudonymizes per Gaze policy. Remote tail/grep is implemented as gaze-lens-local SSH command construction with strict shell-quoting and `--`-separated host arguments — not as a lift of debug-proxy code. (D16) MCP tools: `log_tail`, `log_grep`.
+1. **DB queries** — sqlx-backed (MySQL / Postgres / SQLite). Read-only. v1 query is a **canned structured shape** (`{table, columns?, where?, order_by?, limit?}`) compiled to safe parameterized SQL by gaze-lens. **No raw SQL strings in v1.** Raw SQL behind opt-in profile flag is a v1.x candidate. MCP tools: `query`, `schema`, `list_tables`. All three accept a required `profile: string` argument selecting the configured DB profile. (D5, D1)
+2. **App logs** — plain file tail / grep over SSH. `gaze-lens` shells out to `ssh user@host tail -n 500 /var/log/app.log` (or `grep`), streams stdout, pseudonymizes per Gaze policy. Remote tail/grep is implemented as gaze-lens-local SSH command construction with strict shell-quoting and `--`-separated host arguments — not as a lift of debug-proxy code. (D16) MCP tools: `log_tail`, `log_grep`. Both accept a required `profile: string` argument selecting the configured ssh_log profile.
 
 ## CLI subcommand surface
 
@@ -88,6 +101,13 @@ merged_auto_purge = project.auto_purge && user.auto_purge
 Plain conjunction. If the project file does not enable `auto_purge`, the user file cannot override to `true`. If the project file enables `auto_purge`, the user file may downgrade to warn-only by setting `auto_purge = false`. Consent for a destructive operational policy must be expressed at the team-shared (project) layer.
 
 `snapshot_retention_days` itself merges by user-overrides-project (standard merge); the destructive-conjunction rule applies only to `auto_purge`.
+
+**Multi-profile process retention bound.** When `gaze-lens serve` loads multiple profiles, snapshot retention is bound by the most-restrictive policy across loaded profiles, computed in addition to the per-profile project×user merge:
+
+- `snapshot_retention_days = min(days)` over the loaded set; `None` is treated as +∞.
+- `auto_purge` is a plain conjunction across loaded profiles; if any loaded profile resolves `auto_purge = false`, the process runs warn-only.
+
+Shared snapshot_dir means the sweep affects all profiles' replay. Most-restrictive merge is the only safe boundary — never escalate destructiveness silently.
 
 ## Anti-features (locked)
 

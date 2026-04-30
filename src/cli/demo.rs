@@ -53,17 +53,23 @@ pub async fn run_with_workdir(workdir: &Path) -> Result<DemoOutcome, LensError> 
     let policy = policy_file.to_gaze_policy().map_err(policy_err)?;
     let pipeline = build_demo_pipeline()?;
 
-    let session = Arc::new(Session::new_with_pipeline(
+    let session = Arc::new(Session::new_with_pipeline_for_profile(
         &policy,
         pipeline,
+        "demo",
         &manifest_path,
         &snapshot_dir,
     )?);
-    session.register_fake_source("query", Box::new(DemoSource));
+    session.register_fake_source_for_profile(
+        crate::session::SourceClass::Database,
+        "demo",
+        Box::new(DemoSource),
+    );
 
     let lens_session_id = session.lens_session_id().to_string();
     let call_id = ulid::Ulid::new().to_string();
     let args = serde_json::json!({
+        "profile": "demo",
         "table": "users",
         "limit": 5,
     });

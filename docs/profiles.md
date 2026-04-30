@@ -52,6 +52,29 @@ gaze-lens --project-config .gaze-lens.toml check --profile prod
 
 `check` has no manifest or snapshot side effects.
 
+## Multi-profile MCP server
+
+`gaze-lens serve` loads every configured profile by default and exposes them
+through one MCP server entry. Each MCP tool call must include `profile` with one
+of the loaded names:
+
+```json
+{"profile": "prod", "table": "users", "limit": 5}
+```
+
+Use `gaze-lens serve --profile prod --profile staging` to restrict a server
+process to a subset. Existing `serve --profile prod` entries remain valid as a
+one-profile restrict-list, but the MCP tool schemas still require `profile`.
+
+Startup eagerly parses TOML, validates profile names, validates policy files,
+and builds Gaze pipelines. Source connections are lazy: DB pools and SSH log
+sources are created on first tool call for that profile and cached for the
+process lifetime.
+
+When multiple profiles are loaded, snapshot retention uses the most restrictive
+loaded policy: minimum `snapshot_retention_days` and the least destructive
+`auto_purge` value.
+
 ## Init merge semantics
 
 `gaze-lens init` is additive by design. When a project or user profile file already exists, the init writer:

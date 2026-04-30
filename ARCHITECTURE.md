@@ -70,14 +70,21 @@ pub trait Frontend: Send + Sync {
 
 From plan rev 2 §4 PR1 acceptance.
 
-- `Session` owns `gaze::Session`, `gaze::Pipeline`, source maps, `ManifestWriter`.
+- `Session` owns one shared `gaze::Session`, a per-profile `gaze::Pipeline` registry, a source map keyed by `(SourceClass, profile_name) -> Arc<LazySource>`, and `ManifestWriter`.
 - Session is **decoupled from MCP stdio** — constructible without any frontend.
 - `dispatch_tool(call)` flow:
+  0. Extract `profile` from `call.args` raw (mode-aware: required in MultiProfile, defaults to configured name in SingleProfile); resolve `(tool_kind(tool), profile) -> Arc<LazySource>`; resolve `profile -> Arc<gaze::Pipeline>`.
   1. `manifest.begin_call(&call)` — fail-closed.
   2. Adapter returns raw values/text.
   3. `Pipeline::redact(&gaze_session, RawDocument::*)` produces clean output and `SqliteLogger` metadata.
   4. `manifest.finish_call(...)` stores tokenized args, status, result summary, snapshot reference.
   5. If begin/finish fails, no raw output is returned.
+
+### Multi-profile session map
+
+`gaze-lens serve` eagerly parses every selected profile, validates each runtime policy, and builds one `gaze::Pipeline` per profile before starting the MCP stdio server. It does not open DB pools or validate SSH reachability at startup. Source construction is lazy: the first tool call for a `(SourceClass, profile_name)` pair initializes the corresponding `LazySource` through `tokio::sync::OnceCell`, and concurrent first calls await the same initializer.
+
+The MCP frontend still delegates to `Session::dispatch_tool(call)` with the original call args. The required `profile` argument is extracted inside `Session` before redaction for routing, but the same field remains in the args passed to `redact_args`, so the manifest stores the tokenized profile value rather than raw operator text.
 
 ### Manifest schema versioning
 

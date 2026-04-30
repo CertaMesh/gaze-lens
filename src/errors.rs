@@ -54,6 +54,20 @@ pub enum LensError {
     ProfileNotFound { label: String, path: PathBuf },
     #[error("profile error: {detail}")]
     Profile { detail: String },
+    #[error("profile `{profile}` not found; loaded: {loaded:?}")]
+    ProfileUnknown {
+        profile: String,
+        loaded: Vec<String>,
+    },
+    #[error(
+        "profile `{profile}` is a {actual} source; tool `{tool}` requires a {required} profile"
+    )]
+    ProfileMismatch {
+        profile: String,
+        tool: String,
+        required: String,
+        actual: String,
+    },
     #[error(
         "batch write partial failure on {failed}: {applied} applied, {pending} pending, {source}",
         failed = .failed.display(),
@@ -72,6 +86,19 @@ pub enum LensError {
     Truncated(TruncatedAt),
     #[error("internal error: {detail}")]
     Internal { detail: String },
+}
+
+impl LensError {
+    pub fn is_invalid_params(&self) -> bool {
+        matches!(
+            self,
+            LensError::Profile { .. }
+                | LensError::ProfileEnvMissing { .. }
+                | LensError::ProfileNotFound { .. }
+                | LensError::ProfileUnknown { .. }
+                | LensError::ProfileMismatch { .. }
+        )
+    }
 }
 
 pub fn sanitize_error(err: &LensError) -> String {
@@ -103,6 +130,19 @@ pub fn sanitize_error(err: &LensError) -> String {
             format!("ProfileNotFound: {label} not found: {}", path.display())
         }
         LensError::Profile { detail } => format!("Profile: {detail}"),
+        LensError::ProfileUnknown { profile, loaded } => {
+            format!("ProfileUnknown: profile `{profile}` not found; loaded: {loaded:?}")
+        }
+        LensError::ProfileMismatch {
+            profile,
+            tool,
+            required,
+            actual,
+        } => {
+            format!(
+                "ProfileMismatch: profile `{profile}` is a {actual} source; tool `{tool}` requires a {required} profile"
+            )
+        }
         LensError::BatchPartial {
             applied, pending, ..
         } => {

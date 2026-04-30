@@ -351,7 +351,7 @@ fn choose_mcp_targets<P: Prompter>(
             client,
             path,
             command: "gaze-lens".to_string(),
-            args: vec!["serve".into(), "--profile".into(), name.to_string()],
+            args: vec!["serve".into()],
             profile_name: name.to_string(),
         });
     }

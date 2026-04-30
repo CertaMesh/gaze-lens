@@ -58,6 +58,7 @@ async fn db_source_wrapper_routes_query_calls() {
             call_id: "call-1".to_string(),
             tool_name: "query".to_string(),
             args: ToolArgs(serde_json::json!({
+                "profile": "test",
                 "table": "users",
                 "columns": ["email"],
                 "limit": 1

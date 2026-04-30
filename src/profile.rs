@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 
@@ -103,6 +104,19 @@ impl Profile {
             }
         };
         std::env::var(env).map_err(|_| LensError::ProfileEnvMissing { env: env.clone() })
+    }
+}
+
+pub(crate) fn validate_profile_name(name: &str) -> Result<(), LensError> {
+    static PROFILE_NAME: OnceLock<regex::Regex> = OnceLock::new();
+    let regex = PROFILE_NAME
+        .get_or_init(|| regex::Regex::new(r"^[a-z0-9][a-z0-9_-]{0,63}$").expect("profile regex"));
+    if regex.is_match(name) {
+        Ok(())
+    } else {
+        Err(LensError::Profile {
+            detail: format!("invalid profile name `{name}`; expected ^[a-z0-9][a-z0-9_-]{{0,63}}$"),
+        })
     }
 }
 

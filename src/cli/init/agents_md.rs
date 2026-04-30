@@ -22,7 +22,10 @@ pub fn render_agents_md_patch(
     existing: Option<&str>,
     profile_name: &str,
 ) -> Result<String, RenderError> {
-    let snippet = SNIPPET_TEMPLATE.replace("{{PROFILE}}", profile_name);
+    let profiles = format!("`{profile_name}`");
+    let snippet = SNIPPET_TEMPLATE
+        .replace("{{PROFILES}}", &profiles)
+        .replace("{{FIRST_PROFILE}}", profile_name);
     let block = format!("{START_MARKER}\n{snippet}\n{END_MARKER}\n");
 
     let Some(existing) = existing else {
