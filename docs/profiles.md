@@ -7,7 +7,7 @@ Profiles are loaded from two TOML files:
 
 When both files define the same profile, the project file owns PII policy and schema policy, while the user file owns transport overrides. In practice:
 
-- Project wins for `policy`, `schema_allowlist`, database name, username, password env name, and read-only requirement.
+- Project wins for `policy`, `schema_allowlist`, database name, username, secret reference, and read-only requirement.
 - User wins for host, port, SSH host, local forwarded port, and local SQLite path when supplied.
 
 This lets teams commit the PII policy while each operator keeps laptop-specific transport in their home directory.
@@ -40,6 +40,38 @@ password_env = "GAZE_LENS_DB_PASSWORD"
 readonly_required = true
 ```
 
+## Database Secrets
+
+Database profiles support exactly one password reference:
+
+- `password_env = "GAZE_LENS_DB_PASSWORD"` for the legacy environment-variable backend.
+- `secret = { type = "env", var = "GAZE_LENS_DB_PASSWORD" }` for the explicit env backend form.
+- `secret = { type = "keyring", service = "gaze-lens", account = "prod" }` for the native OS keyring backend.
+
+Existing profiles that use `password_env` continue to parse unchanged. New profiles should prefer `secret` because it makes the selected backend explicit. A profile that sets both `password_env` and `secret`, or neither for a MySQL/Postgres source, is rejected at load time.
+
+`gaze-lens` never accepts or renders a literal `password = "..."` profile field. Profile validation rejects that key before merge, including inline-table forms, so secret bytes do not land in `.gaze-lens.toml` or `~/.gaze-lens/profiles.toml`.
+
+Keyring profiles store only the keyring locator in TOML:
+
+```toml
+[[profiles]]
+name = "prod"
+policy = "./gaze-policy.toml"
+schema_allowlist = ["id", "created_at", "updated_at"]
+
+[profiles.source]
+kind = "postgres"
+host = "prod-db.internal"
+port = 5432
+database = "app"
+username = "gaze_ro"
+secret = { type = "keyring", service = "gaze-lens", account = "prod" }
+readonly_required = true
+```
+
+On macOS, Windows, and desktop Linux with an unlocked Secret Service provider, `secret.type = "keyring"` resolves through the platform keyring. On bare servers, containers, headless Linux sessions without DBus / Secret Service, or locked keyrings, use `password_env`; `check` reports the keyring backend as unavailable instead of synthesizing a DBus session.
+
 ## Check
 
 Run `check` before serving MCP or running a CLI query:
@@ -48,7 +80,16 @@ Run `check` before serving MCP or running a CLI query:
 gaze-lens --project-config .gaze-lens.toml check --profile prod
 ```
 
-`check` validates profile parsing, policy parsing, Gaze pipeline construction, and the source connection. Database profiles perform a read-only connection and table-list ping. SSH log profiles perform command-construction validation without tailing remote logs.
+`check` validates profile parsing, policy parsing, Gaze pipeline construction, secret backend reachability, and the source connection. Database profiles perform a read-only connection and table-list ping. SSH log profiles perform command-construction validation without tailing remote logs.
+
+Secret validation prints a distinct status before the source ping:
+
+- `secret: ok (...)` when the configured backend resolves.
+- `secret: NOT FOUND (...)` when the referenced env var or keyring entry is absent.
+- `secret: ACCESS DENIED (...)` when the keyring rejects access.
+- `secret: BACKEND UNAVAILABLE (...)` when the platform keyring backend cannot be reached.
+
+Secret status output names the backend and locator only; it never prints password bytes.
 
 `check` has no manifest or snapshot side effects.
 
@@ -84,7 +125,9 @@ loaded policy: minimum `snapshot_retention_days` and the least destructive
 - **Skips writes** when the rendered TOML matches the on-disk bytes (CB7 byte-compare). Rerunning with identical inputs prints `no changes` and exits 0.
 - **Writes atomically**: each destination is staged as `<dest>.tmp.<pid>`, fsynced, renamed, and the parent directory fsynced. A failure mid-batch surfaces as `LensError::BatchPartial { applied, pending, failed, source }` so operators see what landed and what didn't.
 
-`init` never writes a `password = "..."` line. Database connections rely on `password_env`; the operator sets the env var separately. The rendered profile honors the project-vs-user role split documented above: `init --scope project` refuses to set transport overrides like `host` / `port` for security-sensitive defaults, and `init --scope user` refuses to set policy or `auto_purge`.
+`init` never writes a `password = "..."` line. Database connections rely on either `password_env` or `source.secret`; for keyring profiles the rendered file contains only `service` and `account`. When `init --secret-backend keyring` writes a password, it first performs a keyring round-trip preflight, refuses to replace an existing different entry unless `--allow-overwrite` (or `--write-all`) is set, verifies the written value with a read-back, and then writes the profile atomically. If the keyring write succeeds but the profile commit fails, `init` reports the orphaned keyring locator so the operator can rerun after fixing the file issue or delete the entry manually.
+
+The rendered profile honors the project-vs-user role split documented above: `init --scope project` refuses to set transport overrides like `host` / `port` for security-sensitive defaults, and `init --scope user` refuses to set policy or `auto_purge`.
 
 `auto_purge` is gated to `--scope project-auto-purge`. Any other scope leaves the rendered TOML without an `auto_purge` line (default = `off`). Project-only opt-in matches the merge rule documented in `src/profile.rs:325-341`: profiles defined ONLY in the user file are forced to `Off` regardless of any value set there.
 
