@@ -106,6 +106,36 @@ impl Profile {
     }
 }
 
+/// MS1 (rev 3): in-memory parse of generated profile TOML BEFORE `atomic_write`
+/// renames it onto disk. Returns `LensError::Profile` with the same
+/// `failed to parse {label} {path} at line N, column M: {err}` format as the
+/// on-disk loader (`tests/profile.rs:155-177` bar).
+///
+/// Used by `src/cli/init/mod.rs::commit_plan` to preserve the no-bad-TOML-on-disk
+/// guarantee Codex's r1 insurance directive intended.
+pub fn validate_profile_bytes(bytes: &[u8], dest_label: &Path) -> Result<(), LensError> {
+    let input = std::str::from_utf8(bytes).map_err(|err| LensError::Profile {
+        detail: format!(
+            "generated profile bytes for {} are not utf-8: {err}",
+            dest_label.display()
+        ),
+    })?;
+    // Reuses the same internal `ProfileFile` deserializer as `read_profiles_if_exists`
+    // so error format matches the existing test bar.
+    let _file: ProfileFile = match toml::from_str(input) {
+        Ok(f) => f,
+        Err(err) => {
+            return Err(profile_parse_error(
+                "rendered profile",
+                dest_label,
+                input,
+                err,
+            ));
+        }
+    };
+    Ok(())
+}
+
 pub fn load_profiles(
     project_config: Option<&Path>,
     user_config: Option<&Path>,

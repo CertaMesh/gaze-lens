@@ -1,0 +1,6 @@
+--- profile: /tmp/gaze-lens-init-print-only-user.toml (user) ---
+name = "demo"
+kind = ssh_log
+path = /var/log/app.log
+host = logs.example.com
+--- mcp targets (0) ---

@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance for AI agents (Claude Code, Codex, Cursor, etc.) when working with code in this repository.
 
 `gaze-lens` is a v0.1 PII-safe read-access tool for live production investigation by AI agents, built on the Gaze pseudonymization engine.
 
@@ -9,9 +9,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The product surface is exactly:
 
 - **5 MCP tools:** `query`, `schema`, `list_tables`, `log_tail`, `log_grep`.
-- **5 CLI subcommands:** `serve`, `init`, `query`, `replay`, `check`.
+- **6 CLI subcommands:** `serve`, `init`, `query`, `replay`, `check`, `demo`.
 
-Adding a 6th tool or subcommand requires a SPEC amendment PR, not an impl PR. Internal helpers are fine; do not wire them through `frontend::mcp::McpFrontend` without updating [SPEC.md](./SPEC.md).
+`demo` is a CLI-only inline-replay helper introduced in v0.2.0; it tokenizes a canned in-memory dataset and inline-restores it without persistent state. Adding a 7th subcommand or new MCP tool requires a SPEC amendment PR, not an impl PR. Internal helpers are fine; do not wire them through `frontend::mcp::McpFrontend` without updating [SPEC.md](./SPEC.md).
 
 ## Non-negotiables
 
