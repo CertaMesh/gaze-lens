@@ -17,7 +17,7 @@ use crate::errors::LensError;
 use crate::source::db::TableSchema;
 use crate::source::db::schema::SchemaTokenizer;
 use crate::source::{FakeSource, FakeSourceAdapter, Source, SourceOutput, ToolArgs};
-use crate::value::{LensRow, LensValue, LowerError};
+use crate::value::{LensRow, LensValue, LowerError, gaze_value_to_json};
 
 pub mod maintenance;
 pub mod manifest;
@@ -661,10 +661,11 @@ impl Session {
             let mut out = serde_json::Map::new();
             for (key, value) in redacted_row {
                 if let Some(redacted) = redacted_fields.get(&key) {
+                    let cell = gaze_value_to_json(redacted)?;
                     insert_capped_cell(
                         &mut out,
                         key,
-                        redacted.clone(),
+                        cell,
                         &mut truncated_at,
                         self.inner.caps.cell_bytes,
                     )?;
