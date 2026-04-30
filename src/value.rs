@@ -252,6 +252,7 @@ mod tests {
         match lowered {
             gaze::Value::String(text) => assert_eq!(text, "alice@example.com"),
             gaze::Value::I64(_) => panic!("expected string"),
+            _ => panic!("unexpected gaze::Value variant from lower_for_redaction"),
         }
     }
 
@@ -262,6 +263,7 @@ mod tests {
         match lowered {
             gaze::Value::String(text) => assert_eq!(text, "alice@example.com"),
             gaze::Value::I64(_) => panic!("expected string"),
+            _ => panic!("unexpected gaze::Value variant from lower_for_redaction"),
         }
     }
 
@@ -296,6 +298,7 @@ mod tests {
         match lowered {
             gaze::Value::I64(value) => assert_eq!(value, -42),
             gaze::Value::String(_) => panic!("expected i64"),
+            _ => panic!("unexpected gaze::Value variant from lower_for_redaction"),
         }
     }
 

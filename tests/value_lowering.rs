@@ -58,6 +58,7 @@ fn lowers_strings_for_redaction() {
     match lowered {
         gaze::Value::String(text) => assert_eq!(text, "alice@example.com"),
         gaze::Value::I64(_) => panic!("expected gaze string"),
+        _ => panic!("unexpected gaze::Value variant from lower_for_redaction"),
     }
 }
 
@@ -71,6 +72,7 @@ fn lowers_string_json_for_redaction() {
     match lowered {
         gaze::Value::String(text) => assert_eq!(text, "alice@example.com"),
         gaze::Value::I64(_) => panic!("expected gaze string"),
+        _ => panic!("unexpected gaze::Value variant from lower_for_redaction"),
     }
 }
 
@@ -105,6 +107,7 @@ fn lowers_i64_for_redaction() {
     match lowered {
         gaze::Value::I64(value) => assert_eq!(value, -10),
         gaze::Value::String(_) => panic!("expected gaze i64"),
+        _ => panic!("unexpected gaze::Value variant from lower_for_redaction"),
     }
 }
 
