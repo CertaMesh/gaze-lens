@@ -248,6 +248,36 @@ fn keyring_real_write_then_file_commit_fail_emits_orphan_warning() {
     assert!(!warning.contains("orphan-warning-secret"), "{warning}");
 }
 
+#[test]
+fn run_print_only_with_keyring_performs_zero_side_effects() {
+    install_builder();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut args, env) = keyring_args(&dir);
+    args.print_only = true;
+    let service = args.source_password_keyring_service.clone().unwrap();
+    let account = args.source_password_keyring_account.clone().unwrap();
+    let mut p = FakePrompter::new()
+        .with_confirm(true)
+        .with_password("print-only-secret");
+    let mut out = Vec::new();
+
+    run_with_prompter_for_test(&args, &env, &mut p, &mut out).expect("print-only run");
+
+    assert_eq!(get_secret(&service, &account), None);
+    assert_eq!(
+        set_count(&service, &account),
+        0,
+        "print-only must not call set_password"
+    );
+    assert!(
+        !env.home.join(".gaze-lens").join("profiles.toml").exists(),
+        "profile file must not be written"
+    );
+    let preview = String::from_utf8(out).expect("utf8 preview");
+    assert!(preview.contains("profile:"), "{preview}");
+    assert!(!preview.contains("print-only-secret"), "{preview}");
+}
+
 #[derive(Debug)]
 struct PersistentBuilder;
 
