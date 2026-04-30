@@ -30,10 +30,14 @@ fi
 
 zero="0000000000000000000000000000000000000000"
 push_has_refs=0
+all_deletes=1
 changed_files=""
 
 while read -r local_ref local_sha remote_ref remote_sha; do
   push_has_refs=1
+  if [[ "$local_sha" != "$zero" ]]; then
+    all_deletes=0
+  fi
   if [[ "$local_sha" == "$zero" ]]; then
     continue
   fi
@@ -51,6 +55,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     changed_files+="${range_files}"$'\n'
   fi
 done
+
+if [[ "$push_has_refs" == "1" && "${FORCE_FULL_GATE:-0}" != "1" && "$all_deletes" == "1" ]]; then
+  echo "▶  pre-push gate: delete-only push detected — skipping cargo gates."
+  echo "   Override with FORCE_FULL_GATE=1 git push to run gates anyway."
+  exit 0
+fi
 
 if [[ "$push_has_refs" == "1" && "${FORCE_FULL_GATE:-0}" != "1" && -n "$changed_files" ]]; then
   is_docs_only=1
