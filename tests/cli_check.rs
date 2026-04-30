@@ -805,6 +805,11 @@ fn sqlite_profile(name: &str, path: std::path::PathBuf) -> Profile {
             json_text_columns: Vec::new(),
         },
         policy: None,
+        discovered_from_ssh_host: None,
+        discovered_from_path: None,
+        discovered_at: None,
+        discovered_ssh_host_key_fingerprint: None,
+        credential_class: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
@@ -826,6 +831,11 @@ fn postgres_env_profile(name: &str, env: &str) -> Profile {
             readonly_required: true,
         },
         policy: None,
+        discovered_from_ssh_host: None,
+        discovered_from_path: None,
+        discovered_at: None,
+        discovered_ssh_host_key_fingerprint: None,
+        credential_class: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
@@ -833,7 +843,8 @@ fn postgres_env_profile(name: &str, env: &str) -> Profile {
 }
 
 fn random_hex_32_bytes() -> String {
-    format!("{}{}", ulid::Ulid::new(), ulid::Ulid::new())
+    let bytes: [u8; 32] = rand::random();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn write_keyring_profile(path: &std::path::Path, name: &str, service: &str, account: &str) {
