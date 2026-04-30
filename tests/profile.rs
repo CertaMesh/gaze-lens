@@ -100,8 +100,8 @@ fn two_file_merge_with_transport_collision_user_wins() {
     }
 }
 
-#[test]
-fn password_env_is_resolved_at_connection_time_not_load_time() {
+#[tokio::test]
+async fn password_env_is_resolved_at_connection_time_not_load_time() {
     let temp = tempfile::tempdir().expect("tempdir");
     let project = temp.path().join("project.toml");
     write(
@@ -122,13 +122,13 @@ fn password_env_is_resolved_at_connection_time_not_load_time() {
     }
 
     assert_eq!(
-        profile.resolve_password().expect("password").as_str(),
+        profile.resolve_password().await.expect("password").as_str(),
         "secret-at-connect"
     );
 }
 
-#[test]
-fn missing_env_var_reports_env_name_without_raw_value() {
+#[tokio::test]
+async fn missing_env_var_reports_env_name_without_raw_value() {
     let temp = tempfile::tempdir().expect("tempdir");
     let project = temp.path().join("project.toml");
     write(
@@ -144,7 +144,7 @@ fn missing_env_var_reports_env_name_without_raw_value() {
     }
 
     let profile = load_profile("prod", Some(&project), None).expect("profile");
-    let err = profile.resolve_password().expect_err("missing env");
+    let err = profile.resolve_password().await.expect_err("missing env");
 
     assert!(matches!(
         err,

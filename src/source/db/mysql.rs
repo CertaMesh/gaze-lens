@@ -53,7 +53,7 @@ impl MysqlSource {
                 ),
             });
         }
-        let password = profile.resolve_password()?;
+        let password = profile.resolve_password().await?;
         let options = MySqlConnectOptions::new()
             .host(host)
             .port(*port)

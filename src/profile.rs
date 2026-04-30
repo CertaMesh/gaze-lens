@@ -101,7 +101,7 @@ struct ProfileShape {
 }
 
 impl Profile {
-    pub fn resolve_password(&self) -> Result<Zeroizing<String>, LensError> {
+    pub async fn resolve_password(&self) -> Result<Zeroizing<String>, LensError> {
         let (legacy_env, secret) = match &self.source {
             SourceSpec::Mysql {
                 password_env,
@@ -134,9 +134,22 @@ impl Profile {
             (Some(env), None) | (None, Some(SecretSpec::Env { var: env })) => std::env::var(env)
                 .map(Zeroizing::new)
                 .map_err(|_| LensError::ProfileEnvMissing { env: env.clone() }),
-            (None, Some(SecretSpec::Keyring { .. })) => Err(LensError::FeatureDeferred(
-                "keyring secret backend resolution deferred until async resolver phase".into(),
-            )),
+            (None, Some(SecretSpec::Keyring { service, account })) => {
+                let service = service.clone();
+                let account = account.clone();
+                tokio::task::spawn_blocking(move || {
+                    let entry = keyring::Entry::new(&service, &account)
+                        .map_err(|err| map_keyring_error(err, &service, &account))?;
+                    entry
+                        .get_password()
+                        .map(Zeroizing::new)
+                        .map_err(|err| map_keyring_error(err, &service, &account))
+                })
+                .await
+                .map_err(|err| LensError::Internal {
+                    detail: format!("keyring lookup task join failed: {err}"),
+                })?
+            }
             (None, None) => Err(LensError::Profile {
                 detail: format!(
                     "profile `{}` has neither `password_env` nor `secret`; one is required for mysql/postgres profiles",
