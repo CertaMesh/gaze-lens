@@ -264,6 +264,38 @@ fn at_rest_surface_uses_passed_manifest_path_not_args_default() {
 }
 
 #[test]
+fn trust_report_text_lists_all_pillars() {
+    let report = gaze_lens::cli::check_trust::TrustReport::stub_for_test("prod");
+    let mut out = Vec::new();
+
+    gaze_lens::cli::check_trust::render_text(&report, &mut out).expect("render");
+    let text = String::from_utf8(out).expect("utf8");
+
+    for header in [
+        "Input surface",
+        "Process surface",
+        "Output surface",
+        "At-rest surface",
+        "Operator handoff",
+    ] {
+        assert!(text.contains(header), "missing {header}: {text}");
+    }
+    assert!(text.contains("raw_sql: disabled (v1 lock, D5)"), "{text}");
+    assert!(text.contains("(see src/session/mod.rs:304)"), "{text}");
+}
+
+#[test]
+fn trust_report_text_warns_on_default_empty_policy() {
+    let report = gaze_lens::cli::check_trust::TrustReport::stub_for_test("prod");
+    let mut out = Vec::new();
+
+    gaze_lens::cli::check_trust::render_text(&report, &mut out).expect("render");
+    let text = String::from_utf8(out).expect("utf8");
+
+    assert!(text.contains("WARN: no recognizer pack"), "{text}");
+}
+
+#[test]
 fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");

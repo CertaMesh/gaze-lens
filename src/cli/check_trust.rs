@@ -7,6 +7,7 @@
 use clap::ValueEnum;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::io::Write;
 use std::path::Path;
 
 use crate::errors::LensError;
@@ -413,6 +414,176 @@ pub fn recognizer_pack_from_parsed(
     }
 }
 
+pub fn render_text(report: &TrustReport, out: &mut dyn Write) -> std::io::Result<()> {
+    if report.output_surface.recognizer_pack.default_empty {
+        writeln!(
+            out,
+            "WARN: no recognizer pack - running with default-empty policy"
+        )?;
+    }
+    writeln!(out, "Trust report v{}", report.report_version)?;
+    writeln!(out, "profile: {}", report.profile)?;
+    writeln!(out)?;
+
+    writeln!(out, "Input surface")?;
+    writeln!(
+        out,
+        "mcp_tools: {}",
+        report.input_surface.mcp_tools.join(", ")
+    )?;
+    writeln!(
+        out,
+        "cli_subcommands: {}",
+        report.input_surface.cli_subcommands.join(", ")
+    )?;
+    writeln!(out, "query_mode: {}", report.input_surface.query_mode)?;
+    writeln!(out, "raw_sql: {}", report.input_surface.raw_sql)?;
+    writeln!(out, "source_kind: {}", report.input_surface.source_kind)?;
+    writeln!(
+        out,
+        "sqlite_json_text_policy: {}",
+        format_optional_list(report.input_surface.sqlite_json_text_policy.as_ref())
+    )?;
+    writeln!(
+        out,
+        "evidence: {}",
+        evidence_refs(&report.input_surface.code_evidence)
+    )?;
+    writeln!(out)?;
+
+    writeln!(out, "Process surface")?;
+    writeln!(
+        out,
+        "process_model: {}",
+        report.process_surface.process_model
+    )?;
+    writeln!(
+        out,
+        "profile_under_review: {}",
+        report.process_surface.profile_under_review
+    )?;
+    writeln!(
+        out,
+        "serve_default_scope: {}",
+        report.process_surface.serve_default_scope
+    )?;
+    writeln!(
+        out,
+        "cross_profile_correlation: {}",
+        report.process_surface.cross_profile_correlation
+    )?;
+    writeln!(
+        out,
+        "connect_lifecycle: {}",
+        report.process_surface.connect_lifecycle
+    )?;
+    writeln!(
+        out,
+        "evidence: {}",
+        evidence_refs(&report.process_surface.code_evidence)
+    )?;
+    writeln!(out)?;
+
+    writeln!(out, "Output surface")?;
+    writeln!(
+        out,
+        "dispatch_chokepoint: (see {}:{})",
+        report.output_surface.dispatch_chokepoint.file,
+        report.output_surface.dispatch_chokepoint.line
+    )?;
+    writeln!(
+        out,
+        "tool_arg_redaction: {}",
+        report.output_surface.tool_arg_redaction
+    )?;
+    writeln!(
+        out,
+        "table_allowlist: {}",
+        format_optional_list(report.output_surface.schema_policy.table_allowlist.as_ref())
+    )?;
+    writeln!(
+        out,
+        "column_redaction_mode: {}",
+        report.output_surface.schema_policy.column_redaction_mode
+    )?;
+    writeln!(
+        out,
+        "recognizer_pack: {}",
+        report.output_surface.recognizer_pack.source
+    )?;
+    writeln!(
+        out,
+        "recognizer_keys: {}",
+        format_list(&report.output_surface.recognizer_pack.recognizer_keys)
+    )?;
+    writeln!(
+        out,
+        "recognizer_classes: {}",
+        format_list(&report.output_surface.recognizer_pack.recognizer_classes)
+    )?;
+    writeln!(
+        out,
+        "evidence: {}",
+        evidence_refs(&report.output_surface.code_evidence)
+    )?;
+    writeln!(out)?;
+
+    writeln!(out, "At-rest surface")?;
+    writeln!(out, "manifest: {}", report.at_rest_surface.manifest.path)?;
+    writeln!(
+        out,
+        "manifest_mode_ok: {}",
+        format_mode(report.at_rest_surface.manifest.mode_ok)
+    )?;
+    writeln!(
+        out,
+        "snapshot_dir: {}",
+        report.at_rest_surface.snapshot_dir.path
+    )?;
+    writeln!(
+        out,
+        "snapshot_dir_mode_ok: {}",
+        format_mode(report.at_rest_surface.snapshot_dir.mode_ok)
+    )?;
+    writeln!(
+        out,
+        "snapshot_retention_days: {}",
+        report
+            .at_rest_surface
+            .snapshot_retention_days
+            .map(|days| days.to_string())
+            .unwrap_or_else(|| "unlimited".to_string())
+    )?;
+    writeln!(out, "auto_purge: {}", report.at_rest_surface.auto_purge)?;
+    writeln!(
+        out,
+        "snapshot_encryption_at_rest: {}",
+        report.at_rest_surface.snapshot_encryption_at_rest
+    )?;
+    writeln!(
+        out,
+        "secret_backend: {} {}",
+        report.at_rest_surface.secret_backend.backend,
+        report.at_rest_surface.secret_backend.identity
+    )?;
+    writeln!(
+        out,
+        "evidence: {}",
+        evidence_refs(&report.at_rest_surface.code_evidence)
+    )?;
+    writeln!(out)?;
+
+    writeln!(out, "Operator handoff")?;
+    for risk in &report.handoff_surface.residual_risks {
+        writeln!(
+            out,
+            "risk.{}: {} mitigation={}",
+            risk.id, risk.summary, risk.mitigation
+        )?;
+    }
+    Ok(())
+}
+
 fn collect_output_surface(profile: &Profile, recognizer_pack: RecognizerPack) -> OutputSurface {
     let caps = crate::session::OutputCaps::default();
     OutputSurface {
@@ -470,6 +641,34 @@ fn mode_label(mode: u32) -> &'static str {
         0o600 => "0600",
         0o700 => "0700",
         _ => "custom",
+    }
+}
+
+fn evidence_refs(evidence: &[CodeEvidence]) -> String {
+    evidence
+        .iter()
+        .map(|item| format!("(see {}:{})", item.file, item.line))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_optional_list(values: Option<&Vec<String>>) -> String {
+    values.map_or_else(|| "n/a".to_string(), |values| format_list(values))
+}
+
+fn format_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn format_mode(mode_ok: Option<bool>) -> &'static str {
+    match mode_ok {
+        Some(true) => "ok",
+        Some(false) => "mismatch",
+        None => "not present",
     }
 }
 
