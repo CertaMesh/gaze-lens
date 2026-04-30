@@ -47,9 +47,8 @@ fn same_profile_same_command_args_reuses_primary_key() {
 #[test]
 fn same_profile_different_command_collides_without_overwrite() {
     let existing = r#"{"mcpServers":{"gaze-lens":{"command":"/opt/gaze-lens","args":["serve","--profile","dev"]}}}"#;
-    let err =
-        render_claude_code_json(Some(existing), "dev", COMMAND, &args_for("dev"), false)
-            .unwrap_err();
+    let err = render_claude_code_json(Some(existing), "dev", COMMAND, &args_for("dev"), false)
+        .unwrap_err();
     assert!(err.to_string().contains("MCP entry `gaze-lens`"));
 }
 

@@ -135,8 +135,7 @@ fn mcp_enabled_rerun_no_changes_without_suffix() {
     assert!(stdout2.contains("no changes"), "got: {stdout2}");
 
     let mcp: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap()).unwrap();
     let servers = mcp["mcpServers"].as_object().unwrap();
     assert!(servers.contains_key("gaze-lens"));
     assert!(
@@ -187,8 +186,7 @@ fn second_profile_same_client_adds_suffix_without_touching_primary() {
     }
 
     let mcp: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(project.join(".mcp.json")).unwrap()).unwrap();
     let servers = mcp["mcpServers"].as_object().unwrap();
     assert_eq!(servers["gaze-lens"]["args"][2], "alpha");
     assert_eq!(servers["gaze-lens-beta"]["args"][2], "beta");
