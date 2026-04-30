@@ -22,6 +22,22 @@ fn print_only_with_write_all_is_clap_error() {
 }
 
 #[test]
+fn discover_with_print_only_is_clap_error() {
+    let out = bin()
+        .args([
+            "init",
+            "--print-only",
+            "--discover-ssh-host",
+            "deploy@app01",
+            "--discover-env-path",
+            "/var/www/app/.env",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
 fn auto_purge_user_combo_is_clap_unknown_arg() {
     // CB1: there is no `--auto-purge` flag on the post-CB1 surface. The
     // destructive consent rides on `--scope project-auto-purge`. So passing
@@ -219,4 +235,29 @@ fn non_interactive_keyring_without_no_keyring_write_rejects() {
     assert!(detail.contains("--non-interactive"), "{detail}");
     assert!(detail.contains("--secret-backend keyring"), "{detail}");
     assert!(detail.contains("--no-keyring-write"), "{detail}");
+}
+
+#[test]
+fn accept_prod_rw_value_must_match_discover_host() {
+    let mut args = InitArgs::default_for_test();
+    args.profile = Some("p".into());
+    args.non_interactive = true;
+    args.discover_ssh_host = Some("deploy@app01".into());
+    args.discover_env_path = Some("/var/www/app/.env".into());
+    args.accept_prod_rw = Some("deploy@app02".into());
+    let err = args.validate().expect_err("must reject typeback mismatch");
+    assert!(err.to_string().contains("--accept-prod-rw"));
+}
+
+#[test]
+fn non_interactive_discovery_requires_accept_prod_rw() {
+    let mut args = InitArgs::default_for_test();
+    args.profile = Some("p".into());
+    args.non_interactive = true;
+    args.discover_ssh_host = Some("deploy@app01".into());
+    args.discover_env_path = Some("/var/www/app/.env".into());
+    let err = args
+        .validate()
+        .expect_err("must reject noninteractive path b");
+    assert!(err.to_string().contains("--accept-prod-rw"));
 }
