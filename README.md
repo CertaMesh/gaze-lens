@@ -45,7 +45,7 @@ cargo build --release
 ./target/release/gaze-lens demo
 ```
 
-The `gaze` and `gaze-recognizers` crates are wired as local path dependencies during v1 development. See [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-path-dependency) for the expected checkout layout.
+The `gaze` and `gaze-recognizers` crates are wired as git dependencies pinned to a `PIInuts/gaze` tag (currently `v0.6.4`). See [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin) for the pin policy and the local-checkout patch recipe.
 
 `gaze-lens` builds with stable Rust 1.89+.
 

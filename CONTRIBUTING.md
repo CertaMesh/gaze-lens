@@ -30,7 +30,7 @@ Do not bypass for shared branches or tags; the hook exists to keep main and rele
 
 ## Gaze dependency pin
 
-`Cargo.toml` pins `gaze` and `gaze-recognizers` to a specific `PIInuts/gaze` Git revision. Do not silently float to an arbitrary Gaze checkout. When adopting new Gaze features, update the `rev = "..."` SHA in `Cargo.toml` and bump the gaze-lens patch version in the same PR.
+`Cargo.toml` pins `gaze` and `gaze-recognizers` to a `PIInuts/gaze` Git tag with a matching crate version, e.g. `tag = "v0.6.4"` + `version = "0.6.4"`. Do not silently float to an arbitrary Gaze checkout. When adopting new Gaze features, bump both `tag` and `version` together in `Cargo.toml`, run `cargo update -p gaze -p gaze-recognizers` so `Cargo.lock` records the resolved sha, and bump the gaze-lens patch version in the same PR.
 
 Local development can use a local Gaze checkout through a per-developer Cargo patch. Add this to `~/.cargo/config.toml` and do not commit it:
 
@@ -53,7 +53,7 @@ The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured
 
 The release workflow requires a repository secret named `GAZE_REPO_TOKEN` on `PIInuts/gaze-lens` so Cargo can fetch the private `PIInuts/gaze` dependency. Use a fine-grained PAT scoped to `PIInuts/gaze` with read-only repository access, then add it in GitHub under Settings -> Secrets and variables -> Actions -> New repository secret.
 
-The release workflow configures Git to use that token before cargo-dist resolves dependencies. When changing the required Gaze revision, update the `rev = "..."` SHA in `Cargo.toml`, bump the patch version, and call out the Gaze revision in the release PR description.
+The release workflow configures Git to use that token before cargo-dist resolves dependencies. When changing the required Gaze revision, bump the `tag = "..."` + `version = "..."` pair in `Cargo.toml`, refresh `Cargo.lock`, bump the patch version, and call out the Gaze tag in the release PR description.
 
 ## sqlx macro policy (banned for production-source queries)
 

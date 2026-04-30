@@ -58,7 +58,7 @@ cargo run -- serve --profile dev    # MCP stdio server, dev restrict-list
 
 Local pre-push gate runs `fmt --check` + `clippy -D warnings` + `test --all-targets`. See [CONTRIBUTING.md §Local pre-push hook](./CONTRIBUTING.md#local-pre-push-hook).
 
-`gaze` and `gaze-recognizers` are local path-deps under `../../../../Workspace/bets/Gaze/crates/`. Pin the Gaze checkout to a specific tag — see [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-path-dependency).
+`gaze` and `gaze-recognizers` are git deps from `https://github.com/PIInuts/gaze.git`, pinned with `tag = "v0.6.4"` + `version = "0.6.4"`. Local development can patch them to a checkout via `[patch."..."]` in `~/.cargo/config.toml` — see [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin).
 
 Detailed Rust conventions auto-load from `.claude/rules/rust.md` when editing `*.rs` files (paths-frontmatter; no `@import` needed).
 
@@ -103,7 +103,7 @@ For full architectural detail, file-by-file mining verdicts, and the 16 locked d
 
 - [SPEC.md](./SPEC.md) — locked product spec, threat model, anti-features, v1.x / v2 roadmap.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — implementer spine, core traits, session/manifest flow, file-by-file mining verdict.
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — dev workflow, Gaze path-dep pinning, sqlx ban, PR review routing, integration-test feature flags.
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — dev workflow, Gaze git-dep tag pinning, sqlx ban, PR review routing, integration-test feature flags.
 - [docs/profiles.md](./docs/profiles.md) — profile schema, project vs user file precedence, schema policy.
 - [docs/replay.md](./docs/replay.md) — `replay` command usage and snapshot operator controls.
 
