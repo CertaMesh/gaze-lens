@@ -790,6 +790,8 @@ fn run_smoke_check_with_writer(
     };
     let check_args = crate::cli::check::CheckArgs {
         profile: plan.profile_section.name.clone(),
+        explain_risk: false,
+        format: crate::cli::check_trust::TrustFormat::Text,
     };
     let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
         detail: err.to_string(),

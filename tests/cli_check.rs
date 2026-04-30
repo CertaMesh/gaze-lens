@@ -328,6 +328,198 @@ fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
     assert!(!temp.path().join("snapshots").exists());
 }
 
+#[test]
+fn check_without_explain_risk_unchanged_backward_compat() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "profile: ok (local)\npolicy: ok\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
+    );
+}
+
+#[test]
+fn check_explain_risk_text_appends_after_status_lines() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.starts_with(
+        "profile: ok (local)\npolicy: ok\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
+    ), "{stdout}");
+    assert!(stdout.contains("Input surface"), "{stdout}");
+}
+
+#[test]
+fn check_explain_risk_json_emits_only_json_on_stdout() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json stdout");
+    assert_eq!(v["report_version"], 1);
+    let stdout = stdout(&output);
+    assert!(!stdout.contains("profile: ok"), "{stdout}");
+    assert!(stderr(&output).contains("profile: ok (local)"));
+}
+
+#[test]
+fn check_explain_risk_does_not_open_db_connection() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("does-not-exist.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+}
+
+#[test]
+fn check_explain_risk_does_not_call_resolve_password() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    write_keyring_profile(&project, "prod", "missing-service", "missing-account");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "prod",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json stdout");
+    assert_eq!(v["at_rest_surface"]["secret_backend"]["backend"], "keyring");
+    assert!(
+        v["at_rest_surface"]["secret_backend"]["identity"]
+            .as_str()
+            .expect("identity")
+            .contains("service=missing-service")
+    );
+}
+
+#[test]
+fn check_explain_risk_json_fails_loudly_when_pipeline_build_fails() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(
+        &policy,
+        r#"
+        [policy.database]
+        [[policy.database.columns]]
+        column = "email"
+        class = "email"
+        action = "explode"
+        "#,
+    )
+    .expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(!output.status.success(), "stdout: {}", stdout(&output));
+    assert!(output.stdout.is_empty(), "stdout: {}", stdout(&output));
+    assert!(stderr(&output).contains("failed to build policy pipeline"));
+}
+
 #[tokio::test]
 async fn validate_secret_ok_for_keyring_does_not_print_value() {
     install_builder();
@@ -367,6 +559,8 @@ async fn check_run_renders_secret_not_found_then_returns_error() {
     let err = run_with_writer_for_test(
         CheckArgs {
             profile: "prod".into(),
+            explain_risk: false,
+            format: gaze_lens::cli::check_trust::TrustFormat::Text,
         },
         Some(&project),
         None,
@@ -395,6 +589,8 @@ async fn check_run_renders_secret_access_denied_then_returns_error() {
     let err = run_with_writer_for_test(
         CheckArgs {
             profile: "prod".into(),
+            explain_risk: false,
+            format: gaze_lens::cli::check_trust::TrustFormat::Text,
         },
         Some(&project),
         None,
@@ -422,6 +618,8 @@ async fn check_run_renders_secret_backend_unavailable_then_returns_error() {
     let err = run_with_writer_for_test(
         CheckArgs {
             profile: "prod".into(),
+            explain_risk: false,
+            format: gaze_lens::cli::check_trust::TrustFormat::Text,
         },
         Some(&project),
         None,
