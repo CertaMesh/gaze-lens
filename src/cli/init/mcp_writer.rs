@@ -16,6 +16,12 @@ use crate::cli::init::profile_writer::RenderError;
 
 const PRIMARY_KEY: &str = "gaze-lens";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyMigration {
+    PreserveExisting,
+    Migrate,
+}
+
 fn line_column_from_input(input: &str, byte_index: usize) -> (usize, usize) {
     let mut line = 1usize;
     let mut column = 1usize;
@@ -56,6 +62,7 @@ fn ensure_primary_available(
     command: &str,
     cmd_args: &[String],
     allow_overwrite: bool,
+    migration: LegacyMigration,
 ) -> Result<(), RenderError> {
     let Some(primary) = primary else {
         return Ok(());
@@ -65,7 +72,9 @@ fn ensure_primary_available(
         return Ok(());
     }
 
-    if allow_overwrite || primary.is_legacy_profile_entry() {
+    if allow_overwrite
+        || (migration == LegacyMigration::Migrate && primary.is_legacy_profile_entry())
+    {
         return Ok(());
     }
 
@@ -74,22 +83,25 @@ fn ensure_primary_available(
     })
 }
 
-fn legacy_suffix_keys<'a>(entries: impl Iterator<Item = (&'a str, &'a Item)>) -> Vec<String> {
+fn legacy_toml_keys<'a>(entries: impl Iterator<Item = (&'a str, &'a Item)>) -> Vec<String> {
     entries
         .filter_map(|(key, item)| {
             let entry = toml_entry(item)?;
-            (key.starts_with("gaze-lens-") && entry.is_legacy_profile_entry())
-                .then(|| key.to_string())
+            ((key == PRIMARY_KEY || key.starts_with("gaze-lens-"))
+                && entry.is_legacy_profile_entry())
+            .then(|| key.to_string())
         })
         .collect()
 }
 
-fn legacy_json_suffix_keys(servers: &Map<String, Value>) -> Vec<String> {
+fn legacy_json_keys(servers: &Map<String, Value>) -> Vec<String> {
     servers
         .iter()
         .filter_map(|(key, value)| {
             let entry = json_entry(value)?;
-            (key.starts_with("gaze-lens-") && entry.is_legacy_profile_entry()).then(|| key.clone())
+            ((key == PRIMARY_KEY || key.starts_with("gaze-lens-"))
+                && entry.is_legacy_profile_entry())
+            .then(|| key.clone())
         })
         .collect()
 }
@@ -100,6 +112,63 @@ impl ExistingEntry {
     }
 }
 
+fn migration_prompt(keys: &[String]) -> Option<String> {
+    if keys.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Found {} legacy gaze-lens MCP entries from v0.2.x. Multi-profile mode (#355) consolidates these to a single `gaze-lens` entry.\nRemoving the legacy entries breaks compliance isolation if you rely on per-entry differentiation.\nMigrate? [y/N] (default N — keeps existing entries)",
+        keys.len()
+    ))
+}
+
+pub fn codex_toml_legacy_migration_prompt(
+    existing: Option<&str>,
+) -> Result<Option<String>, RenderError> {
+    let Some(existing) = existing else {
+        return Ok(None);
+    };
+    let doc: DocumentMut = existing.parse().map_err(|e: toml_edit::TomlError| {
+        let (line, column) = match e.span() {
+            Some(span) => line_column_from_input(existing, span.start),
+            None => (0, 0),
+        };
+        RenderError::Parse {
+            path: PathBuf::new(),
+            line,
+            column,
+            source_msg: e.message().to_string(),
+        }
+    })?;
+    let keys = doc
+        .get("mcp_servers")
+        .and_then(|i| i.as_table())
+        .map(|servers| legacy_toml_keys(servers.iter()))
+        .unwrap_or_default();
+    Ok(migration_prompt(&keys))
+}
+
+pub fn mcp_json_legacy_migration_prompt(
+    existing: Option<&str>,
+) -> Result<Option<String>, RenderError> {
+    let Some(existing) = existing else {
+        return Ok(None);
+    };
+    let root: Value =
+        serde_json::from_str(existing).map_err(|e: serde_json::Error| RenderError::Parse {
+            path: PathBuf::new(),
+            line: e.line(),
+            column: e.column(),
+            source_msg: e.to_string(),
+        })?;
+    let keys = root
+        .get("mcpServers")
+        .and_then(|v| v.as_object())
+        .map(legacy_json_keys)
+        .unwrap_or_default();
+    Ok(migration_prompt(&keys))
+}
+
 /// Codex config.toml writer. `[mcp_servers.<key>] command = ..., args = [...]`.
 pub fn render_codex_toml(
     existing: Option<&str>,
@@ -107,6 +176,29 @@ pub fn render_codex_toml(
     command: &str,
     cmd_args: &[String],
     allow_overwrite: bool,
+) -> Result<String, RenderError> {
+    let migration = if allow_overwrite {
+        LegacyMigration::Migrate
+    } else {
+        LegacyMigration::PreserveExisting
+    };
+    render_codex_toml_with_migration(
+        existing,
+        _profile_name,
+        command,
+        cmd_args,
+        allow_overwrite,
+        migration,
+    )
+}
+
+pub fn render_codex_toml_with_migration(
+    existing: Option<&str>,
+    _profile_name: &str,
+    command: &str,
+    cmd_args: &[String],
+    allow_overwrite: bool,
+    migration: LegacyMigration,
 ) -> Result<String, RenderError> {
     let mut doc: DocumentMut = match existing {
         Some(s) => s.parse().map_err(|e: toml_edit::TomlError| {
@@ -138,8 +230,18 @@ pub fn render_codex_toml(
         })?;
 
     let primary = servers.get(PRIMARY_KEY).and_then(toml_entry);
-    ensure_primary_available(primary.as_ref(), command, cmd_args, allow_overwrite)?;
-    for key in legacy_suffix_keys(servers.iter()) {
+    let legacy_keys = legacy_toml_keys(servers.iter());
+    if !legacy_keys.is_empty() && migration == LegacyMigration::PreserveExisting {
+        return Ok(existing.unwrap_or_default().to_string());
+    }
+    ensure_primary_available(
+        primary.as_ref(),
+        command,
+        cmd_args,
+        allow_overwrite,
+        migration,
+    )?;
+    for key in legacy_keys {
         servers.remove(&key);
     }
 
@@ -201,6 +303,21 @@ fn render_mcp_json(
     cmd_args: &[String],
     allow_overwrite: bool,
 ) -> Result<String, RenderError> {
+    let migration = if allow_overwrite {
+        LegacyMigration::Migrate
+    } else {
+        LegacyMigration::PreserveExisting
+    };
+    render_mcp_json_with_migration(existing, command, cmd_args, allow_overwrite, migration)
+}
+
+fn render_mcp_json_with_migration(
+    existing: Option<&str>,
+    command: &str,
+    cmd_args: &[String],
+    allow_overwrite: bool,
+    migration: LegacyMigration,
+) -> Result<String, RenderError> {
     let mut root: Value = match existing {
         Some(s) => serde_json::from_str(s).map_err(|e: serde_json::Error| RenderError::Parse {
             path: PathBuf::new(),
@@ -231,8 +348,18 @@ fn render_mcp_json(
         })?;
 
     let primary = servers.get(PRIMARY_KEY).and_then(json_entry);
-    ensure_primary_available(primary.as_ref(), command, cmd_args, allow_overwrite)?;
-    for key in legacy_json_suffix_keys(servers) {
+    let legacy_keys = legacy_json_keys(servers);
+    if !legacy_keys.is_empty() && migration == LegacyMigration::PreserveExisting {
+        return Ok(existing.unwrap_or_default().to_string());
+    }
+    ensure_primary_available(
+        primary.as_ref(),
+        command,
+        cmd_args,
+        allow_overwrite,
+        migration,
+    )?;
+    for key in legacy_keys {
         servers.remove(&key);
     }
 
@@ -249,6 +376,28 @@ fn render_mcp_json(
         source_msg: format!("serialize: {e}"),
     })?;
     Ok(out + "\n")
+}
+
+pub fn render_claude_code_json_with_migration(
+    existing: Option<&str>,
+    _profile_name: &str,
+    command: &str,
+    cmd_args: &[String],
+    allow_overwrite: bool,
+    migration: LegacyMigration,
+) -> Result<String, RenderError> {
+    render_mcp_json_with_migration(existing, command, cmd_args, allow_overwrite, migration)
+}
+
+pub fn render_cursor_json_with_migration(
+    existing: Option<&str>,
+    _profile_name: &str,
+    command: &str,
+    cmd_args: &[String],
+    allow_overwrite: bool,
+    migration: LegacyMigration,
+) -> Result<String, RenderError> {
+    render_mcp_json_with_migration(existing, command, cmd_args, allow_overwrite, migration)
 }
 
 fn json_entry(value: &Value) -> Option<ExistingEntry> {

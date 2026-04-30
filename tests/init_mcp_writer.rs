@@ -1,5 +1,6 @@
 use gaze_lens::cli::init::mcp_writer::{
-    render_claude_code_json, render_codex_toml, render_cursor_json,
+    LegacyMigration, mcp_json_legacy_migration_prompt, render_claude_code_json,
+    render_claude_code_json_with_migration, render_codex_toml, render_cursor_json,
 };
 
 const COMMAND: &str = "gaze-lens";
@@ -26,7 +27,7 @@ fn second_profile_reuses_primary_key() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let servers = v["mcpServers"].as_object().unwrap();
     assert_eq!(servers.len(), 1);
-    assert_eq!(servers["gaze-lens"]["args"][0], "serve");
+    assert_eq!(servers["gaze-lens"]["args"][2], "prod");
 }
 
 #[test]
@@ -37,10 +38,7 @@ fn same_profile_same_command_args_reuses_primary_key() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let servers = v["mcpServers"].as_object().unwrap();
     assert!(servers.contains_key("gaze-lens"));
-    assert!(
-        !servers.contains_key("gaze-lens-dev"),
-        "same profile + same command/args must not suffix"
-    );
+    assert_eq!(servers["gaze-lens"]["args"][2], "dev");
 }
 
 #[test]
@@ -70,6 +68,45 @@ fn existing_gaze_lens_entry_with_matching_suffix_is_idempotent() {
     let existing = r#"{"mcpServers":{"gaze-lens":{"command":"gaze-lens","args":["serve","--profile","prod"]},"gaze-lens-dev":{"command":"gaze-lens","args":["serve","--profile","dev"]}}}"#;
     let out =
         render_claude_code_json(Some(existing), "dev", COMMAND, &args_for("dev"), false).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let servers = v["mcpServers"].as_object().unwrap();
+    assert_eq!(servers.len(), 2);
+    assert!(servers.contains_key("gaze-lens-dev"));
+    assert_eq!(servers["gaze-lens"]["args"][2], "prod");
+}
+
+#[test]
+fn legacy_migration_prompt_includes_compliance_note() {
+    let existing = r#"{"mcpServers":{"gaze-lens-prod":{"command":"gaze-lens","args":["serve","--profile","prod"]},"gaze-lens-staging":{"command":"gaze-lens","args":["serve","--profile","staging"]}}}"#;
+    let prompt = mcp_json_legacy_migration_prompt(Some(existing))
+        .unwrap()
+        .expect("legacy prompt");
+    assert!(
+        prompt.contains("Found 2 legacy gaze-lens MCP entries"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("Removing the legacy entries breaks compliance isolation"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("default N — keeps existing entries"),
+        "{prompt}"
+    );
+}
+
+#[test]
+fn confirmed_legacy_migration_removes_suffixed_entries() {
+    let existing = r#"{"mcpServers":{"gaze-lens":{"command":"gaze-lens","args":["serve","--profile","prod"]},"gaze-lens-dev":{"command":"gaze-lens","args":["serve","--profile","dev"]}}}"#;
+    let out = render_claude_code_json_with_migration(
+        Some(existing),
+        "dev",
+        COMMAND,
+        &args_for("dev"),
+        false,
+        LegacyMigration::Migrate,
+    )
+    .unwrap();
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let servers = v["mcpServers"].as_object().unwrap();
     assert_eq!(servers.len(), 1);
@@ -105,6 +142,7 @@ args = ["serve", "--profile", "prod"]
     let out = render_codex_toml(Some(existing), "dev", COMMAND, &args_for("dev"), false).unwrap();
     assert!(!out.contains("[mcp_servers.gaze-lens-dev]"), "{out}");
     assert!(out.contains("[mcp_servers.gaze-lens]"), "{out}");
+    assert!(out.contains(r#""prod""#), "{out}");
 }
 
 #[test]

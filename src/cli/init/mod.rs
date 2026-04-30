@@ -227,7 +227,12 @@ pub fn run(
     }
 
     let mut writer = batch::RealBatchWriter;
-    commit_plan(&args, &plan, &mut writer)?;
+    if args.non_interactive || args.allow_overwrite {
+        commit_plan(&args, &plan, &mut writer)?;
+    } else {
+        let mut migration_prompter = prompter::DialoguerPrompter::new();
+        commit_plan_with_prompter(&args, &plan, &mut writer, Some(&mut migration_prompter))?;
+    }
 
     if args.smoke_check {
         run_smoke_check(&args, &plan)?;
@@ -248,11 +253,20 @@ pub(crate) fn commit_plan(
     plan: &plan::InitPlan,
     w: &mut dyn batch::BatchWriter,
 ) -> Result<(), LensError> {
+    commit_plan_with_prompter(args, plan, w, None)
+}
+
+fn commit_plan_with_prompter(
+    args: &InitArgs,
+    plan: &plan::InitPlan,
+    w: &mut dyn batch::BatchWriter,
+    mut migration_prompter: Option<&mut dyn prompter::Prompter>,
+) -> Result<(), LensError> {
     // Phase A: render + validate every candidate destination before the first
     // write. This is the atomicity contract for parse/collision failures:
     // malformed MCP JSON/TOML, malformed AGENTS markers, profile parse errors,
     // or name collisions return here with zero file writes.
-    let writes = render_plan_writes(args, plan)?;
+    let writes = render_plan_writes(args, plan, &mut migration_prompter)?;
 
     // Phase B: ordered write/rename. Only write bytes that differ.
     let mut applied: Vec<PathBuf> = Vec::new();
@@ -292,6 +306,7 @@ struct RenderedWrite {
 fn render_plan_writes(
     args: &InitArgs,
     plan: &plan::InitPlan,
+    migration_prompter: &mut Option<&mut dyn prompter::Prompter>,
 ) -> Result<Vec<RenderedWrite>, LensError> {
     let mut writes = Vec::new();
 
@@ -331,7 +346,12 @@ fn render_plan_writes(
     // MCP JSON/TOML render validates existing config parse and entry collisions.
     for target in &plan.mcp_targets {
         let existing = std::fs::read_to_string(&target.path).ok();
-        let rendered = render_mcp_target(target, existing.as_deref(), args.allow_overwrite)?;
+        let rendered = render_mcp_target(
+            target,
+            existing.as_deref(),
+            args.allow_overwrite,
+            migration_prompter,
+        )?;
         writes.push(RenderedWrite {
             path: target.path.clone(),
             bytes: rendered.into_bytes(),
@@ -434,28 +454,33 @@ fn render_mcp_target(
     target: &plan::McpTarget,
     existing: Option<&str>,
     allow_overwrite: bool,
+    migration_prompter: &mut Option<&mut dyn prompter::Prompter>,
 ) -> Result<String, LensError> {
+    let migration = migration_decision(target, existing, allow_overwrite, migration_prompter)?;
     let result = match target.client {
-        McpClient::Codex => mcp_writer::render_codex_toml(
+        McpClient::Codex => mcp_writer::render_codex_toml_with_migration(
             existing,
             &target.profile_name,
             &target.command,
             &target.args,
             allow_overwrite,
+            migration,
         ),
-        McpClient::ClaudeCode => mcp_writer::render_claude_code_json(
+        McpClient::ClaudeCode => mcp_writer::render_claude_code_json_with_migration(
             existing,
             &target.profile_name,
             &target.command,
             &target.args,
             allow_overwrite,
+            migration,
         ),
-        McpClient::Cursor => mcp_writer::render_cursor_json(
+        McpClient::Cursor => mcp_writer::render_cursor_json_with_migration(
             existing,
             &target.profile_name,
             &target.command,
             &target.args,
             allow_overwrite,
+            migration,
         ),
     };
     result.map_err(|e| match e {
@@ -474,6 +499,58 @@ fn render_mcp_target(
             detail: other.to_string(),
         },
     })
+}
+
+fn migration_decision(
+    target: &plan::McpTarget,
+    existing: Option<&str>,
+    allow_overwrite: bool,
+    migration_prompter: &mut Option<&mut dyn prompter::Prompter>,
+) -> Result<mcp_writer::LegacyMigration, LensError> {
+    if allow_overwrite {
+        return Ok(mcp_writer::LegacyMigration::Migrate);
+    }
+
+    let prompt = match target.client {
+        McpClient::Codex => mcp_writer::codex_toml_legacy_migration_prompt(existing),
+        McpClient::ClaudeCode | McpClient::Cursor => {
+            mcp_writer::mcp_json_legacy_migration_prompt(existing)
+        }
+    }
+    .map_err(|e| match e {
+        profile_writer::RenderError::Parse {
+            line,
+            column,
+            source_msg,
+            ..
+        } => LensError::Profile {
+            detail: format!(
+                "malformed {} at line {line}, column {column}: {source_msg}",
+                target.path.display(),
+            ),
+        },
+        other => LensError::Profile {
+            detail: other.to_string(),
+        },
+    })?;
+
+    let Some(prompt) = prompt else {
+        return Ok(mcp_writer::LegacyMigration::Migrate);
+    };
+    let Some(prompter) = migration_prompter.as_deref_mut() else {
+        return Ok(mcp_writer::LegacyMigration::PreserveExisting);
+    };
+
+    if prompter
+        .confirm(&prompt, false)
+        .map_err(|err| LensError::Profile {
+            detail: format!("prompt failed: {err}"),
+        })?
+    {
+        Ok(mcp_writer::LegacyMigration::Migrate)
+    } else {
+        Ok(mcp_writer::LegacyMigration::PreserveExisting)
+    }
 }
 
 /// Opt-in smoke check (directive 17). Calls the in-process `check` subcommand
