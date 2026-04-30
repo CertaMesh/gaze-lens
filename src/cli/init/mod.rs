@@ -337,6 +337,7 @@ fn commit_plan_with_prompter(
     let writes = render_plan_writes(args, plan, &mut migration_prompter)?;
 
     // Phase B: ordered write/rename. Only write bytes that differ.
+    let keyring_entry_committed = keyring_preflight_and_write(args, plan)?;
     let mut applied: Vec<PathBuf> = Vec::new();
     let mut pending: Vec<PathBuf> = writes.iter().map(|write| write.path.clone()).collect();
     let mut unchanged: Vec<PathBuf> = Vec::new();
@@ -344,7 +345,15 @@ fn commit_plan_with_prompter(
     for write in &writes {
         ensure_parent_dir_for_write(&write.path, plan)?;
         if atomic::would_write(&write.path, &write.bytes) {
-            write_one(w, &mut applied, &mut pending, &write.path, &write.bytes)?;
+            if let Err(err) = write_one(w, &mut applied, &mut pending, &write.path, &write.bytes) {
+                if let Some((service, account)) = &keyring_entry_committed {
+                    eprintln!(
+                        "gaze-lens warning: keyring entry service=`{service}` account=`{account}` was written, but profile file commit failed at {}. The keyring entry is now orphaned. To recover: re-run `gaze-lens init --allow-overwrite` after fixing the file-write issue, OR delete the keyring entry manually.",
+                        write.path.display()
+                    );
+                }
+                return Err(err);
+            }
         } else {
             unchanged.push(write.path.clone());
             if let Some(idx) = pending.iter().position(|p| p == &write.path) {
@@ -364,6 +373,69 @@ fn commit_plan_with_prompter(
         println!("no changes");
     }
     Ok(())
+}
+
+fn keyring_preflight_and_write(
+    args: &InitArgs,
+    plan: &plan::InitPlan,
+) -> Result<Option<(String, String)>, LensError> {
+    let Some(plan::PlannedSecret::Keyring {
+        service,
+        account,
+        write_value: Some(value),
+    }) = plan.profile_section.source_secret.as_ref()
+    else {
+        return Ok(None);
+    };
+
+    let preflight_service = "gaze-lens-preflight";
+    let preflight_account = format!("{}-{}", plan.profile_section.name, ulid::Ulid::new());
+    let preflight = keyring::Entry::new(preflight_service, &preflight_account).map_err(|err| {
+        crate::profile::map_keyring_error(err, preflight_service, &preflight_account)
+    })?;
+    preflight.set_password("preflight-probe").map_err(|err| {
+        crate::profile::map_keyring_error(err, preflight_service, &preflight_account)
+    })?;
+    let roundtrip = preflight.get_password().map_err(|err| {
+        crate::profile::map_keyring_error(err, preflight_service, &preflight_account)
+    })?;
+    if roundtrip != "preflight-probe" {
+        return Err(LensError::SecretBackendUnavailable {
+            backend: "keyring".into(),
+            detail: "preflight read-back mismatch".into(),
+        });
+    }
+    let _ = preflight.delete_credential();
+
+    let entry = keyring::Entry::new(service, account)
+        .map_err(|err| crate::profile::map_keyring_error(err, service, account))?;
+    match entry.get_password() {
+        Ok(existing) if existing == value.as_str() => return Ok(None),
+        Ok(_) if !(args.allow_overwrite || args.write_all) => {
+            return Err(LensError::Profile {
+                detail: format!(
+                    "keyring entry service=`{service}` account=`{account}` already exists; rerun with --allow-overwrite to replace"
+                ),
+            });
+        }
+        Ok(_) => {}
+        Err(keyring::Error::NoEntry) => {}
+        Err(err) => return Err(crate::profile::map_keyring_error(err, service, account)),
+    }
+
+    entry
+        .set_password(value.as_str())
+        .map_err(|err| crate::profile::map_keyring_error(err, service, account))?;
+    let verify = entry
+        .get_password()
+        .map_err(|err| crate::profile::map_keyring_error(err, service, account))?;
+    if verify != value.as_str() {
+        return Err(LensError::SecretBackendUnavailable {
+            backend: "keyring".into(),
+            detail: "post-write read-back mismatch".into(),
+        });
+    }
+    Ok(Some((service.clone(), account.clone())))
 }
 
 struct RenderedWrite {
