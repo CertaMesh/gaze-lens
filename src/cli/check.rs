@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -25,18 +26,73 @@ pub async fn run(
     project_config: Option<&Path>,
     user_config: Option<&Path>,
 ) -> Result<(), LensError> {
+    let mut stdout = std::io::stdout();
+    run_with_writer(args, project_config, user_config, &mut stdout).await
+}
+
+async fn run_with_writer(
+    args: CheckArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+    out: &mut dyn Write,
+) -> Result<(), LensError> {
     let profile = load_profile(&args.profile, project_config, user_config)?;
-    println!("profile: ok ({})", profile.name);
+    writeln!(out, "profile: ok ({})", profile.name).map_err(write_error)?;
 
     validate_policy(&profile)?;
-    println!("policy: ok");
+    writeln!(out, "policy: ok").map_err(write_error)?;
+
+    match validate_secret(&profile).await {
+        Ok(meta) => {
+            writeln!(out, "secret: ok ({meta})").map_err(write_error)?;
+        }
+        Err(err) => {
+            render_secret_error(out, &err)?;
+            return Err(err);
+        }
+    }
 
     validate_source(&profile).await?;
-    println!("source: ok");
+    writeln!(out, "source: ok").map_err(write_error)?;
 
     let _ = runtime_policy(&profile)?;
-    println!("pipeline: ok");
+    writeln!(out, "pipeline: ok").map_err(write_error)?;
     Ok(())
+}
+
+#[doc(hidden)]
+pub async fn run_with_writer_for_test(
+    args: CheckArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+    out: &mut dyn Write,
+) -> Result<(), LensError> {
+    run_with_writer(args, project_config, user_config, out).await
+}
+
+fn write_error(err: std::io::Error) -> LensError {
+    LensError::Internal {
+        detail: format!("failed to write check output: {err}"),
+    }
+}
+
+fn render_secret_error(out: &mut dyn Write, err: &LensError) -> Result<(), LensError> {
+    match err {
+        LensError::SecretKeyringMissing { service, account } => writeln!(
+            out,
+            "secret: NOT FOUND (keyring service={service} account={account}); create the entry via your OS keychain or rerun `gaze-lens init --secret-backend keyring`"
+        ),
+        LensError::SecretKeyringDenied { service, account } => writeln!(
+            out,
+            "secret: ACCESS DENIED (keyring service={service} account={account}); unlock the OS keychain or approve access, then retry"
+        ),
+        LensError::SecretBackendUnavailable { backend, .. } => writeln!(
+            out,
+            "secret: BACKEND UNAVAILABLE (backend={backend}); on Linux start a DBus session with an unlocked Secret Service agent, or fall back to password_env"
+        ),
+        _ => writeln!(out, "secret: ERROR"),
+    }
+    .map_err(write_error)
 }
 
 fn validate_policy(profile: &crate::profile::Profile) -> Result<(), LensError> {
@@ -102,4 +158,62 @@ async fn validate_source(profile: &crate::profile::Profile) -> Result<(), LensEr
         }
     }
     Ok(())
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct SecretMetadata {
+    pub backend: &'static str,
+    pub identity: String,
+}
+
+impl std::fmt::Display for SecretMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.backend, self.identity)
+    }
+}
+
+#[doc(hidden)]
+pub async fn validate_secret(
+    profile: &crate::profile::Profile,
+) -> Result<SecretMetadata, LensError> {
+    match &profile.source {
+        SourceSpec::Mysql {
+            password_env,
+            secret,
+            ..
+        }
+        | SourceSpec::Postgres {
+            password_env,
+            secret,
+            ..
+        } => {
+            let metadata = match (password_env, secret) {
+                (Some(env), None) => SecretMetadata {
+                    backend: "env",
+                    identity: format!("var={env}"),
+                },
+                (None, Some(crate::profile::SecretSpec::Env { var })) => SecretMetadata {
+                    backend: "env",
+                    identity: format!("var={var}"),
+                },
+                (None, Some(crate::profile::SecretSpec::Keyring { service, account })) => {
+                    SecretMetadata {
+                        backend: "keyring",
+                        identity: format!("service={service} account={account}"),
+                    }
+                }
+                _ => SecretMetadata {
+                    backend: "profile",
+                    identity: "invalid".to_string(),
+                },
+            };
+            let _ = profile.resolve_password().await?;
+            Ok(metadata)
+        }
+        SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } => Ok(SecretMetadata {
+            backend: "none",
+            identity: "not required".to_string(),
+        }),
+    }
 }
