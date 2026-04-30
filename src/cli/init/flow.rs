@@ -20,9 +20,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::cli::init::plan::{AgentsMdPatch, AutoPurgeChoice, InitPlan, McpTarget, ProfileSection};
+use crate::cli::init::plan::{
+    AgentsMdPatch, AutoPurgeChoice, InitPlan, McpTarget, PlannedSecret, ProfileSection,
+};
 use crate::cli::init::prompter::{PromptError, Prompter};
-use crate::cli::init::{InitArgs, InitScope, McpClient, SourceKind};
+use crate::cli::init::{InitArgs, InitScope, McpClient, SecretBackendChoice, SourceKind};
 use crate::errors::LensError;
 
 /// CB4: carry `--project-config` and `--user-config` overrides so flow
@@ -223,6 +225,7 @@ fn build_profile_section_skeleton(args: &InitArgs, name: &str, kind: SourceKind)
         source_database: args.source_database.clone(),
         source_username: args.source_username.clone(),
         source_password_env: args.source_password_env.clone(),
+        source_secret: None,
         source_ssh_host: args.source_ssh_host.clone(),
         source_local_port: args.source_local_port,
         source_path: args.source_path.clone(),
@@ -294,15 +297,59 @@ fn populate_source_params<P: Prompter>(
                     .map_err(prompt_to_lens)?;
                 section.source_username = Some(s);
             }
-            if section.source_password_env.is_none() {
-                require_interactive(args)?;
-                let s = p
-                    .input(
-                        "Env var holding DB password?",
-                        Some("GAZE_LENS_DB_PASSWORD"),
-                    )
-                    .map_err(prompt_to_lens)?;
-                section.source_password_env = Some(s);
+            match args.secret_backend {
+                SecretBackendChoice::Env => {
+                    if section.source_password_env.is_none() && section.source_secret.is_none() {
+                        require_interactive(args)?;
+                        let s = p
+                            .input(
+                                "Env var holding DB password?",
+                                Some("GAZE_LENS_DB_PASSWORD"),
+                            )
+                            .map_err(prompt_to_lens)?;
+                        section.source_password_env = Some(s);
+                    }
+                }
+                SecretBackendChoice::Keyring => {
+                    let service = match args.source_password_keyring_service.clone() {
+                        Some(service) => service,
+                        None => {
+                            require_interactive(args)?;
+                            p.input("Keyring service?", Some("gaze-lens"))
+                                .map_err(prompt_to_lens)?
+                        }
+                    };
+                    let account = match args.source_password_keyring_account.clone() {
+                        Some(account) => account,
+                        None => {
+                            require_interactive(args)?;
+                            p.input("Keyring account?", Some(&section.name))
+                                .map_err(prompt_to_lens)?
+                        }
+                    };
+                    let write_value = if args.no_keyring_write {
+                        None
+                    } else {
+                        require_interactive(args)?;
+                        let should_write = p
+                            .confirm("Write password to keyring now?", true)
+                            .map_err(prompt_to_lens)?;
+                        if should_write {
+                            let password = p
+                                .password("Database password for keyring?")
+                                .map_err(prompt_to_lens)?;
+                            Some(zeroize::Zeroizing::new(password))
+                        } else {
+                            None
+                        }
+                    };
+                    section.source_password_env = None;
+                    section.source_secret = Some(PlannedSecret::Keyring {
+                        service,
+                        account,
+                        write_value,
+                    });
+                }
             }
         }
     }

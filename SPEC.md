@@ -56,6 +56,7 @@ A single `gaze-lens serve` process binds to one MCP entry per host and exposes a
 ### Out of scope (operator responsibility)
 
 - **Laptop disk compromise.** Snapshot files contain raw token mappings; a laptop with unencrypted disk leaks them on physical theft. Operators MUST run FileVault (macOS) or LUKS (Linux) on the laptop running gaze-lens. v0.1 is Unix-only by build contract. v1 does not implement per-snapshot encryption-at-rest; this is a v1.x hardening tracked against gaze upstream feedback.
+- **Keyring availability.** Native keyring secrets reuse the operator's platform keyring. macOS Keychain, Windows Credential Manager, and desktop Linux Secret Service are supported when the user session exposes an unlocked backend. Headless Linux, containers, locked keyrings, and systems without DBus / Secret Service report `BACKEND UNAVAILABLE`; gaze-lens does not synthesize a DBus session or cache database passwords in-process to paper over that boundary. Operators in those environments should use the env secret backend.
 - **Same-uid attacker after process compromise.** Snapshot files are 0600 in a 0700 directory; this protects against other-user attackers but not against root or same-uid compromise.
 - **SSH-side credential compromise.** gaze-lens reuses `~/.ssh/config` and the SSH agent; auth is the operator's responsibility.
 - **Database write privilege.** gaze-lens never writes; the DB user MUST be configured read-only at the database side.

@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::io::IsTerminal;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::{ArgAction, Args, ValueEnum};
@@ -14,6 +16,10 @@ pub mod plan;
 pub mod profile_writer;
 pub mod prompter;
 
+thread_local! {
+    static ORPHAN_WARNINGS_FOR_TEST: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum SourceKind {
     Mysql,
@@ -21,6 +27,12 @@ pub enum SourceKind {
     Sqlite,
     #[value(name = "ssh-log")]
     SshLog,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum SecretBackendChoice {
+    Env,
+    Keyring,
 }
 
 /// Where to write the profile section.
@@ -76,6 +88,18 @@ pub struct InitArgs {
     /// Env var name holding the DB password.
     #[arg(long)]
     pub source_password_env: Option<String>,
+    /// Secret backend for mysql/postgres passwords.
+    #[arg(long, value_enum, default_value_t = SecretBackendChoice::Env)]
+    pub secret_backend: SecretBackendChoice,
+    /// Keyring service name for the DB password entry.
+    #[arg(long)]
+    pub source_password_keyring_service: Option<String>,
+    /// Keyring account name for the DB password entry.
+    #[arg(long)]
+    pub source_password_keyring_account: Option<String>,
+    /// Do not write the keyring entry during init.
+    #[arg(long)]
+    pub no_keyring_write: bool,
     /// SSH tunnel jump host (mysql / postgres only).
     #[arg(long)]
     pub source_ssh_host: Option<String>,
@@ -123,6 +147,52 @@ impl InitArgs {
     /// CB1 (`--scope user --auto-purge` rejection) lives in clap. This catches
     /// non-interactive missing inputs and the CB-r2-3 ssh-log host invariant.
     pub fn validate(&self) -> Result<(), LensError> {
+        match self.secret_backend {
+            SecretBackendChoice::Env => {
+                if self.source_password_keyring_service.is_some()
+                    || self.source_password_keyring_account.is_some()
+                {
+                    return Err(LensError::Profile {
+                        detail: "--source-password-keyring-service/account require --secret-backend keyring".into(),
+                    });
+                }
+                if self.no_keyring_write {
+                    eprintln!(
+                        "gaze-lens: --no-keyring-write ignored without --secret-backend keyring"
+                    );
+                }
+            }
+            SecretBackendChoice::Keyring => {
+                if self.source_password_env.is_some() {
+                    return Err(LensError::Profile {
+                        detail: "--source-password-env conflicts with --secret-backend keyring"
+                            .into(),
+                    });
+                }
+                if self.non_interactive
+                    && matches!(
+                        self.source_kind,
+                        Some(SourceKind::Mysql) | Some(SourceKind::Postgres)
+                    )
+                {
+                    if !self.no_keyring_write {
+                        return Err(LensError::Profile {
+                            detail: "--non-interactive with --secret-backend keyring requires --no-keyring-write (operator-managed entry); interactive password capture impossible without a TTY".into(),
+                        });
+                    }
+                    if self.source_password_keyring_service.is_none() {
+                        return Err(LensError::Profile {
+                            detail: "--non-interactive with --secret-backend keyring requires --source-password-keyring-service".into(),
+                        });
+                    }
+                    if self.source_password_keyring_account.is_none() {
+                        return Err(LensError::Profile {
+                            detail: "--non-interactive with --secret-backend keyring requires --source-password-keyring-account".into(),
+                        });
+                    }
+                }
+            }
+        }
         if self.non_interactive {
             if self.profile.is_none() {
                 return Err(LensError::Profile {
@@ -170,6 +240,10 @@ impl InitArgs {
             source_database: None,
             source_username: None,
             source_password_env: None,
+            secret_backend: SecretBackendChoice::Env,
+            source_password_keyring_service: None,
+            source_password_keyring_account: None,
+            no_keyring_write: false,
             source_ssh_host: None,
             source_local_port: None,
             source_path: None,
@@ -210,34 +284,100 @@ pub fn run(
         });
     }
 
-    let plan = if args.non_interactive {
+    if args.non_interactive {
         let mut p = prompter::FakePrompter::new();
-        flow::run_guided(&args, &mut p, &env)?
+        let mut out = std::io::stdout();
+        run_with_prompter_and_env(&args, &env, &mut p, &mut out)?;
     } else {
         let mut p = prompter::DialoguerPrompter::new();
-        flow::run_guided(&args, &mut p, &env)?
-    };
+        let mut out = std::io::stdout();
+        run_with_prompter_and_env(&args, &env, &mut p, &mut out)?;
+    }
+    Ok(())
+}
+
+fn run_with_prompter_and_env<P: prompter::Prompter>(
+    args: &InitArgs,
+    env: &flow::InitEnv,
+    p: &mut P,
+    out: &mut dyn Write,
+) -> Result<(), LensError> {
+    let plan = flow::run_guided(args, p, env)?;
 
     // Always render preview so operators see what will be written.
     let preview = flow::render_preview(&plan);
-    print!("{preview}");
+    write!(out, "{preview}").map_err(|err| LensError::Internal {
+        detail: format!("failed to write init preview: {err}"),
+    })?;
 
     if args.print_only {
         return Ok(());
     }
 
+    confirm_keyring_overwrite_if_needed(args, &plan, p)?;
+
     let mut writer = batch::RealBatchWriter;
     if args.non_interactive || args.allow_overwrite {
-        commit_plan(&args, &plan, &mut writer)?;
+        commit_plan(args, &plan, &mut writer)?;
     } else {
         let mut migration_prompter = prompter::DialoguerPrompter::new();
-        commit_plan_with_prompter(&args, &plan, &mut writer, Some(&mut migration_prompter))?;
+        commit_plan_with_prompter(args, &plan, &mut writer, Some(&mut migration_prompter))?;
     }
 
     if args.smoke_check {
-        run_smoke_check(&args, &plan)?;
+        run_smoke_check_with_writer(&plan, out)?;
     }
     Ok(())
+}
+
+fn confirm_keyring_overwrite_if_needed<P: prompter::Prompter>(
+    args: &InitArgs,
+    plan: &plan::InitPlan,
+    p: &mut P,
+) -> Result<(), LensError> {
+    if args.non_interactive || args.write_all || !args.allow_overwrite {
+        return Ok(());
+    }
+    let Some(plan::PlannedSecret::Keyring {
+        service,
+        account,
+        write_value: Some(value),
+    }) = plan.profile_section.source_secret.as_ref()
+    else {
+        return Ok(());
+    };
+    let entry = keyring::Entry::new(service, account)
+        .map_err(|err| crate::profile::map_keyring_error(err, service, account))?;
+    match entry.get_password() {
+        Ok(existing) if existing == value.as_str() => Ok(()),
+        Ok(_) => {
+            let ok = p
+                .confirm(
+                    &format!(
+                        "Replace existing keyring entry service=`{service}` account=`{account}`?"
+                    ),
+                    false,
+                )
+                .map_err(prompt_to_lens)?;
+            if ok {
+                Ok(())
+            } else {
+                Err(LensError::Profile {
+                    detail: format!(
+                        "keyring entry service=`{service}` account=`{account}` was not replaced"
+                    ),
+                })
+            }
+        }
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(crate::profile::map_keyring_error(err, service, account)),
+    }
+}
+
+fn prompt_to_lens(err: prompter::PromptError) -> LensError {
+    LensError::Profile {
+        detail: err.to_string(),
+    }
 }
 
 /// `commit_plan`: profile → MCP → AGENTS, byte-compare-skip via `would_write`.
@@ -269,6 +409,7 @@ fn commit_plan_with_prompter(
     let writes = render_plan_writes(args, plan, &mut migration_prompter)?;
 
     // Phase B: ordered write/rename. Only write bytes that differ.
+    let keyring_entry_committed = keyring_preflight_and_write(args, plan)?;
     let mut applied: Vec<PathBuf> = Vec::new();
     let mut pending: Vec<PathBuf> = writes.iter().map(|write| write.path.clone()).collect();
     let mut unchanged: Vec<PathBuf> = Vec::new();
@@ -276,7 +417,15 @@ fn commit_plan_with_prompter(
     for write in &writes {
         ensure_parent_dir_for_write(&write.path, plan)?;
         if atomic::would_write(&write.path, &write.bytes) {
-            write_one(w, &mut applied, &mut pending, &write.path, &write.bytes)?;
+            if let Err(err) = write_one(w, &mut applied, &mut pending, &write.path, &write.bytes) {
+                if let Some((service, account)) = &keyring_entry_committed {
+                    emit_orphan_warning(format!(
+                        "gaze-lens warning: keyring entry service=`{service}` account=`{account}` was written, but profile file commit failed at {}. The keyring entry is now orphaned. To recover: re-run `gaze-lens init --allow-overwrite` after fixing the file-write issue, OR delete the keyring entry manually.",
+                        write.path.display()
+                    ));
+                }
+                return Err(err);
+            }
         } else {
             unchanged.push(write.path.clone());
             if let Some(idx) = pending.iter().position(|p| p == &write.path) {
@@ -296,6 +445,74 @@ fn commit_plan_with_prompter(
         println!("no changes");
     }
     Ok(())
+}
+
+fn emit_orphan_warning(message: String) {
+    eprintln!("{message}");
+    ORPHAN_WARNINGS_FOR_TEST.with(|warnings| warnings.borrow_mut().push(message));
+}
+
+fn keyring_preflight_and_write(
+    args: &InitArgs,
+    plan: &plan::InitPlan,
+) -> Result<Option<(String, String)>, LensError> {
+    let Some(plan::PlannedSecret::Keyring {
+        service,
+        account,
+        write_value: Some(value),
+    }) = plan.profile_section.source_secret.as_ref()
+    else {
+        return Ok(None);
+    };
+
+    let preflight_service = "gaze-lens-preflight";
+    let preflight_account = format!("{}-{}", plan.profile_section.name, ulid::Ulid::new());
+    let preflight = keyring::Entry::new(preflight_service, &preflight_account).map_err(|err| {
+        crate::profile::map_keyring_error(err, preflight_service, &preflight_account)
+    })?;
+    preflight.set_password("preflight-probe").map_err(|err| {
+        crate::profile::map_keyring_error(err, preflight_service, &preflight_account)
+    })?;
+    let roundtrip = preflight.get_password().map_err(|err| {
+        crate::profile::map_keyring_error(err, preflight_service, &preflight_account)
+    })?;
+    if roundtrip != "preflight-probe" {
+        return Err(LensError::SecretBackendUnavailable {
+            backend: "keyring".into(),
+            detail: "preflight read-back mismatch".into(),
+        });
+    }
+    let _ = preflight.delete_credential();
+
+    let entry = keyring::Entry::new(service, account)
+        .map_err(|err| crate::profile::map_keyring_error(err, service, account))?;
+    match entry.get_password() {
+        Ok(existing) if existing == value.as_str() => return Ok(None),
+        Ok(_) if !(args.allow_overwrite || args.write_all) => {
+            return Err(LensError::Profile {
+                detail: format!(
+                    "keyring entry service=`{service}` account=`{account}` already exists; rerun with --allow-overwrite to replace"
+                ),
+            });
+        }
+        Ok(_) => {}
+        Err(keyring::Error::NoEntry) => {}
+        Err(err) => return Err(crate::profile::map_keyring_error(err, service, account)),
+    }
+
+    entry
+        .set_password(value.as_str())
+        .map_err(|err| crate::profile::map_keyring_error(err, service, account))?;
+    let verify = entry
+        .get_password()
+        .map_err(|err| crate::profile::map_keyring_error(err, service, account))?;
+    if verify != value.as_str() {
+        return Err(LensError::SecretBackendUnavailable {
+            backend: "keyring".into(),
+            detail: "post-write read-back mismatch".into(),
+        });
+    }
+    Ok(Some((service.clone(), account.clone())))
 }
 
 struct RenderedWrite {
@@ -561,7 +778,10 @@ fn migration_decision(
 /// NOT `Option<String>`. The (project_config, user_config) tuple is built
 /// once from `plan.profile_scope` so role semantics cannot drift between the
 /// caller and the smoke-check call.
-fn run_smoke_check(_args: &InitArgs, plan: &plan::InitPlan) -> Result<(), LensError> {
+fn run_smoke_check_with_writer(
+    plan: &plan::InitPlan,
+    out: &mut dyn Write,
+) -> Result<(), LensError> {
     let (project_config, user_config): (Option<&Path>, Option<&Path>) = match plan.profile_scope {
         InitScope::Project | InitScope::ProjectAutoPurge => {
             (Some(plan.profile_path.as_path()), None)
@@ -574,10 +794,11 @@ fn run_smoke_check(_args: &InitArgs, plan: &plan::InitPlan) -> Result<(), LensEr
     let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
         detail: err.to_string(),
     })?;
-    runtime.block_on(crate::cli::check::run(
+    runtime.block_on(crate::cli::check::run_with_writer_for_test(
         check_args,
         project_config,
         user_config,
+        out,
     ))
 }
 
@@ -592,4 +813,24 @@ pub fn commit_plan_for_test(
     w: &mut dyn batch::BatchWriter,
 ) -> Result<(), LensError> {
     commit_plan(args, plan, w)
+}
+
+/// `#[doc(hidden)] pub` test entry-point for integration tests that must drive
+/// the same `init run` control flow while scripting prompts.
+#[doc(hidden)]
+pub fn run_with_prompter_for_test<P: prompter::Prompter>(
+    args: &InitArgs,
+    env: &flow::InitEnv,
+    p: &mut P,
+    out: &mut dyn Write,
+) -> Result<(), LensError> {
+    args.validate()?;
+    run_with_prompter_and_env(args, env, p, out)
+}
+
+/// `#[doc(hidden)] pub` test entry-point for asserting operator warnings that
+/// production still emits to stderr.
+#[doc(hidden)]
+pub fn take_orphan_warnings_for_test() -> Vec<String> {
+    ORPHAN_WARNINGS_FOR_TEST.with(|warnings| std::mem::take(&mut *warnings.borrow_mut()))
 }

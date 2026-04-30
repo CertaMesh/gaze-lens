@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde::Deserialize;
+use zeroize::Zeroizing;
 
 use crate::errors::LensError;
 use crate::session::maintenance::AutoPurge;
@@ -40,7 +41,10 @@ pub enum SourceSpec {
         port: u16,
         database: String,
         username: String,
-        password_env: String,
+        #[serde(default)]
+        password_env: Option<String>,
+        #[serde(default)]
+        secret: Option<SecretSpec>,
         #[serde(default)]
         ssh_host: Option<String>,
         #[serde(default)]
@@ -53,7 +57,10 @@ pub enum SourceSpec {
         port: u16,
         database: String,
         username: String,
-        password_env: String,
+        #[serde(default)]
+        password_env: Option<String>,
+        #[serde(default)]
+        secret: Option<SecretSpec>,
         #[serde(default)]
         ssh_host: Option<String>,
         #[serde(default)]
@@ -74,6 +81,13 @@ pub enum SourceSpec {
     },
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SecretSpec {
+    Env { var: String },
+    Keyring { service: String, account: String },
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ProfileFile {
     #[serde(default)]
@@ -87,11 +101,18 @@ struct ProfileShape {
 }
 
 impl Profile {
-    pub fn resolve_password(&self) -> Result<String, LensError> {
-        let env = match &self.source {
-            SourceSpec::Mysql { password_env, .. } | SourceSpec::Postgres { password_env, .. } => {
-                password_env
+    pub async fn resolve_password(&self) -> Result<Zeroizing<String>, LensError> {
+        let (legacy_env, secret) = match &self.source {
+            SourceSpec::Mysql {
+                password_env,
+                secret,
+                ..
             }
+            | SourceSpec::Postgres {
+                password_env,
+                secret,
+                ..
+            } => (password_env, secret),
             SourceSpec::Sqlite { .. } => {
                 return Err(LensError::Profile {
                     detail: "sqlite profiles do not have database passwords".to_string(),
@@ -103,7 +124,39 @@ impl Profile {
                 });
             }
         };
-        std::env::var(env).map_err(|_| LensError::ProfileEnvMissing { env: env.clone() })
+        match (legacy_env, secret) {
+            (Some(_), Some(_)) => Err(LensError::Profile {
+                detail: format!(
+                    "profile `{}` sets both `password_env` and `secret`; specify exactly one",
+                    self.name
+                ),
+            }),
+            (Some(env), None) | (None, Some(SecretSpec::Env { var: env })) => std::env::var(env)
+                .map(Zeroizing::new)
+                .map_err(|_| LensError::ProfileEnvMissing { env: env.clone() }),
+            (None, Some(SecretSpec::Keyring { service, account })) => {
+                let service = service.clone();
+                let account = account.clone();
+                tokio::task::spawn_blocking(move || {
+                    let entry = keyring::Entry::new(&service, &account)
+                        .map_err(|err| map_keyring_error(err, &service, &account))?;
+                    entry
+                        .get_password()
+                        .map(Zeroizing::new)
+                        .map_err(|err| map_keyring_error(err, &service, &account))
+                })
+                .await
+                .map_err(|err| LensError::Internal {
+                    detail: format!("keyring lookup task join failed: {err}"),
+                })?
+            }
+            (None, None) => Err(LensError::Profile {
+                detail: format!(
+                    "profile `{}` has neither `password_env` nor `secret`; one is required for mysql/postgres profiles",
+                    self.name
+                ),
+            }),
+        }
     }
 }
 
@@ -117,6 +170,58 @@ pub(crate) fn validate_profile_name(name: &str) -> Result<(), LensError> {
         Err(LensError::Profile {
             detail: format!("invalid profile name `{name}`; expected ^[a-z0-9][a-z0-9_-]{{0,63}}$"),
         })
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn map_keyring_error(err: keyring::Error, service: &str, account: &str) -> LensError {
+    use keyring::Error as KeyringError;
+    match err {
+        KeyringError::NoEntry => LensError::SecretKeyringMissing {
+            service: service.to_string(),
+            account: account.to_string(),
+        },
+        KeyringError::NoStorageAccess(detail) => {
+            tracing::warn!(
+                target = "gaze_lens::profile::keyring",
+                service,
+                account,
+                detail = %detail,
+                "keyring access denied"
+            );
+            LensError::SecretKeyringDenied {
+                service: service.to_string(),
+                account: account.to_string(),
+            }
+        }
+        KeyringError::PlatformFailure(detail) => LensError::SecretBackendUnavailable {
+            backend: "platform".to_string(),
+            detail: detail.to_string(),
+        },
+        KeyringError::Ambiguous(detail) => {
+            tracing::warn!(
+                target = "gaze_lens::profile::keyring",
+                service,
+                account,
+                matches = detail.len(),
+                "keyring lookup ambiguous"
+            );
+            LensError::SecretKeyringDenied {
+                service: service.to_string(),
+                account: account.to_string(),
+            }
+        }
+        KeyringError::Invalid(_, _)
+        | KeyringError::TooLong(_, _)
+        | KeyringError::BadEncoding(_) => LensError::Profile {
+            detail: format!(
+                "keyring entry for service={service} account={account} is invalid; check the entry encoding and length"
+            ),
+        },
+        other => LensError::SecretBackendUnavailable {
+            backend: "platform".to_string(),
+            detail: other.to_string(),
+        },
     }
 }
 
@@ -134,6 +239,35 @@ pub fn validate_profile_bytes(bytes: &[u8], dest_label: &Path) -> Result<(), Len
             dest_label.display()
         ),
     })?;
+    let bytes_inner = input.as_bytes();
+    let needle = b"password";
+    let mut i = 0usize;
+    while i + needle.len() <= bytes_inner.len() {
+        if &bytes_inner[i..i + needle.len()] == needle {
+            let prev_ok = i == 0
+                || !matches!(
+                    bytes_inner[i - 1],
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'
+                );
+            let after = i + needle.len();
+            let is_password_env = bytes_inner.get(after..after + 4) == Some(b"_env");
+            if prev_ok && !is_password_env {
+                let mut j = after;
+                while j < bytes_inner.len() && matches!(bytes_inner[j], b' ' | b'\t') {
+                    j += 1;
+                }
+                if j < bytes_inner.len() && bytes_inner[j] == b'=' {
+                    return Err(LensError::Profile {
+                        detail: format!(
+                            "rendered profile {} contains a literal `password = ...` assignment; use `password_env` or `secret = {{ type = \"keyring\", ... }}` instead",
+                            dest_label.display()
+                        ),
+                    });
+                }
+            }
+        }
+        i += 1;
+    }
     // Reuses the same internal `ProfileFile` deserializer as `read_profiles_if_exists`
     // so error format matches the existing test bar.
     let _file: ProfileFile = match toml::from_str(input) {
@@ -184,7 +318,47 @@ pub fn load_profiles_with_warnings(
         "project profile config",
         project_config_is_explicit,
     )?;
-    Ok(merge_profiles(user_profiles, project_profiles))
+    let (merged, warnings) = merge_profiles(user_profiles, project_profiles);
+    validate_post_merge(&merged)?;
+    Ok((merged, warnings))
+}
+
+fn validate_post_merge(profiles: &[Profile]) -> Result<(), LensError> {
+    for profile in profiles {
+        let (password_env, secret) = match &profile.source {
+            SourceSpec::Mysql {
+                password_env,
+                secret,
+                ..
+            }
+            | SourceSpec::Postgres {
+                password_env,
+                secret,
+                ..
+            } => (password_env, secret),
+            SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } => continue,
+        };
+        match (password_env.is_some(), secret.is_some()) {
+            (true, true) => {
+                return Err(LensError::Profile {
+                    detail: format!(
+                        "profile `{}` sets both `password_env` and `secret`; specify exactly one",
+                        profile.name
+                    ),
+                });
+            }
+            (false, false) => {
+                return Err(LensError::Profile {
+                    detail: format!(
+                        "profile `{}` has neither `password_env` nor `secret`; one is required for mysql/postgres profiles",
+                        profile.name
+                    ),
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn emit_merge_warning(warning: &MergeWarning) {
@@ -422,6 +596,7 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
                 database,
                 username,
                 password_env,
+                secret,
                 ssh_host: project_ssh_host,
                 local_port: project_local_port,
                 readonly_required,
@@ -440,6 +615,7 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
             database: database.clone(),
             username: username.clone(),
             password_env: password_env.clone(),
+            secret: secret.clone(),
             ssh_host: user_ssh_host.clone().or_else(|| project_ssh_host.clone()),
             local_port: user_local_port.or(*project_local_port),
             readonly_required: *readonly_required,
@@ -458,6 +634,7 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
                 database,
                 username,
                 password_env,
+                secret,
                 ssh_host: project_ssh_host,
                 local_port: project_local_port,
                 readonly_required,
@@ -476,6 +653,7 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
             database: database.clone(),
             username: username.clone(),
             password_env: password_env.clone(),
+            secret: secret.clone(),
             ssh_host: user_ssh_host.clone().or_else(|| project_ssh_host.clone()),
             local_port: user_local_port.or(*project_local_port),
             readonly_required: *readonly_required,

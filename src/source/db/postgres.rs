@@ -51,7 +51,7 @@ impl PostgresSource {
                 ),
             });
         }
-        let password = profile.resolve_password()?;
+        let password = profile.resolve_password().await?;
         let options = PgConnectOptions::new()
             .host(host)
             .port(*port)

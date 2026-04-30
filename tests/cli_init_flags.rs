@@ -6,6 +6,7 @@
 //! to assertions that can be made without driving the guided flow.
 
 use assert_cmd::Command;
+use gaze_lens::cli::init::{InitArgs, SecretBackendChoice, SourceKind};
 
 fn bin() -> Command {
     Command::cargo_bin("gaze-lens").unwrap()
@@ -166,4 +167,56 @@ fn source_json_text_columns_flag_accepted_as_csv() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn secret_backend_env_default() {
+    let args = InitArgs::default_for_test();
+    assert_eq!(args.secret_backend, SecretBackendChoice::Env);
+}
+
+#[test]
+fn secret_backend_keyring_with_service_account() {
+    let mut args = InitArgs::default_for_test();
+    args.profile = Some("p".into());
+    args.source_kind = Some(SourceKind::Mysql);
+    args.secret_backend = SecretBackendChoice::Keyring;
+    args.source_password_keyring_service = Some("gaze-lens".into());
+    args.source_password_keyring_account = Some("prod".into());
+    args.no_keyring_write = true;
+    args.validate().expect("valid keyring flags");
+}
+
+#[test]
+fn validate_rejects_env_backend_with_keyring_flags() {
+    let mut args = InitArgs::default_for_test();
+    args.source_password_keyring_service = Some("gaze-lens".into());
+    let err = args.validate().expect_err("must reject");
+    assert!(err.to_string().contains("--secret-backend keyring"));
+}
+
+#[test]
+fn validate_rejects_keyring_backend_with_env_flag() {
+    let mut args = InitArgs::default_for_test();
+    args.secret_backend = SecretBackendChoice::Keyring;
+    args.source_password_env = Some("DB_PASSWORD".into());
+    let err = args.validate().expect_err("must reject");
+    assert!(err.to_string().contains("--source-password-env"));
+}
+
+#[test]
+fn non_interactive_keyring_without_no_keyring_write_rejects() {
+    let mut args = InitArgs::default_for_test();
+    args.profile = Some("p".into());
+    args.source_kind = Some(SourceKind::Mysql);
+    args.non_interactive = true;
+    args.secret_backend = SecretBackendChoice::Keyring;
+    args.source_password_keyring_service = Some("gaze-lens".into());
+    args.source_password_keyring_account = Some("prod".into());
+
+    let err = args.validate().expect_err("must reject combo");
+    let detail = err.to_string();
+    assert!(detail.contains("--non-interactive"), "{detail}");
+    assert!(detail.contains("--secret-backend keyring"), "{detail}");
+    assert!(detail.contains("--no-keyring-write"), "{detail}");
 }

@@ -50,6 +50,12 @@ pub enum LensError {
     ConvertError(#[from] LowerError),
     #[error("profile environment variable missing: {env}")]
     ProfileEnvMissing { env: String },
+    #[error("keyring entry not found: service={service} account={account}")]
+    SecretKeyringMissing { service: String, account: String },
+    #[error("keyring access denied: service={service} account={account}")]
+    SecretKeyringDenied { service: String, account: String },
+    #[error("secret backend unavailable ({backend}): {detail}")]
+    SecretBackendUnavailable { backend: String, detail: String },
     #[error("profile config not found ({label}): {path}")]
     ProfileNotFound { label: String, path: PathBuf },
     #[error("profile error: {detail}")]
@@ -125,6 +131,19 @@ pub fn sanitize_error(err: &LensError) -> String {
         },
         LensError::ProfileEnvMissing { env } => {
             format!("ProfileEnvMissing: missing environment variable {env}")
+        }
+        LensError::SecretKeyringMissing { service, account } => {
+            format!(
+                "SecretKeyringMissing: missing keyring entry service={service} account={account}"
+            )
+        }
+        LensError::SecretKeyringDenied { service, account } => {
+            format!(
+                "SecretKeyringDenied: keyring access denied service={service} account={account}"
+            )
+        }
+        LensError::SecretBackendUnavailable { backend, .. } => {
+            format!("SecretBackendUnavailable: {backend} backend unavailable")
         }
         LensError::ProfileNotFound { label, path } => {
             format!("ProfileNotFound: {label} not found: {}", path.display())
