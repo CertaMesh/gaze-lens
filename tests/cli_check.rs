@@ -10,6 +10,29 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 #[test]
+fn trust_report_json_shape_is_stable() {
+    use gaze_lens::cli::check_trust::{REPORT_VERSION, TrustReport};
+
+    let report = TrustReport::stub_for_test("prod");
+    let v: serde_json::Value = serde_json::to_value(&report).expect("json");
+    assert_eq!(v["report_version"], REPORT_VERSION);
+    for key in [
+        "profile",
+        "input_surface",
+        "process_surface",
+        "output_surface",
+        "at_rest_surface",
+        "handoff_surface",
+    ] {
+        assert!(v.get(key).is_some(), "missing top-level key `{key}`: {v}");
+    }
+    assert_eq!(v["input_surface"]["raw_sql"], "disabled (v1 lock, D5)");
+    assert_eq!(v["input_surface"]["query_mode"], "canned-structured");
+    assert!(v["process_surface"].get("profile_under_review").is_some());
+    assert!(v["process_surface"].get("serve_default_scope").is_some());
+}
+
+#[test]
 fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
