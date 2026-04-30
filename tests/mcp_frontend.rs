@@ -51,6 +51,34 @@ fn test_public_tool_set() {
     );
 }
 
+#[test]
+fn test_every_tool_requires_profile() {
+    let frontend = McpFrontend::new();
+    for tool in frontend.list_all_tools() {
+        let schema = tool.input_schema.as_ref();
+        let required = schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .expect("required array");
+        assert!(
+            required
+                .iter()
+                .any(|value| value.as_str() == Some("profile")),
+            "tool {} missing required profile",
+            tool.name
+        );
+        let properties = schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("properties");
+        let profile = properties.get("profile").expect("profile property");
+        assert_eq!(
+            profile.get("pattern").and_then(|value| value.as_str()),
+            Some(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_log_tail_and_grep_dispatch_through_source() {
     let manifest = Arc::new(RecordingManifest::default());

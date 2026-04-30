@@ -51,7 +51,7 @@ fn test_serve_parses_profile_and_paths() {
     let Cmd::Serve(args) = cli.cmd else {
         panic!("expected serve command");
     };
-    assert_eq!(args.profile, "prod");
+    assert_eq!(args.profile, vec!["prod".to_string()]);
     assert_eq!(
         cli.project_config.as_deref(),
         Some(std::path::Path::new("project.toml"))
@@ -63,7 +63,7 @@ fn test_serve_parses_profile_and_paths() {
 }
 
 #[tokio::test]
-async fn test_serve_mysql_profile_resolves_password_before_frontend() {
+async fn test_serve_mysql_profile_defers_password_until_first_call() {
     let temp = tempfile::tempdir().expect("tempdir");
     let project_config = temp.path().join("project.toml");
     let missing_env = format!("GAZE_LENS_TEST_MISSING_{}", ulid::Ulid::new());
@@ -90,7 +90,7 @@ readonly_required = true
 
     let err = run(
         ServeArgs {
-            profile: "prod".to_string(),
+            profile: vec!["prod".to_string()],
             manifest: temp.path().join("manifest.sqlite"),
             snapshot_dir: temp.path().join("snapshots"),
         },
@@ -98,9 +98,9 @@ readonly_required = true
         None,
     )
     .await
-    .expect_err("missing password env");
+    .expect_err("stdio frontend exits in test harness");
 
-    assert!(matches!(err, LensError::ProfileEnvMissing { env } if env == missing_env));
+    assert!(!matches!(err, LensError::ProfileEnvMissing { .. }));
 }
 
 #[tokio::test]

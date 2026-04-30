@@ -25,6 +25,11 @@ pub struct ColumnInfo {
 
 #[derive(Debug, Clone, serde::Serialize, Deserialize, JsonSchema)]
 pub struct CannedQuery {
+    #[schemars(
+        description = "Configured profile name selecting the source to dispatch. Required. Pattern: ^[a-z0-9][a-z0-9_-]{0,63}$.",
+        regex(pattern = r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    )]
+    pub profile: String,
     pub table: String,
     pub columns: Option<Vec<String>>,
     #[serde(default)]

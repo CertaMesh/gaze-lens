@@ -5,10 +5,7 @@
 //! - **Claude Code** (`<cwd>/.mcp.json`): `{"mcpServers": {"<key>": {...}}}`.
 //! - **Cursor** (project or user `.cursor/mcp.json`): same shape as Claude Code.
 //!
-//! Each renderer chooses the entry key at write-time (directive 19): the
-//! primary `gaze-lens` key is reused when it already contains the same
-//! `command` + `args`; a per-profile suffix is only used for additional
-//! profiles when the primary points at another profile.
+//! v0.2.2 writes one global `gaze-lens` entry whose args are `["serve"]`.
 
 use std::path::PathBuf;
 
@@ -54,49 +51,59 @@ impl ExistingEntry {
     }
 }
 
-fn entry_key_for(
+fn ensure_primary_available(
     primary: Option<&ExistingEntry>,
-    suffix: Option<&ExistingEntry>,
-    profile_name: &str,
     command: &str,
     cmd_args: &[String],
     allow_overwrite: bool,
-) -> Result<String, RenderError> {
-    let suffix_key = format!("{PRIMARY_KEY}-{profile_name}");
+) -> Result<(), RenderError> {
     let Some(primary) = primary else {
-        return Ok(PRIMARY_KEY.to_string());
+        return Ok(());
     };
 
     if primary.matches(command, cmd_args) {
-        return Ok(PRIMARY_KEY.to_string());
+        return Ok(());
     }
 
-    if primary.profile_name() == Some(profile_name) {
-        if allow_overwrite {
-            return Ok(PRIMARY_KEY.to_string());
-        }
-        return Err(RenderError::Collision {
-            name: format!("MCP entry `{PRIMARY_KEY}`"),
-        });
+    if allow_overwrite || primary.is_legacy_profile_entry() {
+        return Ok(());
     }
 
-    if allow_overwrite {
-        return Ok(PRIMARY_KEY.to_string());
-    }
+    Err(RenderError::Collision {
+        name: format!("MCP entry `{PRIMARY_KEY}`"),
+    })
+}
 
-    match suffix {
-        None => Ok(suffix_key),
-        Some(entry) if entry.matches(command, cmd_args) => Ok(suffix_key),
-        Some(_) => Err(RenderError::Collision {
-            name: format!("MCP entry `{suffix_key}`"),
-        }),
+fn legacy_suffix_keys<'a>(entries: impl Iterator<Item = (&'a str, &'a Item)>) -> Vec<String> {
+    entries
+        .filter_map(|(key, item)| {
+            let entry = toml_entry(item)?;
+            (key.starts_with("gaze-lens-") && entry.is_legacy_profile_entry())
+                .then(|| key.to_string())
+        })
+        .collect()
+}
+
+fn legacy_json_suffix_keys(servers: &Map<String, Value>) -> Vec<String> {
+    servers
+        .iter()
+        .filter_map(|(key, value)| {
+            let entry = json_entry(value)?;
+            (key.starts_with("gaze-lens-") && entry.is_legacy_profile_entry()).then(|| key.clone())
+        })
+        .collect()
+}
+
+impl ExistingEntry {
+    fn is_legacy_profile_entry(&self) -> bool {
+        self.command.as_deref() == Some("gaze-lens") && self.profile_name().is_some()
     }
 }
 
 /// Codex config.toml writer. `[mcp_servers.<key>] command = ..., args = [...]`.
 pub fn render_codex_toml(
     existing: Option<&str>,
-    profile_name: &str,
+    _profile_name: &str,
     command: &str,
     cmd_args: &[String],
     allow_overwrite: bool,
@@ -130,17 +137,11 @@ pub fn render_codex_toml(
             source_msg: "mcp_servers is not a table".into(),
         })?;
 
-    let suffix_key = format!("{PRIMARY_KEY}-{profile_name}");
     let primary = servers.get(PRIMARY_KEY).and_then(toml_entry);
-    let suffix = servers.get(&suffix_key).and_then(toml_entry);
-    let final_key = entry_key_for(
-        primary.as_ref(),
-        suffix.as_ref(),
-        profile_name,
-        command,
-        cmd_args,
-        allow_overwrite,
-    )?;
+    ensure_primary_available(primary.as_ref(), command, cmd_args, allow_overwrite)?;
+    for key in legacy_suffix_keys(servers.iter()) {
+        servers.remove(&key);
+    }
 
     let mut entry = Table::new();
     entry.insert("command", toml_edit::value(command));
@@ -149,7 +150,7 @@ pub fn render_codex_toml(
         arr.push(a.as_str());
     }
     entry.insert("args", toml_edit::value(arr));
-    servers.insert(&final_key, Item::Table(entry));
+    servers.insert(PRIMARY_KEY, Item::Table(entry));
 
     Ok(doc.to_string())
 }
@@ -175,28 +176,27 @@ fn toml_entry(item: &Item) -> Option<ExistingEntry> {
 /// Claude Code `.mcp.json` writer. Key = "mcpServers" object.
 pub fn render_claude_code_json(
     existing: Option<&str>,
-    profile_name: &str,
+    _profile_name: &str,
     command: &str,
     cmd_args: &[String],
     allow_overwrite: bool,
 ) -> Result<String, RenderError> {
-    render_mcp_json(existing, profile_name, command, cmd_args, allow_overwrite)
+    render_mcp_json(existing, command, cmd_args, allow_overwrite)
 }
 
 /// Cursor `mcp.json` writer. Same shape as Claude Code (`mcpServers` root).
 pub fn render_cursor_json(
     existing: Option<&str>,
-    profile_name: &str,
+    _profile_name: &str,
     command: &str,
     cmd_args: &[String],
     allow_overwrite: bool,
 ) -> Result<String, RenderError> {
-    render_mcp_json(existing, profile_name, command, cmd_args, allow_overwrite)
+    render_mcp_json(existing, command, cmd_args, allow_overwrite)
 }
 
 fn render_mcp_json(
     existing: Option<&str>,
-    profile_name: &str,
     command: &str,
     cmd_args: &[String],
     allow_overwrite: bool,
@@ -230,23 +230,17 @@ fn render_mcp_json(
             source_msg: "mcpServers is not an object".into(),
         })?;
 
-    let suffix_key = format!("{PRIMARY_KEY}-{profile_name}");
     let primary = servers.get(PRIMARY_KEY).and_then(json_entry);
-    let suffix = servers.get(&suffix_key).and_then(json_entry);
-    let final_key = entry_key_for(
-        primary.as_ref(),
-        suffix.as_ref(),
-        profile_name,
-        command,
-        cmd_args,
-        allow_overwrite,
-    )?;
+    ensure_primary_available(primary.as_ref(), command, cmd_args, allow_overwrite)?;
+    for key in legacy_json_suffix_keys(servers) {
+        servers.remove(&key);
+    }
 
     let mut entry = Map::new();
     entry.insert("command".into(), Value::String(command.to_string()));
     let args_arr: Vec<Value> = cmd_args.iter().map(|s| Value::String(s.clone())).collect();
     entry.insert("args".into(), Value::Array(args_arr));
-    servers.insert(final_key, Value::Object(entry));
+    servers.insert(PRIMARY_KEY.to_string(), Value::Object(entry));
 
     let out = serde_json::to_string_pretty(&root).map_err(|e| RenderError::Parse {
         path: PathBuf::new(),

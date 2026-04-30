@@ -4,7 +4,9 @@ compile_error!(
 );
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,12 +33,89 @@ pub struct Session {
 struct SessionInner {
     lens_session_id: ulid::Ulid,
     gaze_session: gaze::Session,
-    pipeline: Arc<gaze::Pipeline>,
+    pipeline_mode: Mutex<PipelineMode>,
     manifest: Arc<dyn ManifestStore>,
     snapshot_dir: PathBuf,
-    sources: Mutex<HashMap<String, Arc<dyn Source>>>,
+    sources: Mutex<HashMap<(SourceClass, String), Arc<LazySource>>>,
+    legacy_sources: Mutex<HashMap<String, Arc<dyn Source>>>,
     schema_tokenizer: SchemaTokenizer,
     caps: OutputCaps,
+}
+
+pub(crate) enum PipelineMode {
+    SingleProfile {
+        name: String,
+        pipeline: Arc<gaze::Pipeline>,
+    },
+    MultiProfile(HashMap<String, Arc<gaze::Pipeline>>),
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[doc(hidden)]
+pub enum SourceClass {
+    Database,
+    Log,
+}
+
+impl SourceClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            SourceClass::Database => "database",
+            SourceClass::Log => "log",
+        }
+    }
+}
+
+pub(crate) fn tool_kind(tool: &str) -> Option<SourceClass> {
+    match tool {
+        "query" | "schema" | "list_tables" => Some(SourceClass::Database),
+        "log_tail" | "log_grep" => Some(SourceClass::Log),
+        _ => None,
+    }
+}
+
+#[doc(hidden)]
+pub type SourceBuilder = Arc<
+    dyn Fn() -> Pin<Box<dyn Future<Output = Result<Arc<dyn Source>, LensError>> + Send>>
+        + Send
+        + Sync,
+>;
+
+#[doc(hidden)]
+pub struct LazySource {
+    cell: tokio::sync::OnceCell<Arc<dyn Source>>,
+    builder: SourceBuilder,
+}
+
+impl LazySource {
+    #[doc(hidden)]
+    pub fn new(builder: SourceBuilder) -> Self {
+        Self {
+            cell: tokio::sync::OnceCell::new(),
+            builder,
+        }
+    }
+
+    fn ready(source: Arc<dyn Source>) -> Self {
+        let cell = tokio::sync::OnceCell::new();
+        if cell.set(source.clone()).is_err() {
+            unreachable!("new once cell accepts value");
+        }
+        Self {
+            cell,
+            builder: Arc::new(move || {
+                let source = source.clone();
+                Box::pin(async move { Ok(source) })
+            }),
+        }
+    }
+
+    async fn get(&self) -> Result<Arc<dyn Source>, LensError> {
+        self.cell
+            .get_or_try_init(|| (self.builder)())
+            .await
+            .cloned()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -121,6 +200,22 @@ impl Session {
         manifest_path: &Path,
         snapshot_dir: &Path,
     ) -> Result<Self, LensError> {
+        Self::new_with_pipeline_for_profile(
+            policy,
+            pipeline,
+            "default",
+            manifest_path,
+            snapshot_dir,
+        )
+    }
+
+    pub fn new_with_pipeline_for_profile(
+        policy: &gaze::Policy,
+        pipeline: gaze::Pipeline,
+        profile_name: impl Into<String>,
+        manifest_path: &Path,
+        snapshot_dir: &Path,
+    ) -> Result<Self, LensError> {
         let lens_session_id = ulid::Ulid::new();
         let gaze_session = Self::build_gaze_session(&lens_session_id, policy)?;
         let manifest = ManifestWriter::new(
@@ -131,7 +226,32 @@ impl Session {
         Ok(Self::from_parts(
             lens_session_id,
             gaze_session,
-            pipeline,
+            PipelineMode::SingleProfile {
+                name: profile_name.into(),
+                pipeline: Arc::new(pipeline),
+            },
+            Arc::new(manifest),
+            snapshot_dir.to_path_buf(),
+            OutputCaps::default(),
+        ))
+    }
+
+    pub fn new_for_multi_profile(
+        policy: &gaze::Policy,
+        manifest_path: &Path,
+        snapshot_dir: &Path,
+    ) -> Result<Self, LensError> {
+        let lens_session_id = ulid::Ulid::new();
+        let gaze_session = Self::build_gaze_session(&lens_session_id, policy)?;
+        let manifest = ManifestWriter::new(
+            manifest_path,
+            lens_session_id,
+            gaze_session.audit_session_id(),
+        )?;
+        Ok(Self::from_parts(
+            lens_session_id,
+            gaze_session,
+            PipelineMode::MultiProfile(HashMap::new()),
             Arc::new(manifest),
             snapshot_dir.to_path_buf(),
             OutputCaps::default(),
@@ -145,7 +265,7 @@ impl Session {
     fn from_parts(
         lens_session_id: ulid::Ulid,
         gaze_session: gaze::Session,
-        pipeline: gaze::Pipeline,
+        pipeline_mode: PipelineMode,
         manifest: Arc<dyn ManifestStore>,
         snapshot_dir: PathBuf,
         caps: OutputCaps,
@@ -154,10 +274,11 @@ impl Session {
             inner: Arc::new(SessionInner {
                 lens_session_id,
                 gaze_session,
-                pipeline: Arc::new(pipeline),
+                pipeline_mode: Mutex::new(pipeline_mode),
                 manifest,
                 snapshot_dir,
                 sources: Mutex::new(HashMap::new()),
+                legacy_sources: Mutex::new(HashMap::new()),
                 schema_tokenizer: SchemaTokenizer::default(),
                 caps,
             }),
@@ -180,23 +301,29 @@ impl Session {
         })
     }
 
-    pub async fn dispatch_tool(&self, call: ToolCall) -> Result<ToolResult, LensError> {
-        let redacted_args = self.redact_args(&call.args)?;
+    pub async fn dispatch_tool(&self, mut call: ToolCall) -> Result<ToolResult, LensError> {
+        let profile_name = self.extract_profile(&mut call)?;
+        let pipeline = self.pipeline_for(&profile_name)?;
+        let redacted_args = self.redact_args(&call.args, &pipeline)?;
         self.inner.manifest.begin_call(&call, &redacted_args)?;
 
-        let raw_result =
-            match tokio::time::timeout(self.inner.caps.timeout, self.invoke_source(&call)).await {
-                Ok(result) => result.inspect_err(|err| {
-                    let _ = self.inner.manifest.fail_call(&call.call_id, err);
-                })?,
-                Err(_) => {
-                    let err = LensError::Truncated(TruncatedAt::Timeout);
-                    self.finish_truncated_call(&call.call_id, TruncatedAt::Timeout)?;
-                    return Err(err);
-                }
-            };
+        let raw_result = match tokio::time::timeout(
+            self.inner.caps.timeout,
+            self.invoke_source(&call, &profile_name),
+        )
+        .await
+        {
+            Ok(result) => result.inspect_err(|err| {
+                let _ = self.inner.manifest.fail_call(&call.call_id, err);
+            })?,
+            Err(_) => {
+                let err = LensError::Truncated(TruncatedAt::Timeout);
+                self.finish_truncated_call(&call.call_id, TruncatedAt::Timeout)?;
+                return Err(err);
+            }
+        };
         let clean = match tokio::time::timeout(self.inner.caps.timeout, async {
-            self.redact_result(raw_result)
+            self.redact_result(raw_result, &pipeline)
         })
         .await
         {
@@ -220,18 +347,69 @@ impl Session {
 
     pub fn register_source(&self, name: impl Into<String>, source: Arc<dyn Source>) {
         self.inner
-            .sources
+            .legacy_sources
             .lock()
-            .expect("source map lock")
+            .expect("legacy source map lock")
             .insert(name.into(), source);
     }
 
+    pub fn register_source_for_profile(
+        &self,
+        class: SourceClass,
+        profile_name: impl Into<String>,
+        source: Arc<dyn Source>,
+    ) {
+        self.inner.sources.lock().expect("source map lock").insert(
+            (class, profile_name.into()),
+            Arc::new(LazySource::ready(source)),
+        );
+    }
+
+    pub fn register_source_lazy(
+        &self,
+        class: SourceClass,
+        profile_name: impl Into<String>,
+        builder: SourceBuilder,
+    ) {
+        self.inner.sources.lock().expect("source map lock").insert(
+            (class, profile_name.into()),
+            Arc::new(LazySource::new(builder)),
+        );
+    }
+
     pub fn register_fake_source(&self, name: &str, source: Box<dyn FakeSource>) {
-        self.inner
-            .sources
-            .lock()
-            .expect("source map lock")
-            .insert(name.to_string(), Arc::new(FakeSourceAdapter::new(source)));
+        self.register_source(name, Arc::new(FakeSourceAdapter::new(source)));
+    }
+
+    #[doc(hidden)]
+    pub fn register_fake_source_for_profile(
+        &self,
+        class: SourceClass,
+        profile_name: &str,
+        source: Box<dyn FakeSource>,
+    ) {
+        self.register_source_for_profile(
+            class,
+            profile_name,
+            Arc::new(FakeSourceAdapter::new(source)),
+        );
+    }
+
+    pub fn register_pipeline(
+        &self,
+        profile_name: impl Into<String>,
+        pipeline: Arc<gaze::Pipeline>,
+    ) -> Result<(), LensError> {
+        let mut mode = self.inner.pipeline_mode.lock().expect("pipeline mode lock");
+        match &mut *mode {
+            PipelineMode::SingleProfile { .. } => Err(LensError::Internal {
+                detail: "cannot register profile pipeline on single-profile session".to_string(),
+            }),
+            PipelineMode::MultiProfile(pipelines) => {
+                pipelines.insert(profile_name.into(), pipeline);
+                Ok(())
+            }
+        }
     }
 
     pub fn tokenize_schema_metadata(
@@ -254,13 +432,105 @@ impl Session {
             .tokenize_table_names(tables, profile_allowlist)
     }
 
-    fn redact_args(&self, args: &ToolArgs) -> Result<RedactedToolArgs, LensError> {
+    fn extract_profile(&self, call: &mut ToolCall) -> Result<String, LensError> {
+        let mut mode = self.inner.pipeline_mode.lock().expect("pipeline mode lock");
+        match &mut *mode {
+            PipelineMode::SingleProfile { name, .. } => {
+                if !call.args.0.is_object() {
+                    return Err(LensError::Profile {
+                        detail: "args must be a JSON object".to_string(),
+                    });
+                }
+                let object = call.args.0.as_object_mut().expect("checked object");
+                match object.get("profile").and_then(|value| value.as_str()) {
+                    Some(profile) if profile == name => {}
+                    Some(profile) => {
+                        return Err(LensError::ProfileMismatch {
+                            profile: profile.to_string(),
+                            tool: call.tool_name.clone(),
+                            required: name.clone(),
+                            actual: "different".to_string(),
+                        });
+                    }
+                    None => {
+                        object.insert(
+                            "profile".to_string(),
+                            serde_json::Value::String(name.clone()),
+                        );
+                    }
+                }
+                Ok(name.clone())
+            }
+            PipelineMode::MultiProfile(pipelines) => {
+                if !call.args.0.is_object() {
+                    return Err(LensError::Profile {
+                        detail: "args must be a JSON object".to_string(),
+                    });
+                }
+                let profile = call
+                    .args
+                    .0
+                    .get("profile")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| LensError::Profile {
+                        detail: "profile required".to_string(),
+                    })?;
+                if profile.is_empty() {
+                    return Err(LensError::Profile {
+                        detail: "profile required".to_string(),
+                    });
+                }
+                if pipelines.contains_key(profile) {
+                    Ok(profile.to_string())
+                } else {
+                    let mut loaded = pipelines.keys().cloned().collect::<Vec<_>>();
+                    loaded.sort();
+                    Err(LensError::ProfileUnknown {
+                        profile: profile.to_string(),
+                        loaded,
+                    })
+                }
+            }
+        }
+    }
+
+    fn pipeline_for(&self, profile: &str) -> Result<Arc<gaze::Pipeline>, LensError> {
+        let mode = self.inner.pipeline_mode.lock().expect("pipeline mode lock");
+        match &*mode {
+            PipelineMode::SingleProfile { name, pipeline } if name == profile => {
+                Ok(pipeline.clone())
+            }
+            PipelineMode::SingleProfile { name, .. } => Err(LensError::ProfileMismatch {
+                profile: profile.to_string(),
+                tool: "unknown".to_string(),
+                required: name.clone(),
+                actual: "different".to_string(),
+            }),
+            PipelineMode::MultiProfile(pipelines) => {
+                pipelines
+                    .get(profile)
+                    .cloned()
+                    .ok_or_else(|| LensError::ProfileUnknown {
+                        profile: profile.to_string(),
+                        loaded: {
+                            let mut loaded = pipelines.keys().cloned().collect::<Vec<_>>();
+                            loaded.sort();
+                            loaded
+                        },
+                    })
+            }
+        }
+    }
+
+    fn redact_args(
+        &self,
+        args: &ToolArgs,
+        pipeline: &gaze::Pipeline,
+    ) -> Result<RedactedToolArgs, LensError> {
         let raw = serde_json::to_string(&args.0).map_err(|err| LensError::RedactionFailed {
             detail: err.to_string(),
         })?;
-        let clean = self
-            .inner
-            .pipeline
+        let clean = pipeline
             .redact(&self.inner.gaze_session, RawDocument::Text(raw))
             .map_err(|err| LensError::RedactionFailed {
                 detail: err.to_string(),
@@ -273,34 +543,90 @@ impl Session {
         }
     }
 
-    async fn invoke_source(&self, call: &ToolCall) -> Result<SourceOutput, LensError> {
+    async fn invoke_source(
+        &self,
+        call: &ToolCall,
+        profile_name: &str,
+    ) -> Result<SourceOutput, LensError> {
+        let legacy_source = {
+            self.inner
+                .legacy_sources
+                .lock()
+                .expect("legacy source map lock")
+                .get(&call.tool_name)
+                .cloned()
+        };
+        if let Some(source) = legacy_source {
+            return source.dispatch(call).await;
+        }
+        let class = tool_kind(&call.tool_name).ok_or_else(|| LensError::SourceError {
+            source_name: call.tool_name.clone(),
+            detail: "unknown source".to_string(),
+            sql: None,
+            stderr: None,
+        })?;
         let source = self
-            .inner
-            .sources
-            .lock()
-            .expect("source map lock")
-            .get(&call.tool_name)
-            .cloned()
-            .ok_or_else(|| LensError::SourceError {
-                source_name: call.tool_name.clone(),
-                detail: "unknown source".to_string(),
-                sql: None,
-                stderr: None,
-            })?;
+            .lookup_source(class, profile_name, &call.tool_name)?
+            .get()
+            .await?;
         source.dispatch(call).await
     }
 
-    fn redact_result(&self, output: SourceOutput) -> Result<CleanOutput, LensError> {
+    fn lookup_source(
+        &self,
+        class: SourceClass,
+        profile_name: &str,
+        tool_name: &str,
+    ) -> Result<Arc<LazySource>, LensError> {
+        let sources = self.inner.sources.lock().expect("source map lock");
+        if let Some(source) = sources.get(&(class, profile_name.to_string())) {
+            return Ok(source.clone());
+        }
+        let actual = sources
+            .keys()
+            .find(|(_, name)| name == profile_name)
+            .map(|(actual, _)| *actual);
+        match actual {
+            Some(actual) => Err(LensError::ProfileMismatch {
+                profile: profile_name.to_string(),
+                tool: tool_name.to_string(),
+                required: class.as_str().to_string(),
+                actual: actual.as_str().to_string(),
+            }),
+            None => Err(LensError::ProfileUnknown {
+                profile: profile_name.to_string(),
+                loaded: {
+                    let mut loaded = sources
+                        .keys()
+                        .map(|(_, name)| name.clone())
+                        .collect::<Vec<_>>();
+                    loaded.sort();
+                    loaded.dedup();
+                    loaded
+                },
+            }),
+        }
+    }
+
+    fn redact_result(
+        &self,
+        output: SourceOutput,
+        pipeline: &gaze::Pipeline,
+    ) -> Result<CleanOutput, LensError> {
         match output {
-            SourceOutput::Rows(rows) => self.redact_rows(rows),
-            SourceOutput::Text(text) => self.redact_text_output(text, Vec::new()),
+            SourceOutput::Rows(rows) => self.redact_rows(rows, pipeline),
+            SourceOutput::Text(text) => self.redact_text_output(text, Vec::new(), pipeline),
             SourceOutput::TextWithTruncation { text, truncated_at } => {
-                self.redact_text_output(text, truncated_at)
+                self.redact_text_output(text, truncated_at, pipeline)
             }
         }
     }
 
-    fn redact_rows(&self, rows: Vec<LensRow>) -> Result<CleanOutput, LensError> {
+    fn redact_rows(
+        &self,
+        rows: Vec<LensRow>,
+        pipeline: &gaze::Pipeline,
+    ) -> Result<CleanOutput, LensError> {
         let mut truncated_at = Vec::new();
         if rows.len() > self.inner.caps.rows {
             truncated_at.push(TruncatedAt::Rows);
@@ -311,14 +637,12 @@ impl Session {
             let mut raw_fields = std::collections::BTreeMap::new();
             let mut redacted_row = row;
             for (key, value) in &mut redacted_row {
-                value.redact_with(&self.inner.gaze_session, &self.inner.pipeline)?;
+                value.redact_with(&self.inner.gaze_session, pipeline)?;
                 if let Some(lowered) = value.lower_for_redaction()? {
                     raw_fields.insert(key.clone(), lowered);
                 }
             }
-            let redacted = self
-                .inner
-                .pipeline
+            let redacted = pipeline
                 .redact(
                     &self.inner.gaze_session,
                     RawDocument::Structured(raw_fields),
@@ -380,14 +704,13 @@ impl Session {
         &self,
         text: String,
         mut truncated_at: Vec<TruncatedAt>,
+        pipeline: &gaze::Pipeline,
     ) -> Result<CleanOutput, LensError> {
         let (capped, truncated) = cap_string(text, self.inner.caps.bytes);
         if truncated {
             push_truncation(&mut truncated_at, TruncatedAt::Bytes);
         }
-        let clean = self
-            .inner
-            .pipeline
+        let clean = pipeline
             .redact(&self.inner.gaze_session, RawDocument::Text(capped))
             .map_err(|err| LensError::RedactionFailed {
                 detail: err.to_string(),
@@ -432,7 +755,10 @@ impl Session {
         Ok(Self::from_parts(
             lens_session_id,
             gaze_session,
-            default_pipeline()?,
+            PipelineMode::SingleProfile {
+                name: "test".to_string(),
+                pipeline: Arc::new(default_pipeline()?),
+            },
             manifest,
             snapshot_dir.to_path_buf(),
             caps,

@@ -114,6 +114,7 @@ mod integration {
 
         let rows = source
             .query(&CannedQuery {
+                profile: "test".to_string(),
                 table: "lens_smoke".to_string(),
                 columns: Some(vec![
                     "numeric_value".to_string(),
@@ -171,6 +172,7 @@ mod integration {
 
         let err = source
             .query(&CannedQuery {
+                profile: "test".to_string(),
                 table: "lens_smoke".to_string(),
                 columns: Some(vec!["int_array".to_string()]),
                 r#where: None,

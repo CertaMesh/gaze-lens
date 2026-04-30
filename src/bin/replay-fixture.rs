@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use gaze_lens::errors::LensError;
 use gaze_lens::session::restore::restore_whole_session;
-use gaze_lens::session::{Session, ToolCall};
+use gaze_lens::session::{Session, SourceClass, ToolCall};
 use gaze_lens::source::{FakeSource, SourceOutput, ToolArgs};
 use gaze_lens::value::LensValue;
 
@@ -28,13 +28,17 @@ fn seed() -> Result<(), String> {
     let snapshot_dir = required_path("--snapshot-dir")?;
     let session =
         Session::new(&policy(), &manifest, &snapshot_dir).map_err(|err| err.to_string())?;
-    session.register_fake_source("fake", Box::new(CanarySource));
+    session.register_fake_source_for_profile(
+        SourceClass::Database,
+        "default",
+        Box::new(CanarySource),
+    );
     let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
     runtime
         .block_on(session.dispatch_tool(ToolCall {
             call_id: ulid::Ulid::new().to_string(),
-            tool_name: "fake".to_string(),
-            args: ToolArgs(serde_json::json!({ "email": CANARY })),
+            tool_name: "query".to_string(),
+            args: ToolArgs(serde_json::json!({ "profile": "default", "email": CANARY })),
         }))
         .map_err(|err| err.to_string())?;
     println!("SEEDED: {}", session.lens_session_id());

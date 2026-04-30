@@ -79,13 +79,15 @@ The primary surface is the MCP server (stdio). Wire `gaze-lens serve` into any M
   "mcpServers": {
     "gaze-lens": {
       "command": "gaze-lens",
-      "args": ["serve", "--profile", "prod"]
+      "args": ["serve"]
     }
   }
 }
 ```
 
-The agent then sees five tools and nothing else:
+`serve --profile prod` remains available when you want to expose only one
+profile, but MCP tool calls must still pass `profile: "prod"`. The agent sees
+five tools and nothing else:
 
 | Tool | Purpose |
 |---|---|

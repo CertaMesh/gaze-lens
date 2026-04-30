@@ -69,6 +69,7 @@ async fn mcp_duplex_query_roundtrips_manifest_and_snapshot() {
         .call_tool(CallToolRequestParam {
             name: "query".into(),
             arguments: serde_json::json!({
+                "profile": "default",
                 "table": "users",
                 "columns": ["email"],
                 "limit": 1
@@ -93,7 +94,9 @@ async fn mcp_duplex_query_roundtrips_manifest_and_snapshot() {
     let tail = client
         .call_tool(CallToolRequestParam {
             name: "log_tail".into(),
-            arguments: serde_json::json!({"lines": 10}).as_object().cloned(),
+            arguments: serde_json::json!({"profile": "default", "lines": 10})
+                .as_object()
+                .cloned(),
         })
         .await
         .expect("log_tail");
@@ -105,6 +108,7 @@ async fn mcp_duplex_query_roundtrips_manifest_and_snapshot() {
         .call_tool(CallToolRequestParam {
             name: "log_grep".into(),
             arguments: serde_json::json!({
+                "profile": "default",
                 "pattern": "bob@example.com",
                 "level": "ERROR",
                 "limit": 5

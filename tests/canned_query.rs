@@ -32,6 +32,7 @@ fn column(name: &str, data_type: &str) -> ColumnInfo {
 #[test]
 fn roundtrip_every_operator_and_or_order_path() {
     let query = CannedQuery {
+        profile: "test".to_string(),
         table: "users".to_string(),
         columns: Some(vec!["id".to_string(), "email".to_string()]),
         r#where: Some(vec![
@@ -91,6 +92,7 @@ fn roundtrip_every_operator_and_or_order_path() {
 #[test]
 fn default_combinator_is_and() {
     let query = CannedQuery {
+        profile: "test".to_string(),
         table: "users".to_string(),
         columns: None,
         r#where: Some(vec![
@@ -114,6 +116,7 @@ fn default_combinator_is_and() {
 #[test]
 fn rejects_column_not_in_schema() {
     let query = CannedQuery {
+        profile: "test".to_string(),
         table: "users".to_string(),
         columns: Some(vec!["unknown".to_string()]),
         r#where: None,
@@ -131,6 +134,7 @@ fn rejects_column_not_in_schema() {
 #[test]
 fn rejects_operator_type_mismatch() {
     let query = CannedQuery {
+        profile: "test".to_string(),
         table: "users".to_string(),
         columns: None,
         r#where: Some(vec![clause(
@@ -152,6 +156,7 @@ fn rejects_operator_type_mismatch() {
 #[test]
 fn rejects_in_with_non_list_value() {
     let query = CannedQuery {
+        profile: "test".to_string(),
         table: "users".to_string(),
         columns: None,
         r#where: Some(vec![clause("id", WhereOp::In, scalar(ScalarValue::I64(1)))]),
@@ -169,6 +174,7 @@ fn rejects_in_with_non_list_value() {
 #[test]
 fn rejects_malicious_column_before_sql_construction() {
     let query = CannedQuery {
+        profile: "test".to_string(),
         table: "users".to_string(),
         columns: None,
         r#where: Some(vec![clause(
@@ -191,6 +197,7 @@ fn rejects_malicious_column_before_sql_construction() {
 fn keyword_fragments_inside_identifiers_are_allowed() {
     for column_name in ["select_count", "user_select"] {
         let query = CannedQuery {
+            profile: "test".to_string(),
             table: "users".to_string(),
             columns: Some(vec![column_name.to_string()]),
             r#where: None,
@@ -212,6 +219,7 @@ fn keyword_fragments_inside_identifiers_are_allowed() {
 fn whole_identifier_sql_keywords_are_rejected_case_insensitively() {
     for column_name in ["select", "SELECT", "Select"] {
         let query = CannedQuery {
+            profile: "test".to_string(),
             table: "users".to_string(),
             columns: Some(vec![column_name.to_string()]),
             r#where: None,
@@ -242,6 +250,7 @@ fn missing_column_allowed_field_deserializes_default_deny() {
 #[test]
 fn limit_cap_clamps_to_schema_limit() {
     let query = CannedQuery {
+        profile: "test".to_string(),
         table: "users".to_string(),
         columns: Some(vec!["id".to_string()]),
         r#where: None,
@@ -259,6 +268,7 @@ fn limit_cap_clamps_to_schema_limit() {
 #[test]
 fn postgres_dialect_uses_numbered_placeholders_and_quoted_idents() {
     let query = CannedQuery {
+        profile: "test".to_string(),
         table: "users".to_string(),
         columns: Some(vec!["id".to_string(), "email".to_string()]),
         r#where: Some(vec![
@@ -298,6 +308,7 @@ fn postgres_dialect_uses_numbered_placeholders_and_quoted_idents() {
 #[test]
 fn sqlite_dialect_keeps_question_placeholders_with_sqlite_safe_idents() {
     let query = CannedQuery {
+        profile: "test".to_string(),
         table: "users".to_string(),
         columns: Some(vec!["id".to_string()]),
         r#where: Some(vec![clause(
