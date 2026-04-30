@@ -4,6 +4,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::errors::LensError;
@@ -219,7 +220,79 @@ async fn real_host_key_fingerprint(host: &str, allow_new_host: bool) -> Result<S
         .ok_or_else(|| LensError::Profile {
             detail: "ssh-keyscan returned no host key".into(),
         })?;
-    Ok(line)
+    fingerprint_host_key(&line).await
+}
+
+async fn fingerprint_host_key(host_key_line: &str) -> Result<String, LensError> {
+    let mut cmd = Command::new("ssh-keygen");
+    cmd.args(["-lf", "-"]);
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|err| LensError::Profile {
+        detail: format!("ssh-keygen spawn failed: {err}"),
+    })?;
+    let mut stdin = child.stdin.take().ok_or_else(|| LensError::Internal {
+        detail: "ssh-keygen stdin was not piped".into(),
+    })?;
+    stdin
+        .write_all(host_key_line.as_bytes())
+        .await
+        .map_err(|err| LensError::Profile {
+            detail: format!("ssh-keygen stdin failed: {err}"),
+        })?;
+    stdin
+        .write_all(b"\n")
+        .await
+        .map_err(|err| LensError::Profile {
+            detail: format!("ssh-keygen stdin failed: {err}"),
+        })?;
+    drop(stdin);
+
+    let stdout = child.stdout.take().ok_or_else(|| LensError::Internal {
+        detail: "ssh-keygen stdout was not piped".into(),
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| LensError::Internal {
+        detail: "ssh-keygen stderr was not piped".into(),
+    })?;
+    let read_result = tokio::time::timeout(Duration::from_secs(10), async {
+        let stdout_task = read_capped(stdout, 4096);
+        let stderr_task = read_capped(stderr, STDERR_CAP_BYTES);
+        let wait_task = child.wait();
+        let (stdout, stderr, status) = tokio::join!(stdout_task, stderr_task, wait_task);
+        Ok::<_, std::io::Error>((stdout?, stderr?, status?))
+    })
+    .await;
+    let (stdout, stderr, status) = match read_result {
+        Ok(Ok((stdout, stderr, status))) => (stdout, stderr, status),
+        Ok(Err(err)) => {
+            return Err(LensError::Profile {
+                detail: format!("ssh-keygen failed: {err}"),
+            });
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            return Err(LensError::Profile {
+                detail: "ssh-keygen timed out".into(),
+            });
+        }
+    };
+    if !status.success() {
+        return Err(LensError::Profile {
+            detail: format!(
+                "ssh-keygen returned {:?}: {}",
+                status.code(),
+                String::from_utf8_lossy(&stderr)
+            ),
+        });
+    }
+    String::from_utf8_lossy(&stdout)
+        .split_whitespace()
+        .find(|part| part.starts_with("SHA256:"))
+        .map(str::to_string)
+        .ok_or_else(|| LensError::Profile {
+            detail: "ssh-keygen output did not include a SHA256 fingerprint".into(),
+        })
 }
 
 #[doc(hidden)]
