@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use gaze::{Action, ClassRule, DefaultRule};
 use gaze_lens::errors::LensError;
+use gaze_lens::session::restore::restore_whole_session;
 use gaze_lens::session::{Session, SourceBuilder, SourceClass, ToolCall};
 use gaze_lens::source::{FakeSource, FakeSourceAdapter, SourceOutput, ToolArgs};
 use gaze_lens::value::{LensRow, LensValue};
@@ -45,6 +46,20 @@ fn call(tool: &str, profile: &str) -> ToolCall {
             "profile": profile,
             "table": "users",
             "columns": ["email"],
+            "limit": 1
+        })),
+    }
+}
+
+fn call_with_filter(tool: &str, profile: &str, email: &str) -> ToolCall {
+    ToolCall {
+        call_id: ulid::Ulid::new().to_string(),
+        tool_name: tool.to_string(),
+        args: ToolArgs(serde_json::json!({
+            "profile": profile,
+            "table": "users",
+            "columns": ["email"],
+            "where": [{"col": "email", "op": "eq", "val": email}],
             "limit": 1
         })),
     }
@@ -131,6 +146,62 @@ async fn concurrent_first_calls_across_db_tools_invoke_builder_once() {
 
     let _ = tokio::try_join!(h1, h2, h3).expect("join");
     assert_eq!(counter.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn whole_session_replay_restores_calls_across_profiles() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest = temp.path().join("manifest.sqlite");
+    let snapshots = temp.path().join("snapshots");
+    let session = Arc::new(
+        Session::new_for_multi_profile(&policy(), &manifest, &snapshots).expect("session"),
+    );
+    session
+        .register_pipeline("a", Arc::new(pipeline()))
+        .expect("pipeline a");
+    session
+        .register_pipeline("b", Arc::new(pipeline()))
+        .expect("pipeline b");
+    session.register_fake_source_for_profile(
+        SourceClass::Database,
+        "a",
+        Box::new(RowsSource("alice@example.com")),
+    );
+    session.register_fake_source_for_profile(
+        SourceClass::Database,
+        "b",
+        Box::new(RowsSource("bob@example.com")),
+    );
+
+    session
+        .dispatch_tool(call_with_filter("query", "a", "alice@example.com"))
+        .await
+        .expect("profile a");
+    session
+        .dispatch_tool(call_with_filter("query", "b", "bob@example.com"))
+        .await
+        .expect("profile b");
+
+    let restored = restore_whole_session(&manifest, &session.lens_session_id().to_string(), 0)
+        .expect("whole-session replay");
+    assert_eq!(restored.calls.len(), 2);
+    let restored_args = restored
+        .calls
+        .iter()
+        .map(|call| call.restored_args_json.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        restored_args.contains("alice@example.com"),
+        "{restored_args}"
+    );
+    assert!(restored_args.contains("bob@example.com"), "{restored_args}");
+    let snapshot_count = std::fs::read_dir(&snapshots)
+        .expect("snapshots")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "snap"))
+        .count();
+    assert_eq!(snapshot_count, 1, "one shared session snapshot");
 }
 
 struct RowsSource(&'static str);

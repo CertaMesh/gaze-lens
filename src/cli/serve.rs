@@ -37,11 +37,32 @@ pub struct ServeArgs {
     pub snapshot_dir: PathBuf,
 }
 
+#[doc(hidden)]
+pub struct PreparedServe {
+    pub session: Arc<Session>,
+    pub loaded_profiles: Vec<String>,
+}
+
 pub async fn run(
     args: ServeArgs,
     project_config: Option<&Path>,
     user_config: Option<&Path>,
 ) -> Result<(), LensError> {
+    let prepared = prepare_session(args, project_config, user_config)?;
+    eprintln!("{}", loaded_profiles_banner(&prepared.loaded_profiles));
+    run_frontend_until_shutdown(
+        McpFrontend::new(),
+        prepared.session,
+        wait_for_shutdown_signal(),
+    )
+    .await
+}
+
+fn prepare_session(
+    args: ServeArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+) -> Result<PreparedServe, LensError> {
     let profiles = select_profiles(load_profiles(project_config, user_config)?, &args.profile)?;
     let manifest = expand_path(&args.manifest)?;
     let snapshot_dir = expand_path(&args.snapshot_dir)?;
@@ -68,14 +89,32 @@ pub async fn run(
         register_lazy_source(&session, profile);
     }
 
-    let loaded = profiles
+    let loaded_profiles = profiles
         .iter()
-        .map(|profile| profile.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    eprintln!("gaze-lens serve: loaded profiles: [{loaded}]");
+        .map(|profile| profile.name.clone())
+        .collect::<Vec<_>>();
 
-    run_frontend_until_shutdown(McpFrontend::new(), session, wait_for_shutdown_signal()).await
+    Ok(PreparedServe {
+        session,
+        loaded_profiles,
+    })
+}
+
+#[doc(hidden)]
+pub fn prepare_session_for_test(
+    args: ServeArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+) -> Result<PreparedServe, LensError> {
+    prepare_session(args, project_config, user_config)
+}
+
+#[doc(hidden)]
+pub fn loaded_profiles_banner(profile_names: &[String]) -> String {
+    format!(
+        "gaze-lens serve: loaded profiles: [{}]",
+        profile_names.join(", ")
+    )
 }
 
 fn select_profiles(
@@ -178,7 +217,8 @@ fn build_log_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
     Ok(Arc::new(SshLogSourceWrapper::new(log_source)))
 }
 
-pub(crate) fn apply_multi_profile_retention(
+#[doc(hidden)]
+pub fn apply_multi_profile_retention(
     profiles: &[Profile],
     manifest: &Path,
     snapshot_dir: &Path,
