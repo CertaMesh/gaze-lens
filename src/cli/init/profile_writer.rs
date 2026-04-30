@@ -19,7 +19,7 @@ use thiserror::Error;
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 use crate::cli::init::SourceKind;
-use crate::cli::init::plan::{AutoPurgeChoice, PlannedSecret, ProfileSection};
+use crate::cli::init::plan::{AutoPurgeChoice, CredentialClass, PlannedSecret, ProfileSection};
 
 #[derive(Debug, Error)]
 pub enum RenderError {
@@ -133,6 +133,38 @@ fn build_profile_table(s: &ProfileSection) -> Table {
     }
     if let Some(d) = s.snapshot_retention_days {
         t.insert("snapshot_retention_days", toml_edit::value(d as i64));
+    }
+    if let Some(host) = &s.discovered_from_ssh_host {
+        t.insert("discovered_from_ssh_host", toml_edit::value(host.as_str()));
+    }
+    if let Some(path) = &s.discovered_from_path {
+        t.insert(
+            "discovered_from_path",
+            toml_edit::value(path.to_string_lossy().into_owned()),
+        );
+    }
+    if let Some(ts) = s.discovered_at {
+        let rendered = ts
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| ts.unix_timestamp().to_string());
+        t.insert("discovered_at", toml_edit::value(rendered));
+    }
+    if let Some(fingerprint) = &s.discovered_ssh_host_key_fingerprint {
+        t.insert(
+            "discovered_ssh_host_key_fingerprint",
+            toml_edit::value(fingerprint.as_str()),
+        );
+    }
+    if s.credential_class != CredentialClass::ManuallyEntered
+        || s.discovered_from_ssh_host.is_some()
+    {
+        t.insert(
+            "credential_class",
+            toml_edit::value(match s.credential_class {
+                CredentialClass::ManuallyEntered => "manually-entered",
+                CredentialClass::ProdRwCloned => "prod-rw-cloned",
+            }),
+        );
     }
     // CB2: enum string, never bool. Off omitted entirely (default).
     match s.auto_purge {

@@ -2,6 +2,14 @@
 
 ## [0.2.2] — TBD
 
+### Added
+- `init` can optionally discover Laravel-style `DB_*` credentials by reading
+  an explicit remote `.env` over SSH, then choose Path A (store discovered
+  prod credential), Path B (recommended: host/database only plus separate
+  readonly credential), or Path C (abort). Strict host-key checking is on by
+  default; `--allow-new-ssh-host` opts into TOFU. Provenance metadata is
+  persisted to `profile.toml`. (#358)
+
 ### Changed (BREAKING for MCP agents)
 - `gaze-lens serve` now exposes a single MCP entry covering all configured
   profiles. Every MCP tool call (`query`, `schema`, `list_tables`, `log_tail`,

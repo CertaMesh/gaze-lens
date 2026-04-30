@@ -7,6 +7,11 @@ fn mysql_profile(readonly_required: bool, password_env: &str) -> Profile {
     Profile {
         name: "prod".to_string(),
         policy: None,
+        discovered_from_ssh_host: None,
+        discovered_from_path: None,
+        discovered_at: None,
+        discovered_ssh_host_key_fingerprint: None,
+        credential_class: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
