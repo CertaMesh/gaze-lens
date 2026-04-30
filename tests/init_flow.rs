@@ -1,7 +1,11 @@
+use assert_cmd::Command;
 use gaze_lens::cli::init::flow::{InitEnv, run_guided};
 use gaze_lens::cli::init::plan::AutoPurgeChoice;
 use gaze_lens::cli::init::prompter::FakePrompter;
 use gaze_lens::cli::init::{InitArgs, InitScope, SourceKind};
+
+const PRINT_ONLY_USER_CONFIG: &str = "/tmp/gaze-lens-init-print-only-user.toml";
+const PRINT_ONLY_PROJECT_CONFIG: &str = "/tmp/gaze-lens-init-print-only-project.toml";
 
 #[test]
 fn guided_sqlite_user_scope_yields_expected_plan() {
@@ -117,5 +121,111 @@ fn ssh_log_non_interactive_renders_host_and_path() {
     assert_eq!(
         plan.profile_section.source_path.as_deref(),
         Some(std::path::Path::new("/var/log/app.log"))
+    );
+}
+
+#[test]
+fn print_only_matches_golden_sqlite() {
+    assert_print_only_matches_golden(
+        &[
+            "--source-kind",
+            "sqlite",
+            "--source-path",
+            "/tmp/demo.sqlite",
+        ],
+        include_str!("fixtures/init_print_only_sqlite.golden.txt"),
+    );
+}
+
+#[test]
+fn print_only_matches_golden_mysql() {
+    assert_print_only_matches_golden(
+        &[
+            "--source-kind",
+            "mysql",
+            "--source-host",
+            "db.example.com",
+            "--source-port",
+            "3306",
+            "--source-database",
+            "app",
+            "--source-username",
+            "app_user",
+            "--source-password-env",
+            "GAZE_LENS_DB_PASSWORD",
+        ],
+        include_str!("fixtures/init_print_only_mysql.golden.txt"),
+    );
+}
+
+#[test]
+fn print_only_matches_golden_postgres() {
+    assert_print_only_matches_golden(
+        &[
+            "--source-kind",
+            "postgres",
+            "--source-host",
+            "pg.example.com",
+            "--source-port",
+            "5432",
+            "--source-database",
+            "app",
+            "--source-username",
+            "app_user",
+            "--source-password-env",
+            "GAZE_LENS_DB_PASSWORD",
+        ],
+        include_str!("fixtures/init_print_only_postgres.golden.txt"),
+    );
+}
+
+#[test]
+fn print_only_matches_golden_ssh_log() {
+    assert_print_only_matches_golden(
+        &[
+            "--source-kind",
+            "ssh-log",
+            "--source-host",
+            "logs.example.com",
+            "--source-path",
+            "/var/log/app.log",
+        ],
+        include_str!("fixtures/init_print_only_ssh_log.golden.txt"),
+    );
+}
+
+fn assert_print_only_matches_golden(source_args: &[&str], golden: &str) {
+    let mut args = vec![
+        "--user-config",
+        PRINT_ONLY_USER_CONFIG,
+        "--project-config",
+        PRINT_ONLY_PROJECT_CONFIG,
+        "init",
+        "--print-only",
+        "--non-interactive",
+        "--profile",
+        "demo",
+    ];
+    args.extend_from_slice(source_args);
+    args.extend_from_slice(&["--scope", "user", "--no-mcp-config", "--no-agents-md"]);
+
+    let output = Command::cargo_bin("gaze-lens")
+        .expect("binary")
+        .args(args)
+        .output()
+        .expect("run init --print-only");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), golden);
+    assert!(
+        !std::path::Path::new(PRINT_ONLY_USER_CONFIG).exists(),
+        "print-only must not write user config"
+    );
+    assert!(
+        !std::path::Path::new(PRINT_ONLY_PROJECT_CONFIG).exists(),
+        "print-only must not write project config"
     );
 }

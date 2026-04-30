@@ -1,0 +1,5 @@
+--- profile: /tmp/gaze-lens-init-print-only-user.toml (user) ---
+name = "demo"
+kind = mysql
+host = db.example.com
+--- mcp targets (0) ---
