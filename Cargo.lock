@@ -1471,6 +1471,7 @@ dependencies = [
  "gaze",
  "gaze-recognizers",
  "keyring",
+ "rand 0.8.6",
  "regex",
  "rmcp",
  "rusqlite",

@@ -42,6 +42,7 @@ zeroize = "1"
 
 [dev-dependencies]
 assert_cmd = "2"
+rand = "0.8"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 

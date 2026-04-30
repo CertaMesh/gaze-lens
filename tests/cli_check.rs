@@ -855,7 +855,8 @@ fn postgres_env_profile(name: &str, env: &str) -> Profile {
 }
 
 fn random_hex_32_bytes() -> String {
-    format!("{}{}", ulid::Ulid::new(), ulid::Ulid::new())
+    let bytes: [u8; 32] = rand::random();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn write_keyring_profile(path: &std::path::Path, name: &str, service: &str, account: &str) {
