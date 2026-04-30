@@ -23,6 +23,12 @@ pub enum SourceKind {
     SshLog,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum SecretBackendChoice {
+    Env,
+    Keyring,
+}
+
 /// Where to write the profile section.
 ///
 /// `project` → `<cwd>/.gaze-lens.toml` (auto_purge omitted = `off`).
@@ -76,6 +82,18 @@ pub struct InitArgs {
     /// Env var name holding the DB password.
     #[arg(long)]
     pub source_password_env: Option<String>,
+    /// Secret backend for mysql/postgres passwords.
+    #[arg(long, value_enum, default_value_t = SecretBackendChoice::Env)]
+    pub secret_backend: SecretBackendChoice,
+    /// Keyring service name for the DB password entry.
+    #[arg(long)]
+    pub source_password_keyring_service: Option<String>,
+    /// Keyring account name for the DB password entry.
+    #[arg(long)]
+    pub source_password_keyring_account: Option<String>,
+    /// Do not write the keyring entry during init.
+    #[arg(long)]
+    pub no_keyring_write: bool,
     /// SSH tunnel jump host (mysql / postgres only).
     #[arg(long)]
     pub source_ssh_host: Option<String>,
@@ -123,6 +141,52 @@ impl InitArgs {
     /// CB1 (`--scope user --auto-purge` rejection) lives in clap. This catches
     /// non-interactive missing inputs and the CB-r2-3 ssh-log host invariant.
     pub fn validate(&self) -> Result<(), LensError> {
+        match self.secret_backend {
+            SecretBackendChoice::Env => {
+                if self.source_password_keyring_service.is_some()
+                    || self.source_password_keyring_account.is_some()
+                {
+                    return Err(LensError::Profile {
+                        detail: "--source-password-keyring-service/account require --secret-backend keyring".into(),
+                    });
+                }
+                if self.no_keyring_write {
+                    eprintln!(
+                        "gaze-lens: --no-keyring-write ignored without --secret-backend keyring"
+                    );
+                }
+            }
+            SecretBackendChoice::Keyring => {
+                if self.source_password_env.is_some() {
+                    return Err(LensError::Profile {
+                        detail: "--source-password-env conflicts with --secret-backend keyring"
+                            .into(),
+                    });
+                }
+                if self.non_interactive
+                    && matches!(
+                        self.source_kind,
+                        Some(SourceKind::Mysql) | Some(SourceKind::Postgres)
+                    )
+                {
+                    if !self.no_keyring_write {
+                        return Err(LensError::Profile {
+                            detail: "--non-interactive with --secret-backend keyring requires --no-keyring-write (operator-managed entry); interactive password capture impossible without a TTY".into(),
+                        });
+                    }
+                    if self.source_password_keyring_service.is_none() {
+                        return Err(LensError::Profile {
+                            detail: "--non-interactive with --secret-backend keyring requires --source-password-keyring-service".into(),
+                        });
+                    }
+                    if self.source_password_keyring_account.is_none() {
+                        return Err(LensError::Profile {
+                            detail: "--non-interactive with --secret-backend keyring requires --source-password-keyring-account".into(),
+                        });
+                    }
+                }
+            }
+        }
         if self.non_interactive {
             if self.profile.is_none() {
                 return Err(LensError::Profile {
@@ -170,6 +234,10 @@ impl InitArgs {
             source_database: None,
             source_username: None,
             source_password_env: None,
+            secret_backend: SecretBackendChoice::Env,
+            source_password_keyring_service: None,
+            source_password_keyring_account: None,
+            no_keyring_write: false,
             source_ssh_host: None,
             source_local_port: None,
             source_path: None,
