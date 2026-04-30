@@ -72,6 +72,40 @@ readonly_required = true
 
 On macOS, Windows, and desktop Linux with an unlocked Secret Service provider, `secret.type = "keyring"` resolves through the platform keyring. On bare servers, containers, headless Linux sessions without DBus / Secret Service, or locked keyrings, use `password_env`; `check` reports the keyring backend as unavailable instead of synthesizing a DBus session.
 
+## SSH `.env` Discovery
+
+`init` can optionally read a deployed Laravel-style `.env` over SSH once during setup:
+
+```sh
+gaze-lens init --profile prod \
+  --discover-ssh-host deploy@app01 \
+  --discover-env-path /var/www/app/.env
+```
+
+Discovery is setup-time only. It reads the explicit path you provide, extracts flat `DB_*` keys, and never re-reads the remote file from MCP tools, CLI `query`, or any per-query path.
+
+The interactive flow offers three choices:
+
+- Path B, recommended and selected by default: keep discovered host, port, and database, then enter a separate readonly username and password for keyring storage.
+- Path A: store the discovered production credential as-is in the keyring. Interactive use requires typing the discovered username back. Non-interactive use requires `--accept-prod-rw=<host>`, and the value must exactly match `--discover-ssh-host`.
+- Path C: abort without materializing a profile or keyring write.
+
+SSH runs with `BatchMode=yes`; load your key first, for example:
+
+```sh
+ssh-add ~/.ssh/id_ed25519
+```
+
+Strict host-key checking is on by default (`StrictHostKeyChecking=yes`). First contact should pin the host before running discovery:
+
+```sh
+ssh-keyscan -t ed25519 app01 >> ~/.ssh/known_hosts
+```
+
+For ephemeral lab hosts only, `--allow-new-ssh-host` opts into `StrictHostKeyChecking=accept-new`.
+
+Discovery does not auto-probe alternate paths, run `docker exec` or `kubectl exec`, validate credentials through a remote database process, or parse framework-specific executable config. Remote stdout is capped at 64 KiB, SSH argv uses the repository-safe `ssh -- <host> <command> -- <path>` form with validated host/path values, and profile provenance records the SSH host, path, timestamp, host-key record, and credential class.
+
 ## Check
 
 Run `check` before serving MCP or running a CLI query:
