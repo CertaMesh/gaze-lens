@@ -6,6 +6,7 @@
 
 use clap::ValueEnum;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use crate::errors::LensError;
@@ -142,13 +143,19 @@ pub fn build_report(
     snapshot_dir: &Path,
     _parsed_policy: Option<(&Path, &[u8], &toml::Value)>,
 ) -> Result<TrustReport, LensError> {
+    let recognizer_pack = match _parsed_policy {
+        Some((path, raw_bytes, parsed)) => {
+            recognizer_pack_from_parsed(Some(path), Some(parsed), Some(raw_bytes))
+        }
+        None => recognizer_pack_from_parsed(None, None, None),
+    };
     Ok(TrustReport {
         report_version: REPORT_VERSION,
         profile: profile.name.clone(),
         input_surface: collect_input_surface(profile),
         process_surface: collect_process_surface(profile),
-        output_surface: collect_output_surface(profile),
-        at_rest_surface: collect_at_rest_surface_placeholder(profile, manifest_path, snapshot_dir),
+        output_surface: collect_output_surface(profile, recognizer_pack),
+        at_rest_surface: collect_at_rest_surface(profile, manifest_path, snapshot_dir),
         handoff_surface: collect_handoff_surface(),
     })
 }
@@ -328,7 +335,85 @@ pub fn sqlite_json_text_policy(source: &SourceSpec) -> Option<Vec<String>> {
     }
 }
 
-fn collect_output_surface(profile: &Profile) -> OutputSurface {
+pub fn inspect_path(path: &Path, expected_mode: u32) -> PathArtifact {
+    let expanded = expand_path_lossy(path);
+    let mode = std::fs::metadata(&expanded).ok().map(|metadata| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o777
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = metadata;
+            expected_mode
+        }
+    });
+    PathArtifact {
+        path: expanded.display().to_string(),
+        exists: mode.is_some(),
+        mode_ok: mode.map(|actual| actual == expected_mode),
+        expected_mode: mode_label(expected_mode),
+    }
+}
+
+pub fn collect_at_rest_surface(
+    profile: &Profile,
+    manifest_path: &Path,
+    snapshot_dir: &Path,
+) -> AtRestSurface {
+    AtRestSurface {
+        manifest: inspect_path(manifest_path, 0o600),
+        snapshot_dir: inspect_path(snapshot_dir, 0o700),
+        snapshot_retention_days: profile.snapshot_retention_days,
+        auto_purge: profile.auto_purge.as_str(),
+        snapshot_encryption_at_rest: "none (v1) - operator must run FileVault/LUKS",
+        secret_backend: secret_locator(&profile.source),
+        code_evidence: vec![CodeEvidence {
+            file: "src/session/manifest.rs",
+            line: 1,
+            claim: "manifest stores tokenized audit rows",
+        }],
+    }
+}
+
+pub fn recognizer_pack_from_parsed(
+    policy_path: Option<&Path>,
+    parsed: Option<&toml::Value>,
+    raw_bytes: Option<&[u8]>,
+) -> RecognizerPack {
+    let Some(parsed) = parsed else {
+        return RecognizerPack {
+            source: "default-empty",
+            policy_path: None,
+            policy_sha256: None,
+            recognizer_keys: vec!["database".to_string()],
+            recognizer_classes: Vec::new(),
+            default_empty: true,
+        };
+    };
+
+    let mut recognizer_keys = Vec::new();
+    let mut recognizer_classes = Vec::new();
+    if let Some(policy) = parsed.get("policy").and_then(toml::Value::as_table) {
+        for (section, value) in policy {
+            recognizer_keys.push(section.to_string());
+            collect_policy_classes(section, value, &mut recognizer_classes);
+        }
+    }
+    recognizer_keys.sort();
+    recognizer_classes.sort();
+    RecognizerPack {
+        source: "policy-toml",
+        policy_path: policy_path.map(|path| expand_path_lossy(path).display().to_string()),
+        policy_sha256: raw_bytes.map(sha256_hex),
+        recognizer_keys,
+        recognizer_classes,
+        default_empty: false,
+    }
+}
+
+fn collect_output_surface(profile: &Profile, recognizer_pack: RecognizerPack) -> OutputSurface {
     let caps = crate::session::OutputCaps::default();
     OutputSurface {
         dispatch_chokepoint: CodeEvidence {
@@ -341,14 +426,7 @@ fn collect_output_surface(profile: &Profile) -> OutputSurface {
             table_allowlist: profile.schema_allowlist.clone(),
             column_redaction_mode: "default (gaze recognizer pack)",
         },
-        recognizer_pack: RecognizerPack {
-            source: "default-empty",
-            policy_path: None,
-            policy_sha256: None,
-            recognizer_keys: vec!["database".to_string()],
-            recognizer_classes: Vec::new(),
-            default_empty: true,
-        },
+        recognizer_pack,
         output_caps: OutputCapsView {
             rows: caps.rows,
             bytes: caps.bytes,
@@ -364,33 +442,34 @@ fn collect_output_surface(profile: &Profile) -> OutputSurface {
     }
 }
 
-fn collect_at_rest_surface_placeholder(
-    profile: &Profile,
-    manifest_path: &Path,
-    snapshot_dir: &Path,
-) -> AtRestSurface {
-    AtRestSurface {
-        manifest: PathArtifact {
-            path: manifest_path.display().to_string(),
-            exists: false,
-            mode_ok: None,
-            expected_mode: "0600",
-        },
-        snapshot_dir: PathArtifact {
-            path: snapshot_dir.display().to_string(),
-            exists: false,
-            mode_ok: None,
-            expected_mode: "0700",
-        },
-        snapshot_retention_days: profile.snapshot_retention_days,
-        auto_purge: profile.auto_purge.as_str(),
-        snapshot_encryption_at_rest: "none (v1) - operator must run FileVault/LUKS",
-        secret_backend: secret_locator(&profile.source),
-        code_evidence: vec![CodeEvidence {
-            file: "src/session/manifest.rs",
-            line: 1,
-            claim: "manifest stores tokenized audit rows",
-        }],
+fn collect_policy_classes(prefix: &str, value: &toml::Value, out: &mut Vec<String>) {
+    if let Some(table) = value.as_table() {
+        for (key, nested) in table {
+            let next = format!("{prefix}.{key}");
+            if nested.as_table().is_some() {
+                collect_policy_classes(&next, nested, out);
+            } else {
+                out.push(next);
+            }
+        }
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn expand_path_lossy(path: &Path) -> std::path::PathBuf {
+    shellexpand::full(&path.to_string_lossy())
+        .map(|path| std::path::PathBuf::from(path.into_owned()))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn mode_label(mode: u32) -> &'static str {
+    match mode {
+        0o600 => "0600",
+        0o700 => "0700",
+        _ => "custom",
     }
 }
 

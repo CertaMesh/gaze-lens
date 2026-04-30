@@ -8,6 +8,7 @@ use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi, Crede
 use rusqlite::Connection;
 use std::any::Any;
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::{Mutex, OnceLock};
 
 #[test]
@@ -174,6 +175,92 @@ fn collect_handoff_surface_lists_six_residual_risks() {
             .iter()
             .all(|risk| !risk.mitigation.is_empty())
     );
+}
+
+#[test]
+fn inspect_path_reports_mode_when_file_exists() {
+    let temp = tempfile::NamedTempFile::new().expect("tempfile");
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o600)).expect("chmod");
+
+    let artifact = gaze_lens::cli::check_trust::inspect_path(temp.path(), 0o600);
+
+    assert!(artifact.exists);
+    assert_eq!(artifact.mode_ok, Some(true));
+    assert_eq!(artifact.expected_mode, "0600");
+}
+
+#[test]
+fn inspect_path_reports_mode_mismatch() {
+    let temp = tempfile::NamedTempFile::new().expect("tempfile");
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+    let artifact = gaze_lens::cli::check_trust::inspect_path(temp.path(), 0o600);
+
+    assert!(artifact.exists);
+    assert_eq!(artifact.mode_ok, Some(false));
+    assert_eq!(artifact.expected_mode, "0600");
+}
+
+#[test]
+fn inspect_path_handles_not_yet_materialized() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let missing = temp.path().join("missing.sqlite");
+
+    let artifact = gaze_lens::cli::check_trust::inspect_path(&missing, 0o600);
+
+    assert!(!artifact.exists);
+    assert_eq!(artifact.mode_ok, None);
+    assert_eq!(artifact.expected_mode, "0600");
+}
+
+#[test]
+fn recognizer_pack_default_empty_when_policy_unset() {
+    let pack = gaze_lens::cli::check_trust::recognizer_pack_from_parsed(None, None, None);
+
+    assert!(pack.default_empty);
+    assert_eq!(pack.source, "default-empty");
+    assert_eq!(pack.policy_path, None);
+    assert_eq!(pack.policy_sha256, None);
+    assert_eq!(pack.recognizer_keys, ["database"]);
+    assert!(pack.recognizer_classes.is_empty());
+}
+
+#[test]
+fn recognizer_pack_lists_keys_and_classes_from_policy_toml() {
+    let temp = tempfile::NamedTempFile::new().expect("tempfile");
+    let raw = b"[policy.database]\nemail = true\nphone = true\n[policy.logs]\nip = true\n[ner]\nlocale = \"en\"\n";
+    std::fs::write(temp.path(), raw).expect("policy");
+    let parsed: toml::Value =
+        toml::from_str(std::str::from_utf8(raw).expect("utf8")).expect("toml");
+
+    let pack = gaze_lens::cli::check_trust::recognizer_pack_from_parsed(
+        Some(temp.path()),
+        Some(&parsed),
+        Some(raw),
+    );
+
+    assert!(!pack.default_empty);
+    assert_eq!(pack.source, "policy-toml");
+    assert_eq!(pack.policy_sha256.as_deref().expect("sha").len(), 64);
+    assert_eq!(pack.recognizer_keys, ["database", "logs"]);
+    assert_eq!(
+        pack.recognizer_classes,
+        ["database.email", "database.phone", "logs.ip"]
+    );
+}
+
+#[test]
+fn at_rest_surface_uses_passed_manifest_path_not_args_default() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manifest = temp.path().join("manifest.sqlite");
+    let snapshot_dir = temp.path().join("snapshots");
+    std::fs::create_dir(&snapshot_dir).expect("snapshot dir");
+    let profile = sqlite_profile("local", std::path::PathBuf::from("fixture.sqlite"));
+
+    let surface =
+        gaze_lens::cli::check_trust::collect_at_rest_surface(&profile, &manifest, &snapshot_dir);
+
+    assert_eq!(surface.manifest.path, manifest.display().to_string());
 }
 
 #[test]
