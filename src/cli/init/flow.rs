@@ -223,6 +223,7 @@ fn build_profile_section_skeleton(args: &InitArgs, name: &str, kind: SourceKind)
         source_database: args.source_database.clone(),
         source_username: args.source_username.clone(),
         source_password_env: args.source_password_env.clone(),
+        source_secret: None,
         source_ssh_host: args.source_ssh_host.clone(),
         source_local_port: args.source_local_port,
         source_path: args.source_path.clone(),

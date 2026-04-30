@@ -17,6 +17,8 @@ pub struct ProfileSection {
     pub source_database: Option<String>,
     pub source_username: Option<String>,
     pub source_password_env: Option<String>,
+    #[doc(hidden)]
+    pub source_secret: Option<PlannedSecret>,
     pub source_ssh_host: Option<String>,
     pub source_local_port: Option<u16>,
     pub source_path: Option<PathBuf>,
@@ -35,6 +37,58 @@ pub enum AutoPurgeChoice {
     Warn,
     Purge,
 }
+
+#[doc(hidden)]
+#[derive(Clone)]
+pub enum PlannedSecret {
+    Env {
+        var: String,
+    },
+    Keyring {
+        service: String,
+        account: String,
+        write_value: Option<zeroize::Zeroizing<String>>,
+    },
+}
+
+impl std::fmt::Debug for PlannedSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PlannedSecret::Env { var } => f.debug_struct("Env").field("var", var).finish(),
+            PlannedSecret::Keyring {
+                service, account, ..
+            } => f
+                .debug_struct("Keyring")
+                .field("service", service)
+                .field("account", account)
+                .field("write_value", &"<redacted>")
+                .finish(),
+        }
+    }
+}
+
+impl PartialEq for PlannedSecret {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PlannedSecret::Env { var: left }, PlannedSecret::Env { var: right }) => left == right,
+            (
+                PlannedSecret::Keyring {
+                    service: left_service,
+                    account: left_account,
+                    ..
+                },
+                PlannedSecret::Keyring {
+                    service: right_service,
+                    account: right_account,
+                    ..
+                },
+            ) => left_service == right_service && left_account == right_account,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for PlannedSecret {}
 
 /// Directive 19: NO `entry_key` field. The MCP writer (P6) reads existing file
 /// content and chooses `gaze-lens` vs `gaze-lens-<name>` at write-time.

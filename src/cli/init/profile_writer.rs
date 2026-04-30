@@ -16,10 +16,10 @@
 use std::path::PathBuf;
 
 use thiserror::Error;
-use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 use crate::cli::init::SourceKind;
-use crate::cli::init::plan::{AutoPurgeChoice, ProfileSection};
+use crate::cli::init::plan::{AutoPurgeChoice, PlannedSecret, ProfileSection};
 
 #[derive(Debug, Error)]
 pub enum RenderError {
@@ -165,6 +165,12 @@ fn build_profile_table(s: &ProfileSection) -> Table {
     if let Some(env) = &s.source_password_env {
         src.insert("password_env", toml_edit::value(env.as_str()));
     }
+    if let Some(secret) = &s.source_secret {
+        src.insert(
+            "secret",
+            Item::Value(Value::InlineTable(secret_table(secret))),
+        );
+    }
     if let Some(h) = &s.source_ssh_host {
         src.insert("ssh_host", toml_edit::value(h.as_str()));
     }
@@ -186,6 +192,24 @@ fn build_profile_table(s: &ProfileSection) -> Table {
     }
     t.insert("source", Item::Table(src));
     t
+}
+
+fn secret_table(secret: &PlannedSecret) -> InlineTable {
+    let mut table = InlineTable::new();
+    match secret {
+        PlannedSecret::Env { var } => {
+            table.insert("type", Value::from("env"));
+            table.insert("var", Value::from(var.as_str()));
+        }
+        PlannedSecret::Keyring {
+            service, account, ..
+        } => {
+            table.insert("type", Value::from("keyring"));
+            table.insert("service", Value::from(service.as_str()));
+            table.insert("account", Value::from(account.as_str()));
+        }
+    }
+    table
 }
 
 fn source_kind_str_toml(k: SourceKind) -> &'static str {

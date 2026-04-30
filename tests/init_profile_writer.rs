@@ -1,5 +1,5 @@
 use gaze_lens::cli::init::SourceKind;
-use gaze_lens::cli::init::plan::{AutoPurgeChoice, ProfileSection};
+use gaze_lens::cli::init::plan::{AutoPurgeChoice, PlannedSecret, ProfileSection};
 use gaze_lens::cli::init::profile_writer::{RenderError, render_profile_toml};
 
 fn section(name: &str, kind: SourceKind) -> ProfileSection {
@@ -12,6 +12,7 @@ fn section(name: &str, kind: SourceKind) -> ProfileSection {
         source_database: None,
         source_username: None,
         source_password_env: None,
+        source_secret: None,
         source_ssh_host: None,
         source_local_port: None,
         source_json_text_columns: Vec::new(),
@@ -20,6 +21,77 @@ fn section(name: &str, kind: SourceKind) -> ProfileSection {
         snapshot_retention_days: None,
         auto_purge: AutoPurgeChoice::Off,
     }
+}
+
+#[test]
+fn render_keyring_secret_round_trips_through_loader() {
+    let mut s = section("prod", SourceKind::Postgres);
+    s.source_host = Some("db".into());
+    s.source_port = Some(5432);
+    s.source_database = Some("app".into());
+    s.source_username = Some("ro".into());
+    s.source_path = None;
+    s.source_password_env = None;
+    s.source_secret = Some(PlannedSecret::Keyring {
+        service: "gaze-lens".into(),
+        account: "prod".into(),
+        write_value: None,
+    });
+
+    let out = render_profile_toml(None, &s, false).unwrap();
+    assert!(out.contains(r#"type = "keyring""#), "got: {out}");
+    assert!(out.contains(r#"service = "gaze-lens""#), "got: {out}");
+    assert!(out.contains(r#"account = "prod""#), "got: {out}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("profile.toml");
+    std::fs::write(&p, &out).unwrap();
+    let profiles = gaze_lens::profile::load_profiles(Some(&p), None).expect("round-trip");
+    assert!(profiles.iter().any(|x| x.name == "prod"));
+}
+
+#[test]
+fn render_secret_env_form_round_trips() {
+    let mut s = section("prod", SourceKind::Mysql);
+    s.source_host = Some("db".into());
+    s.source_port = Some(3306);
+    s.source_database = Some("app".into());
+    s.source_username = Some("ro".into());
+    s.source_path = None;
+    s.source_password_env = None;
+    s.source_secret = Some(PlannedSecret::Env {
+        var: "DB_PW".into(),
+    });
+
+    let out = render_profile_toml(None, &s, false).unwrap();
+    assert!(out.contains(r#"type = "env""#), "got: {out}");
+    assert!(out.contains(r#"var = "DB_PW""#), "got: {out}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("profile.toml");
+    std::fs::write(&p, &out).unwrap();
+    let profiles = gaze_lens::profile::load_profiles(Some(&p), None).expect("round-trip");
+    assert!(profiles.iter().any(|x| x.name == "prod"));
+}
+
+#[test]
+fn pillar2_byte_scan_no_password_value_for_keyring_or_env() {
+    let supplied_password = "hunter2-writer-test";
+    let mut s = section("prod", SourceKind::Postgres);
+    s.source_host = Some("db".into());
+    s.source_port = Some(5432);
+    s.source_database = Some("app".into());
+    s.source_username = Some("ro".into());
+    s.source_path = None;
+    s.source_secret = Some(PlannedSecret::Keyring {
+        service: "gaze-lens".into(),
+        account: "prod".into(),
+        write_value: Some(zeroize::Zeroizing::new(supplied_password.to_string())),
+    });
+
+    let out = render_profile_toml(None, &s, false).unwrap();
+    assert!(!out.contains(supplied_password), "{out}");
+    assert!(!out.contains("password ="), "{out}");
 }
 
 #[test]
