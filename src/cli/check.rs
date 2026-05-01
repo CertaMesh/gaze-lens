@@ -13,7 +13,7 @@ use crate::source::db::postgres::PostgresSource;
 use crate::source::db::sqlite::SqliteSource;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 
-use super::check_trust::{TrustFormat, build_report, render_text};
+use super::check_trust::{TrustFormat, build_report, render_text, validate_text_report};
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {
@@ -82,7 +82,10 @@ async fn run_with_writer(
         });
         let report = build_report(&profile, &manifest, &snapshot_dir, parsed_policy)?;
         match args.format {
-            TrustFormat::Text => render_text(&report, out).map_err(write_error)?,
+            TrustFormat::Text => {
+                validate_text_report(&report)?;
+                render_text(&report, out).map_err(write_error)?;
+            }
             TrustFormat::Json => {
                 serde_json::to_writer_pretty(&mut *out, &report).map_err(|err| {
                     LensError::Internal {

@@ -8,6 +8,8 @@ use zeroize::Zeroizing;
 use crate::errors::LensError;
 use crate::session::maintenance::AutoPurge;
 
+pub(crate) const PROFILE_NAME_PATTERN: &str = r"^[a-z0-9][a-z0-9_-]{0,63}$";
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Profile {
     pub name: String,
@@ -171,16 +173,20 @@ impl Profile {
 }
 
 pub(crate) fn validate_profile_name(name: &str) -> Result<(), LensError> {
-    static PROFILE_NAME: OnceLock<regex::Regex> = OnceLock::new();
-    let regex = PROFILE_NAME
-        .get_or_init(|| regex::Regex::new(r"^[a-z0-9][a-z0-9_-]{0,63}$").expect("profile regex"));
-    if regex.is_match(name) {
+    if is_safe_profile_name(name) {
         Ok(())
     } else {
         Err(LensError::Profile {
-            detail: format!("invalid profile name `{name}`; expected ^[a-z0-9][a-z0-9_-]{{0,63}}$"),
+            detail: format!("invalid profile name `{name}`; expected {PROFILE_NAME_PATTERN}"),
         })
     }
+}
+
+pub(crate) fn is_safe_profile_name(name: &str) -> bool {
+    static PROFILE_NAME: OnceLock<regex::Regex> = OnceLock::new();
+    let regex = PROFILE_NAME
+        .get_or_init(|| regex::Regex::new(PROFILE_NAME_PATTERN).expect("profile regex"));
+    regex.is_match(name)
 }
 
 #[allow(dead_code)]

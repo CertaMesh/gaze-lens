@@ -7,12 +7,11 @@
 use clap::ValueEnum;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::io::{Error, ErrorKind, Write};
+use std::io::{ErrorKind, Write};
 use std::path::Path;
-use std::sync::OnceLock;
 
 use crate::errors::LensError;
-use crate::profile::{Profile, SecretSpec, SourceSpec};
+use crate::profile::{PROFILE_NAME_PATTERN, Profile, SecretSpec, SourceSpec, is_safe_profile_name};
 
 const CLI_SUBCOMMANDS: [&str; 6] = ["init", "query", "replay", "check", "serve", "demo"];
 pub const REPORT_VERSION: u32 = 1;
@@ -416,7 +415,8 @@ pub fn recognizer_pack_from_parsed(
 }
 
 pub fn render_text(report: &TrustReport, out: &mut dyn Write) -> std::io::Result<()> {
-    validate_rendered_profile_name(&report.profile)?;
+    validate_text_report(report)
+        .map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?;
     if report.output_surface.recognizer_pack.default_empty {
         writeln!(
             out,
@@ -586,19 +586,28 @@ pub fn render_text(report: &TrustReport, out: &mut dyn Write) -> std::io::Result
     Ok(())
 }
 
-fn validate_rendered_profile_name(name: &str) -> std::io::Result<()> {
-    static PROFILE_NAME: OnceLock<regex::Regex> = OnceLock::new();
-    let regex = PROFILE_NAME.get_or_init(|| {
-        regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$").expect("trust report profile regex")
-    });
-    if regex.is_match(name) {
-        Ok(())
-    } else {
-        Err(Error::new(
-            ErrorKind::InvalidInput,
-            "trust report profile name contains unsupported characters",
-        ))
+pub(crate) fn validate_text_report(report: &TrustReport) -> Result<(), LensError> {
+    validate_rendered_profile_name("profile", &report.profile)?;
+    validate_rendered_profile_name(
+        "process_surface.profile_under_review",
+        &report.process_surface.profile_under_review,
+    )?;
+    if report.profile != report.process_surface.profile_under_review {
+        return Err(LensError::Profile {
+            detail: "trust report profile fields disagree".to_string(),
+        });
     }
+    Ok(())
+}
+
+fn validate_rendered_profile_name(field: &str, name: &str) -> Result<(), LensError> {
+    is_safe_profile_name(name)
+        .then_some(())
+        .ok_or_else(|| LensError::Profile {
+            detail: format!(
+                "trust report {field} contains unsupported profile-name characters; expected {PROFILE_NAME_PATTERN}"
+            ),
+        })
 }
 
 fn collect_output_surface(profile: &Profile, recognizer_pack: RecognizerPack) -> OutputSurface {
