@@ -308,6 +308,62 @@ fn trust_report_text_rejects_terminal_escape_in_profile_name() {
 }
 
 #[test]
+fn trust_report_text_rejects_unsupported_profile_names_before_writing_them() {
+    let cases = [
+        ("empty string", ""),
+        (
+            "65-char name",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        ("leading whitespace", " prod"),
+        ("trailing whitespace", "prod "),
+        ("embedded crlf", "prod\r\nfake"),
+        ("cyrillic lookalike", "pr\u{043e}d"),
+        ("shell metacharacters", "prod;rm"),
+    ];
+
+    for (case, profile_name) in cases {
+        let report = gaze_lens::cli::check_trust::TrustReport::stub_for_test(profile_name);
+        let mut out = Vec::new();
+
+        let err = match gaze_lens::cli::check_trust::render_text(&report, &mut out) {
+            Ok(()) => panic!("expected {case} to be rejected"),
+            Err(err) => err,
+        };
+        let text = String::from_utf8(out).expect("utf8");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{case}");
+        assert!(text.is_empty(), "render wrote output for {case}: {text:?}");
+    }
+}
+
+#[test]
+fn trust_report_text_rejects_process_surface_profile_under_review() {
+    let mut report = gaze_lens::cli::check_trust::TrustReport::stub_for_test("prod");
+    report.process_surface.profile_under_review = "prod\r\nfake".to_string();
+    let mut out = Vec::new();
+
+    let err = gaze_lens::cli::check_trust::render_text(&report, &mut out).expect_err("render");
+    let text = String::from_utf8(out).expect("utf8");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(!text.contains("prod\r\nfake"), "{text:?}");
+}
+
+#[test]
+fn trust_report_text_rejects_divergent_profile_fields() {
+    let mut report = gaze_lens::cli::check_trust::TrustReport::stub_for_test("prod");
+    report.process_surface.profile_under_review = "local".to_string();
+    let mut out = Vec::new();
+
+    let err = gaze_lens::cli::check_trust::render_text(&report, &mut out).expect_err("render");
+    let text = String::from_utf8(out).expect("utf8");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(text.is_empty(), "{text}");
+}
+
+#[test]
 fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
