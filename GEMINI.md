@@ -101,4 +101,4 @@ For full architectural detail, file-by-file mining verdicts, and the 16 locked d
 
 ## Status
 
-v0.1.1 ships from source (binary tarball available); v0.2 in flight. Crates.io publish + prebuilt binaries are tracked separately (cargo-dist workflow in progress). The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
+v0.2.0 shipped from source 2026-04-29; v0.2.2 in flight (see CHANGELOG.md). Crates.io publish + prebuilt binaries via cargo-dist are tracked separately. The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
