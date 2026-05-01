@@ -42,6 +42,19 @@
   `serde_json` and is unaffected by the bump. (#24)
 
 ### Fixed
+- **Operator-facing UX (security messaging):** the legacy v0.2.x → v0.2.2
+  MCP migration prompt in `gaze-lens init` had inverted compliance-isolation
+  framing. It claimed that *removing* the legacy per-profile MCP entries
+  would *break* compliance isolation — the opposite of the v0.2.2 contract,
+  in which compliance isolation is enforced by the mandatory `profile`
+  argument on every MCP tool call (SPEC §"MCP server"). Operators picking
+  the (former) default `N` silently produced a non-conformant config that
+  would fail the next agent invocation with `invalid_params`. The prompt
+  is rewritten to surface the SPEC rationale, name the `invalid_params`
+  consequence of declining, and the interactive default flips from `N`
+  (preserve) to `Y` (migrate) to match `[Y/n]`. Test pin updated with a
+  negative assertion against the inverted framing to prevent regression.
+  (#518, #519, #520)
 - **Security:** `gaze-lens check --explain-risk` now sanitizes the rendered
   profile name against terminal escape sequences. An attacker-controlled
   profile name containing `\x1b[2K` could previously overwrite earlier
