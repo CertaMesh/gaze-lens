@@ -132,6 +132,10 @@ fn redact_text(
 /// are rejected with `LensError::RedactionFailed` — PII redaction must not
 /// produce structured output that bypasses redaction; if it does, that's a
 /// bug we want to fail loudly on rather than silently flatten.
+///
+/// NOTE: This match is the exhaustiveness pin for `gaze::Value`. Any new
+/// variant added upstream must be handled explicitly here; there is no
+/// wildcard arm.
 pub fn gaze_value_to_json(value: &gaze::Value) -> Result<serde_json::Value, LensError> {
     match value {
         gaze::Value::Null => Ok(serde_json::Value::Null),
