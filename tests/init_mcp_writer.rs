@@ -93,16 +93,10 @@ fn legacy_migration_prompt_includes_compliance_note() {
         prompt.contains("`profile` argument on every MCP tool call"),
         "{prompt}"
     );
-    assert!(
-        prompt.contains("removes the 2 legacy entries"),
-        "{prompt}"
-    );
+    assert!(prompt.contains("removes the 2 legacy entries"), "{prompt}");
     assert!(prompt.contains("`invalid_params`"), "{prompt}");
     assert!(prompt.contains("default Y"), "{prompt}");
-    assert!(
-        !prompt.contains("breaks compliance isolation"),
-        "{prompt}"
-    );
+    assert!(!prompt.contains("breaks compliance isolation"), "{prompt}");
 }
 
 #[test]
