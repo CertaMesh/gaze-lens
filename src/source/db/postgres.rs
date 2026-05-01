@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow};
+use sqlx::types::BigDecimal;
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, PrimitiveDateTime, Time};
@@ -246,12 +247,8 @@ fn decode_value(
             .map(LensValue::F64)
             .map_err(|err| decode_error(runtime_ty, err)),
         "NUMERIC" => row
-            .try_get::<sqlx::types::BigDecimal, _>(index)
-            .map(|value| LensValue::Decimal {
-                value: value.to_string(),
-                precision: 0,
-                scale: 0,
-            })
+            .try_get::<BigDecimal, _>(index)
+            .map(decimal_value)
             .map_err(|err| decode_error(runtime_ty, err)),
         "VARCHAR" | "TEXT" | "BPCHAR" | "CHAR" | "NAME" => row
             .try_get::<String, _>(index)
@@ -318,6 +315,24 @@ fn decode_error(ty: &str, err: impl std::fmt::Display) -> LensError {
     })
 }
 
+fn decimal_value(value: BigDecimal) -> LensValue {
+    let decimal = value.to_string();
+    let (mantissa, scale) = value.into_bigint_and_scale();
+    let precision = mantissa
+        .to_string()
+        .trim_start_matches('-')
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .count()
+        .min(u8::MAX as usize) as u8;
+    let scale = u8::try_from(scale.max(0)).unwrap_or(u8::MAX);
+    LensValue::Decimal {
+        value: decimal,
+        precision,
+        scale,
+    }
+}
+
 fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -360,4 +375,49 @@ fn format_offset_datetime(
     value: OffsetDateTime,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     Ok(value.format(&Rfc3339)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use sqlx::types::BigDecimal;
+
+    use crate::value::LensValue;
+
+    #[test]
+    fn decimal_metadata_counts_precision_and_scale() {
+        assert_eq!(
+            super::decimal_value(BigDecimal::from_str("123.456").expect("decimal")),
+            LensValue::Decimal {
+                value: "123.456".to_string(),
+                precision: 6,
+                scale: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn decimal_metadata_handles_zero_scale() {
+        assert_eq!(
+            super::decimal_value(BigDecimal::from_str("42").expect("decimal")),
+            LensValue::Decimal {
+                value: "42".to_string(),
+                precision: 2,
+                scale: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn decimal_metadata_ignores_negative_sign_for_precision() {
+        assert_eq!(
+            super::decimal_value(BigDecimal::from_str("-99.9").expect("decimal")),
+            LensValue::Decimal {
+                value: "-99.9".to_string(),
+                precision: 3,
+                scale: 1,
+            }
+        );
+    }
 }
