@@ -32,6 +32,8 @@ Do not bypass for shared branches or tags; the hook exists to keep main and rele
 
 `Cargo.toml` pins `gaze` and `gaze-recognizers` to a `PIInuts/gaze` Git tag with a matching crate version, e.g. `tag = "v0.6.4"` + `version = "0.6.4"`. Do not silently float to an arbitrary Gaze checkout. When adopting new Gaze features, bump both `tag` and `version` together in `Cargo.toml`, run `cargo update -p gaze -p gaze-recognizers` so `Cargo.lock` records the resolved sha, and bump the gaze-lens patch version in the same PR.
 
+During an in-flight v0.x.y release cycle, Gaze dependency bumps inside that cycle do not require an immediate gaze-lens patch version bump; the release cut rolls up the Gaze bump with the rest of the cycle's changes. For patches to an already-shipped release line, bump the gaze-lens patch version in the same PR as the Gaze dependency change.
+
 Local development can use a local Gaze checkout through a per-developer Cargo patch. Add this to `~/.cargo/config.toml` and do not commit it:
 
 ```toml
