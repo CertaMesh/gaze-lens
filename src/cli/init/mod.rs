@@ -791,7 +791,7 @@ fn migration_decision(
     };
 
     if prompter
-        .confirm(&prompt, false)
+        .confirm(&prompt, true)
         .map_err(|err| LensError::Profile {
             detail: format!("prompt failed: {err}"),
         })?
