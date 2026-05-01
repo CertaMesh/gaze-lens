@@ -117,8 +117,8 @@ fn migration_prompt(keys: &[String]) -> Option<String> {
         return None;
     }
     Some(format!(
-        "Found {} legacy gaze-lens MCP entries from v0.2.x. Multi-profile mode (#355) consolidates these to a single `gaze-lens` entry.\nRemoving the legacy entries breaks compliance isolation if you rely on per-entry differentiation.\nMigrate? [y/N] (default N — keeps existing entries)",
-        keys.len()
+        "Found {count} legacy gaze-lens MCP entries from v0.2.x. v0.2.2 requires a single `gaze-lens` entry: compliance isolation is enforced by the mandatory `profile` argument on every MCP tool call, not by per-entry servers (SPEC §MCP server).\nMigrating: removes the {count} legacy entries and writes one `gaze-lens` entry running `gaze-lens serve`. Agents pass `profile` per tool call.\nDeclining: leaves the legacy entries in place. Agents updated past v0.2.1 will fail with `invalid_params` until you re-run init or accept the migration here.\nMigrate? [Y/n] (default Y — required by v0.2.2)",
+        count = keys.len()
     ))
 }
 
