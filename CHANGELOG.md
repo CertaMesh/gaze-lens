@@ -3,12 +3,28 @@
 ## [0.2.2] — TBD
 
 ### Added
+- `init` writes a guided setup flow that emits per-agent MCP snippets and an
+  AGENTS.md primer alongside the generated profile, so first-run agents have
+  copy-paste config for Claude Code, Cursor, Codex, and generic MCP clients.
+  (#357, #360)
 - `init` can optionally discover Laravel-style `DB_*` credentials by reading
   an explicit remote `.env` over SSH, then choose Path A (store discovered
   prod credential), Path B (recommended: host/database only plus separate
   readonly credential), or Path C (abort). Strict host-key checking is on by
   default; `--allow-new-ssh-host` opts into TOFU. Provenance metadata is
   persisted to `profile.toml`. (#358)
+- Profile secrets now have an OS-native keyring backend
+  (`profile.toml::secret_backend = "keyring"`). Falls back to plaintext when
+  the native keyring is unavailable, with an explicit `--allow-plaintext`
+  opt-in. macOS Keychain, Windows Credential Manager, and Secret Service on
+  Linux are exercised through `keyring` crate. An ignored `integration-keyring`
+  test gates compile-time API stability without requiring an unlocked
+  runner. (#356)
+- `gaze-lens check --explain-risk` emits a structured trust report covering
+  redaction policy, source class, snapshot retention posture, and the
+  process surface visible to the operator. Used by AI agents to verify the
+  pseudonymization contract before issuing queries against an unfamiliar
+  profile. (#359)
 
 ### Changed (BREAKING for MCP agents)
 - `gaze-lens serve` now exposes a single MCP entry covering all configured
@@ -17,7 +33,53 @@
   that did not send `profile` will receive `invalid_params` until updated.
   Run `gaze-lens init` to regenerate per-host MCP config and AGENTS.md guidance.
   CLI `query`/`demo` continue to work unchanged (single-profile mode defaults
-  the `profile` arg to the configured profile name).
+  the `profile` arg to the configured profile name). (#355)
+
+### Changed
+- Bumped Gaze pinned dependency from `v0.4.6` to `v0.6.4`. `gaze::Value`
+  conversion contract (D11) preserved through the existing exhaustiveness
+  pin in `gaze_value_to_json`. Manifest serialization continues to use
+  `serde_json` and is unaffected by the bump. (#24)
+
+### Fixed
+- **Security:** `gaze-lens check --explain-risk` now sanitizes the rendered
+  profile name against terminal escape sequences. An attacker-controlled
+  profile name containing `\x1b[2K` could previously overwrite earlier
+  trust-report lines in agent log rendering. The render layer rejects names
+  outside `^[a-zA-Z0-9_-]{1,64}$` with a typed validation error. Defense-in-
+  depth applied to both `report.profile` and
+  `report.process_surface.profile_under_review` so future direct constructors
+  of `TrustReport` cannot bypass the guard. Profile-name validation regex
+  was extracted to a shared helper to keep the input gate and render gate
+  in lockstep. (#439, #512, #513, #514, #515)
+
+### Performance
+- `gaze-lens check` no longer builds the Gaze pipeline twice on the
+  non-`--explain-risk` path. (#438)
+
+### Documentation
+- CONTRIBUTING.md clarifies that Gaze dependency bumps inside an in-flight
+  `v0.x.y` release cycle do not require an immediate `gaze-lens` patch
+  version bump; the release cut at the end of the cycle rolls them up. For
+  patches to an already-shipped release line, the version bump rides with
+  the dependency change. (#503)
+- CONTRIBUTING.md documents how to regenerate `Cargo.lock` for committable
+  state when `~/.cargo/config.toml` has a local `[patch."https://github.com/PIInuts/gaze.git"]`
+  block — disable the patch before running `cargo update`, then verify
+  the lockfile records `source = "git+...?tag=vX.Y.Z#<sha>"` rather than a
+  path-based resolution. (#504)
+- `gaze_value_to_json` is annotated as the source-of-truth exhaustiveness
+  pin for new `gaze::Value` variants. (#502)
+
+### Internal
+- Pre-push hook gained a docs-only fast-path that skips the full
+  `fmt + clippy + test` gate when a push touches only documentation files.
+  (#18)
+- Pre-push hook now skips the cargo gate on delete-only pushes
+  (`local_sha == zero`), which previously incurred a 25-30 minute cold-cache
+  wait when removing a merged remote branch. (#516)
+- Trust-report tests use a proper crypto-rand 32-byte sentinel rather than
+  concatenated ULIDs, matching the original plan. (#437)
 
 ## [0.2.0] — 2026-04-29
 
