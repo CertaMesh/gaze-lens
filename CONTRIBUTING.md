@@ -42,6 +42,12 @@ gaze = { path = "/abs/path/to/Gaze/crates/gaze" }
 gaze-recognizers = { path = "/abs/path/to/Gaze/crates/gaze-recognizers" }
 ```
 
+### Regenerating Cargo.lock for committable state
+
+Before running `cargo update -p gaze -p gaze-recognizers` for a commit, temporarily disable any `[patch."https://github.com/PIInuts/gaze.git"]` block in `~/.cargo/config.toml` by commenting it out. After the update, verify the `Cargo.lock` entries for `gaze` and `gaze-recognizers` include `source = "git+https://github.com/PIInuts/gaze.git?tag=vX.Y.Z#<sha>"` instead of a path-based resolution. Re-enable the `[patch]` block after committing for local development.
+
+An optional future hardening step is a CI guard that rejects committable lockfiles with path-based Gaze resolutions.
+
 ## Releases
 
 Releases are tag-driven through [cargo-dist](https://opensource.axo.dev/cargo-dist/). To cut a release:
