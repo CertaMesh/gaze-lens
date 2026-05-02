@@ -42,6 +42,19 @@
   `serde_json` and is unaffected by the bump. (#24)
 
 ### Fixed
+- **Postgres NUMERIC metadata:** `LensValue::Decimal` produced by the
+  Postgres adapter now reports the actual precision and scale derived from
+  the decoded `BigDecimal` instead of the placeholder `(0, 0)`. The
+  precision counts mantissa digits (sign-stripped) and the scale is the
+  `BigDecimal` scale clamped at zero, both saturating into `u8`. Brings
+  the PG path to parity with MySQL `DECIMAL`/`NUMERIC` and unblocks the
+  follow-up to harmonize precision derivation across adapters. (#262)
+- **Column-name keyword screening:** `validate_column` in the canned-query
+  builder now also rejects exact column names `where` and `order`
+  (case-insensitive), closing the gap in the existing `alter`/`delete`/
+  `drop`/`insert`/`select`/`truncate`/`union`/`update` list. Fragments
+  like `select_count`, `where_clause`, and `order_amount` continue to be
+  accepted, with regression tests pinning both directions. (#263)
 - **Operator-facing UX (security messaging):** the legacy v0.2.x → v0.2.2
   MCP migration prompt in `gaze-lens init` had inverted compliance-isolation
   framing. It claimed that *removing* the legacy per-profile MCP entries
@@ -120,4 +133,6 @@
 ### Deferred to v0.3.0+
 - cargo-dist release-preflight workflow + GLIBC 2.17 floor config (PR 2/3, blocked on GH Actions billing #306).
 - release.yml smoke-test gating between `host.needs` and `build-global-artifacts.needs` (same).
-- PG decimal precision (#262), column-rule isolation (#247), snapshot encryption-at-rest, crates.io publish.
+- column-rule isolation (#247), snapshot encryption-at-rest, crates.io publish.
+  (PG decimal precision #262 was originally listed here; landed early in
+  0.2.2 — see Fixed above.)
