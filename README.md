@@ -19,7 +19,7 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 
 ## Install
 
-### One-line first-run (try the demo)
+### Apple Silicon macOS quick install
 
 > Prebuilt binaries currently target Apple Silicon macOS (`aarch64-apple-darwin`). Other platforms should build from source until the native ONNX Runtime distribution blocker is resolved.
 
@@ -29,8 +29,6 @@ curl -L https://github.com/PIInuts/gaze-lens/releases/download/v0.2.0/gaze-lens-
 ```
 
 `gaze-lens demo` tokenizes a small canned dataset (3 emails, 2 phones, 1 SSN-shaped string) and inline-restores it in a single process — both sections print side by side. The demo writes nothing to `~/.gaze-lens/`; everything lives in a tempdir that is wiped on exit. No follow-up `gaze-lens replay <id>` is required.
-
-The v0.2.0 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
 
 ### Prebuilt binaries
 
@@ -51,30 +49,41 @@ The `gaze` and `gaze-recognizers` crates are wired as git dependencies pinned to
 
 On Linux, install the platform packages needed by the native keyring backend before building, for example `pkg-config` and `libdbus-1-dev` on Debian/Ubuntu.
 
-## Quickstart
+## New Project Onboarding
 
-After running `gaze-lens demo` to confirm the install works, point it at a real source:
+After `gaze-lens demo` confirms the binary works, run guided init from the project you want your agent to investigate:
 
 ```sh
-# 1. Scaffold a project profile next to your repo and a user-local transport file.
+# 1. Create a profile and optional agent config.
 gaze-lens init --profile prod
 
-# 2. Validate profile parsing, policy, Gaze pipeline, and source connectivity.
-#    No manifest or snapshot side effects.
+# 2. Validate profile parsing, policy, redaction, and source connectivity.
 gaze-lens check --profile prod
 
-# 3. Dry-run a canned query as a human (same audit + redaction path as MCP).
+# 3. Dry-run one human query through the same audit + redaction path as MCP.
 gaze-lens query --profile prod --table users --limit 5
 
-# 4. Restore the tokenized arguments of a recorded session locally.
+# 4. Later, replay an agent session locally to restore original values.
 gaze-lens replay <session_ulid>
 ```
 
-`gaze-lens` ships six CLI subcommands: `init`, `check`, `query`, `replay`, `serve`, `demo`. See [docs/profiles.md](./docs/profiles.md) for profile schema and [docs/replay.md](./docs/replay.md) for replay + snapshot handling.
+`init` is the preferred setup path. It prompts for source kind (`mysql`, `postgres`, `sqlite`, or `ssh-log`), connection details, where to write the profile, which MCP client to configure, and whether to append an AGENTS.md primer. For Laravel-style SSH targets, it can inspect an explicit remote `.env` path and guide you toward a read-only credential instead of copying production app secrets blindly.
+
+By default, interactive init can write:
+
+- `.gaze-lens.toml` in the project or `~/.gaze-lens/profiles.toml` for user-level profiles.
+- `.mcp.json` for Claude Code, or `~/.codex/config.toml` / `.cursor/mcp.json` when `--client codex` or `--client cursor` is supplied.
+- An AGENTS.md snippet telling future agents to call the 5 locked MCP tools with a `profile` argument.
+
+`check` is the gate before giving an agent access. It validates the profile and source without writing a manifest row or snapshot. Add `--explain-risk` when you want a structured trust report for the profile.
+
+`gaze-lens` ships six CLI subcommands: `serve`, `init`, `query`, `replay`, `check`, `demo`. See [docs/profiles.md](./docs/profiles.md) for profile schema and [docs/replay.md](./docs/replay.md) for replay + snapshot handling.
 
 ## Use it from your agent
 
-The primary surface is the MCP server (stdio). Wire `gaze-lens serve` into any MCP-capable agent (Claude Code, Cursor, Codex, custom):
+The primary surface is the MCP server (stdio). Prefer `gaze-lens init`; it can write the right MCP config for Claude Code, Codex, or Cursor.
+
+Manual MCP config is still small. Use one `gaze-lens` server entry:
 
 ```jsonc
 {
@@ -87,9 +96,15 @@ The primary surface is the MCP server (stdio). Wire `gaze-lens serve` into any M
 }
 ```
 
-`serve --profile prod` remains available when you want to expose only one
-profile, but MCP tool calls must still pass `profile: "prod"`. The agent sees
-five tools and nothing else:
+The server loads configured profiles. `serve --profile prod` remains available as a one-profile restrict-list, and `serve --profile prod --profile staging` exposes only those profiles. Every MCP tool call must still pass `profile: "prod"` or another configured profile name.
+
+Example tool call:
+
+```json
+{"tool": "query", "args": {"profile": "prod", "table": "users", "limit": 5}}
+```
+
+The agent sees five tools and nothing else:
 
 | Tool | Purpose |
 |---|---|
