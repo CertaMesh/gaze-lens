@@ -40,6 +40,9 @@
   conversion contract (D11) preserved through the existing exhaustiveness
   pin in `gaze_value_to_json`. Manifest serialization continues to use
   `serde_json` and is unaffected by the bump. (#24)
+- Release configuration now limits prebuilt archives to Apple Silicon macOS
+  (`aarch64-apple-darwin`) while the Gaze recognizer backend portability spike
+  tracks Intel macOS, Linux, and Windows binary distribution.
 
 ### Fixed
 - **Operator-facing UX (security messaging):** the legacy v0.2.x → v0.2.2
