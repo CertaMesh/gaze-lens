@@ -368,7 +368,8 @@ fn validate_column<'a>(
 
 fn has_sql_keyword(column: &str) -> bool {
     const KEYWORDS: &[&str] = &[
-        "alter", "delete", "drop", "insert", "select", "truncate", "union", "update",
+        "alter", "delete", "drop", "insert", "order", "select", "truncate", "union", "update",
+        "where",
     ];
     KEYWORDS.contains(&column.to_ascii_lowercase().as_str())
 }
@@ -417,6 +418,50 @@ impl PlaceholderState {
                 self.next_index += 1;
                 placeholder
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ColumnInfo, QueryError, TableSchema, validate_column};
+
+    fn schema_with_columns(columns: &[&str]) -> TableSchema {
+        TableSchema {
+            table: "orders".to_string(),
+            table_token: "orders".to_string(),
+            columns: columns
+                .iter()
+                .map(|column| ColumnInfo {
+                    name: (*column).to_string(),
+                    name_token: (*column).to_string(),
+                    data_type: "text".to_string(),
+                    nullable: true,
+                    allowed: true,
+                })
+                .collect(),
+            limit_cap: None,
+        }
+    }
+
+    #[test]
+    fn column_keyword_fragments_are_allowed() {
+        let schema = schema_with_columns(&["select_count", "where_clause", "order_amount"]);
+
+        assert!(validate_column("select_count", &schema).is_ok());
+        assert!(validate_column("where_clause", &schema).is_ok());
+        assert!(validate_column("order_amount", &schema).is_ok());
+    }
+
+    #[test]
+    fn exact_column_keywords_are_rejected_case_insensitively() {
+        let schema = schema_with_columns(&[]);
+
+        for column in ["select", "where", "Order", "ORDER", "Where"] {
+            assert_eq!(
+                validate_column(column, &schema),
+                Err(QueryError::UnsafeColumn(column.to_string()))
+            );
         }
     }
 }
