@@ -27,6 +27,8 @@ pub struct Profile {
     #[serde(default)]
     pub policy: Option<PathBuf>,
     #[serde(default)]
+    pub schema_tokenize: Option<bool>,
+    #[serde(default)]
     pub schema_allowlist: Option<Vec<String>>,
     /// Snapshot retention TTL in days. `None` (default) = unlimited (D3 default).
     /// When `Some(n)`, snapshots older than `n` days are eligible for sweep
@@ -113,6 +115,10 @@ struct ProfileShape {
 }
 
 impl Profile {
+    pub fn schema_tokenize(&self) -> bool {
+        self.schema_tokenize.unwrap_or(false)
+    }
+
     pub async fn resolve_password(&self) -> Result<Zeroizing<String>, LensError> {
         let (legacy_env, secret) = match &self.source {
             SourceSpec::Mysql {
@@ -607,6 +613,7 @@ fn merge_one(user: &Profile, project: &Profile) -> Profile {
             .clone()
             .or_else(|| user.credential_class.clone()),
         policy: project.policy.clone().or_else(|| user.policy.clone()),
+        schema_tokenize: project.schema_tokenize.or(user.schema_tokenize),
         schema_allowlist: project
             .schema_allowlist
             .clone()

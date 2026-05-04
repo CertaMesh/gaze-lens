@@ -690,6 +690,7 @@ impl Session {
         match output {
             SourceOutput::Rows(rows) => self.redact_rows(rows, pipeline, column_actions),
             SourceOutput::Text(text) => self.redact_text_output(text, Vec::new(), pipeline),
+            SourceOutput::SchemaText(text) => self.schema_text_output(text, Vec::new()),
             SourceOutput::TextWithTruncation { text, truncated_at } => {
                 self.redact_text_output(text, truncated_at, pipeline)
             }
@@ -805,6 +806,18 @@ impl Session {
                 detail: "text output produced structured output".to_string(),
             }),
         }
+    }
+
+    fn schema_text_output(
+        &self,
+        text: String,
+        mut truncated_at: Vec<TruncatedAt>,
+    ) -> Result<CleanOutput, LensError> {
+        let (text, truncated) = cap_string(text, self.inner.caps.bytes);
+        if truncated {
+            push_truncation(&mut truncated_at, TruncatedAt::Bytes);
+        }
+        Ok(CleanOutput::Text { text, truncated_at })
     }
 
     fn persist_snapshot(&self) -> Result<SnapshotRef, LensError> {

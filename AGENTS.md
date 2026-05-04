@@ -21,6 +21,7 @@ The product surface is exactly:
 - **No `sqlx::query!` / `query_as!` macros for production-source adapters.** See [CONTRIBUTING.md §sqlx macro policy](./CONTRIBUTING.md#sqlx-macro-policy-banned-for-production-source-queries).
 - **SSH command construction never uses interpolated strings.** Always use the `ssh -- <host> <command> -- <quoted_path>` form with validated host arguments. Reject `-`-prefixed hosts.
 - **`LensValue` decode-failures reject the row.** Never silently fall back to empty string. SQLite JSON-in-TEXT must be policy-driven via the `json_text_columns` allowlist (default-deny).
+- **Schema presentation is raw by default.** `schema` and `list_tables` may return raw table/column names unless the profile explicitly sets `schema_tokenize = true`. `schema_allowlist` is only a presentation exception in tokenized mode; it must not grant query access or imply tokenized mode by itself.
 
 ## Commands
 

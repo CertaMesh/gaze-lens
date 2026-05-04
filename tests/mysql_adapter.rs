@@ -12,6 +12,7 @@ fn mysql_profile(readonly_required: bool, password_env: &str) -> Profile {
         discovered_at: None,
         discovered_ssh_host_key_fingerprint: None,
         credential_class: None,
+        schema_tokenize: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,

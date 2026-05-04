@@ -1,5 +1,8 @@
 use gaze_lens::session::{OutputCaps, Session};
-use gaze_lens::source::db::{ColumnInfo, TableSchema};
+use gaze_lens::session::{SourceClass, ToolCall};
+use gaze_lens::source::db::query::CannedQuery;
+use gaze_lens::source::db::{ColumnInfo, DbKind, DbSource, TableSchema};
+use gaze_lens::source::{DbSourceWrapper, SchemaPresentation, ToolArgs};
 use std::sync::Arc;
 
 fn policy() -> gaze::Policy {
@@ -103,7 +106,69 @@ fn test_table_name_tokenized_unless_allowlisted() {
     assert_eq!(allowed.table_token, "users_pii");
 }
 
+#[tokio::test]
+async fn raw_schema_text_is_not_mangled_by_text_redaction() {
+    let session = session();
+    session.register_source_for_profile(
+        SourceClass::Database,
+        "test",
+        Arc::new(DbSourceWrapper::with_schema_presentation(
+            Arc::new(SensitiveSchemaSource),
+            SchemaPresentation::Raw,
+        )),
+    );
+
+    let result = session
+        .dispatch_tool(ToolCall {
+            call_id: ulid::Ulid::new().to_string(),
+            tool_name: "schema".to_string(),
+            args: ToolArgs(serde_json::json!({
+                "profile": "test",
+                "table": "alice@example.com"
+            })),
+        })
+        .await
+        .expect("schema dispatch");
+    let encoded = serde_json::to_string(&result.clean).expect("json");
+
+    assert!(encoded.contains("alice@example.com"), "{encoded}");
+    assert!(encoded.contains("billing_email"), "{encoded}");
+}
+
 struct NoopManifest;
+
+struct SensitiveSchemaSource;
+
+#[async_trait::async_trait]
+impl DbSource for SensitiveSchemaSource {
+    fn kind(&self) -> DbKind {
+        DbKind::Sqlite
+    }
+
+    fn profile_name(&self) -> &str {
+        "default"
+    }
+
+    async fn list_tables(&self) -> Result<Vec<String>, gaze_lens::errors::LensError> {
+        Ok(vec!["alice@example.com".to_string()])
+    }
+
+    async fn schema(&self, table: &str) -> Result<TableSchema, gaze_lens::errors::LensError> {
+        Ok(TableSchema {
+            table: table.to_string(),
+            table_token: table.to_string(),
+            columns: vec![col("billing_email")],
+            limit_cap: Some(100),
+        })
+    }
+
+    async fn query(
+        &self,
+        _query: &CannedQuery,
+    ) -> Result<Vec<gaze_lens::value::LensRow>, gaze_lens::errors::LensError> {
+        Ok(Vec::new())
+    }
+}
 
 impl gaze_lens::session::manifest::ManifestStore for NoopManifest {
     fn begin_call(

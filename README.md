@@ -94,12 +94,12 @@ five tools and nothing else:
 | Tool | Purpose |
 |---|---|
 | `query` | Run a canned structured DB query (no raw SQL accepted). |
-| `schema` | Describe one tokenized table schema. |
-| `list_tables` | List tokenized table names. |
+| `schema` | Describe one table schema. |
+| `list_tables` | List table names. |
 | `log_tail` | Tail a configured SSH log source. |
 | `log_grep` | Search a configured SSH log source. |
 
-Every tool result routes through `gaze::Pipeline::redact` before it leaves the process. Tool args are tokenized through the same path before the manifest is written, so the manifest never stores raw arguments.
+Every tool result routes through `Session::dispatch_tool` before it leaves the process. Tool args are tokenized through the Gaze path before the manifest is written, so the manifest never stores raw arguments. Schema/list output shows raw table and column names by default; set `schema_tokenize = true` in the profile when schema names themselves are sensitive.
 
 ## Threat model — short version
 

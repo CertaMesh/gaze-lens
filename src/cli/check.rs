@@ -52,6 +52,19 @@ async fn run_with_writer(
         stderr,
         &format!("profile: ok ({})", profile.name),
     )?;
+    if profile
+        .schema_allowlist
+        .as_ref()
+        .is_some_and(|items| !items.is_empty())
+        && !profile.schema_tokenize()
+    {
+        write_status_line(
+            json_mode,
+            out,
+            stderr,
+            "warning: schema_allowlist has no presentation-tokenization effect in raw schema mode; set schema_tokenize = true to use it for schema/list_tables presentation",
+        )?;
+    }
 
     let validated_policy = validate_policy(&profile)?;
     write_status_line(json_mode, out, stderr, "policy: ok")?;

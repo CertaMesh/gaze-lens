@@ -78,7 +78,7 @@ impl TrustReport {
                 tool_arg_redaction: "on (D7)",
                 schema_policy: SchemaPolicy {
                     table_allowlist: None,
-                    column_redaction_mode: "default (gaze recognizer pack)",
+                    column_redaction_mode: "schema/list_tables raw by default; query values use Gaze recognizer pack",
                 },
                 recognizer_pack: RecognizerPack {
                     source: "default-empty",
@@ -621,7 +621,7 @@ fn collect_output_surface(profile: &Profile, recognizer_pack: RecognizerPack) ->
         tool_arg_redaction: "on (D7)",
         schema_policy: SchemaPolicy {
             table_allowlist: profile.schema_allowlist.clone(),
-            column_redaction_mode: "default (gaze recognizer pack)",
+            column_redaction_mode: "schema/list_tables raw by default; query values use Gaze recognizer pack",
         },
         recognizer_pack,
         output_caps: OutputCapsView {

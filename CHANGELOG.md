@@ -36,6 +36,10 @@
   the `profile` arg to the configured profile name). (#355)
 
 ### Changed
+- `schema` and `list_tables` now show raw table/column names by default for
+  agent utility. Profiles can opt back into presentation tokenization with
+  `schema_tokenize = true`; `schema_allowlist` only affects presentation in
+  that mode. Query authorization remains governed by source schema policy.
 - Bumped Gaze pinned dependency from `v0.4.6` to `v0.6.4`. `gaze::Value`
   conversion contract (D11) preserved through the existing exhaustiveness
   pin in `gaze_value_to_json`. Manifest serialization continues to use

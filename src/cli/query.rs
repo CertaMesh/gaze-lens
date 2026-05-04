@@ -11,7 +11,7 @@ use crate::source::db::mysql::MysqlSource;
 use crate::source::db::postgres::PostgresSource;
 use crate::source::db::query::{CannedQuery, OrderBy, WhereClause, WhereCombinator};
 use crate::source::db::sqlite::SqliteSource;
-use crate::source::{DbSourceWrapper, Source, ToolArgs};
+use crate::source::{DbSourceWrapper, SchemaPresentation, Source, ToolArgs};
 
 use super::serve::runtime_policy;
 
@@ -136,9 +136,16 @@ pub(crate) async fn build_db_session(
             });
         }
     };
-    let source: Arc<dyn Source> = Arc::new(DbSourceWrapper::with_schema_allowlist(
+    let schema_presentation = if profile.schema_tokenize() {
+        SchemaPresentation::Tokenized {
+            allowlist: profile.schema_allowlist,
+        }
+    } else {
+        SchemaPresentation::Raw
+    };
+    let source: Arc<dyn Source> = Arc::new(DbSourceWrapper::with_schema_presentation(
         db_source,
-        profile.schema_allowlist,
+        schema_presentation,
     ));
     session.register_source_for_profile(
         crate::session::SourceClass::Database,
