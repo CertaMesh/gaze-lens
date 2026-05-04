@@ -6,7 +6,7 @@ PII-safe read-access for live production investigation by AI agents.
 
 Built on the [Gaze](https://github.com/PIInuts) pseudonymization engine. Part of the [PIInuts](https://github.com/PIInuts) product family — every product in the family is named `gaze-X`.
 
-> **Status:** v0.1. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
+> **Status:** v0.2.0 is the latest tagged release; `main` is preparing v0.2.2. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
 
 ## Why
 
@@ -21,7 +21,7 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 
 ### One-line first-run (try the demo)
 
-> v0.2.0 binaries publish on tag — until v0.2.0 ships, build from source via the snippet in [Building from source](#building-from-source) below.
+> Prebuilt binaries currently target Apple Silicon macOS (`aarch64-apple-darwin`). Other platforms should build from source until the native ONNX Runtime distribution blocker is resolved.
 
 ```sh
 curl -L https://github.com/PIInuts/gaze-lens/releases/download/v0.2.0/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
@@ -30,11 +30,11 @@ curl -L https://github.com/PIInuts/gaze-lens/releases/download/v0.2.0/gaze-lens-
 
 `gaze-lens demo` tokenizes a small canned dataset (3 emails, 2 phones, 1 SSN-shaped string) and inline-restores it in a single process — both sections print side by side. The demo writes nothing to `~/.gaze-lens/`; everything lives in a tempdir that is wiped on exit. No follow-up `gaze-lens replay <id>` is required.
 
-The v0.2.0 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary. v0.2.0 also publishes Linux (`x86_64-unknown-linux-gnu`) + Intel macOS (`x86_64-apple-darwin`) builds via cargo-dist on tag.
+The v0.2.0 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
 
 ### Prebuilt binaries
 
-Releases attach prebuilt tarballs to the [GitHub releases page](https://github.com/PIInuts/gaze-lens/releases). v0.2.0 publishes the full Linux + macOS matrix on tag.
+Releases attach prebuilt tarballs to the [GitHub releases page](https://github.com/PIInuts/gaze-lens/releases). Near-term release automation intentionally builds only the Apple Silicon macOS archive. Intel macOS, Linux, and Windows remain source-build or future binary targets while the Gaze recognizer backend is made portable.
 
 ### Building from source
 
@@ -48,6 +48,8 @@ cargo build --release
 The `gaze` and `gaze-recognizers` crates are wired as git dependencies pinned to a `PIInuts/gaze` tag (currently `v0.6.4`). See [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin) for the pin policy and the local-checkout patch recipe.
 
 `gaze-lens` builds with stable Rust 1.89+.
+
+On Linux, install the platform packages needed by the native keyring backend before building, for example `pkg-config` and `libdbus-1-dev` on Debian/Ubuntu.
 
 ## Quickstart
 

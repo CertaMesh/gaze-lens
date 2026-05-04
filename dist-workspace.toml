@@ -12,12 +12,9 @@ allow-dirty = ["ci"]
 # Do not run release artifact validation on pull requests.
 pr-run-mode = "skip"
 # The installers to generate for each app
-installers = ["shell", "powershell"]
+installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+targets = ["aarch64-apple-darwin"]
 
 [dist.binaries]
 "aarch64-apple-darwin" = ["gaze-lens"]
-"x86_64-apple-darwin" = ["gaze-lens"]
-"x86_64-unknown-linux-gnu" = ["gaze-lens"]
-"x86_64-pc-windows-msvc" = ["gaze-lens"]
