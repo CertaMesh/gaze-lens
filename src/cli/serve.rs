@@ -17,7 +17,7 @@ use crate::source::db::postgres::PostgresSource;
 use crate::source::db::sqlite::SqliteSource;
 use crate::source::log::SshLogSourceWrapper;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
-use crate::source::{DbSourceWrapper, Source};
+use crate::source::{DbSourceWrapper, SchemaPresentation, Source};
 
 #[derive(Debug, Args)]
 pub struct ServeArgs {
@@ -192,9 +192,16 @@ async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError>
             });
         }
     };
-    Ok(Arc::new(DbSourceWrapper::with_schema_allowlist(
+    let schema_presentation = if profile.schema_tokenize() {
+        SchemaPresentation::Tokenized {
+            allowlist: profile.schema_allowlist,
+        }
+    } else {
+        SchemaPresentation::Raw
+    };
+    Ok(Arc::new(DbSourceWrapper::with_schema_presentation(
         db_source,
-        profile.schema_allowlist,
+        schema_presentation,
     )))
 }
 

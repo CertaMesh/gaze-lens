@@ -17,6 +17,7 @@ pub struct ToolArgs(pub serde_json::Value);
 pub enum SourceOutput {
     Rows(Vec<LensRow>),
     Text(String),
+    SchemaText(String),
     TextWithTruncation {
         text: String,
         truncated_at: Vec<TruncatedAt>,
@@ -53,7 +54,13 @@ impl Source for FakeSourceAdapter {
 pub struct DbSourceWrapper {
     inner: std::sync::Arc<dyn DbSource>,
     schema_tokenizer: SchemaTokenizer,
-    schema_allowlist: Option<Vec<String>>,
+    schema_presentation: SchemaPresentation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaPresentation {
+    Raw,
+    Tokenized { allowlist: Option<Vec<String>> },
 }
 
 impl DbSourceWrapper {
@@ -61,18 +68,18 @@ impl DbSourceWrapper {
         Self {
             inner,
             schema_tokenizer: SchemaTokenizer::default(),
-            schema_allowlist: None,
+            schema_presentation: SchemaPresentation::Raw,
         }
     }
 
-    pub fn with_schema_allowlist(
+    pub fn with_schema_presentation(
         inner: std::sync::Arc<dyn DbSource>,
-        schema_allowlist: Option<Vec<String>>,
+        schema_presentation: SchemaPresentation,
     ) -> Self {
         Self {
             inner,
             schema_tokenizer: SchemaTokenizer::default(),
-            schema_allowlist,
+            schema_presentation,
         }
     }
 }
@@ -92,11 +99,8 @@ impl Source for DbSourceWrapper {
                         }
                     })?;
                 let schema = self.inner.schema(&query.table).await?;
-                let policy_schema = self
-                    .schema_tokenizer
-                    .tokenize_table_schema(&schema, self.schema_allowlist.as_deref());
                 query
-                    .compile_to_sql(&policy_schema)
+                    .compile_to_sql(&schema)
                     .map_err(|err| LensError::SourceError {
                         source_name: call.tool_name.clone(),
                         detail: err.to_string(),
@@ -105,7 +109,7 @@ impl Source for DbSourceWrapper {
                     })?;
                 if query.columns.as_ref().is_none_or(Vec::is_empty) {
                     query.columns = Some(
-                        policy_schema
+                        schema
                             .columns
                             .iter()
                             .filter(|column| column.allowed)
@@ -125,12 +129,9 @@ impl Source for DbSourceWrapper {
                             stderr: None,
                         }
                     })?;
-                let schema = self.inner.schema(&args.table).await?;
-                let tokenized = self
-                    .schema_tokenizer
-                    .tokenize_table_schema(&schema, self.schema_allowlist.as_deref());
-                serde_json::to_string(&tokenized)
-                    .map(SourceOutput::Text)
+                let schema = self.present_schema(self.inner.schema(&args.table).await?);
+                serde_json::to_string(&schema)
+                    .map(SourceOutput::SchemaText)
                     .map_err(|err| {
                         LensError::ConvertError(crate::value::LowerError::Decode {
                             kind: "json",
@@ -140,11 +141,9 @@ impl Source for DbSourceWrapper {
             }
             "list_tables" => {
                 let tables = self.inner.list_tables().await?;
-                let tokenized = self
-                    .schema_tokenizer
-                    .tokenize_table_names(&tables, self.schema_allowlist.as_deref());
-                serde_json::to_string(&tokenized)
-                    .map(SourceOutput::Text)
+                let tables = self.present_table_names(&tables);
+                serde_json::to_string(&tables)
+                    .map(SourceOutput::SchemaText)
                     .map_err(|err| {
                         LensError::ConvertError(crate::value::LowerError::Decode {
                             kind: "json",
@@ -158,6 +157,29 @@ impl Source for DbSourceWrapper {
                 sql: None,
                 stderr: None,
             }),
+        }
+    }
+}
+
+impl DbSourceWrapper {
+    fn present_schema(
+        &self,
+        schema: crate::source::db::TableSchema,
+    ) -> crate::source::db::TableSchema {
+        match &self.schema_presentation {
+            SchemaPresentation::Raw => schema,
+            SchemaPresentation::Tokenized { allowlist } => self
+                .schema_tokenizer
+                .tokenize_table_schema(&schema, allowlist.as_deref()),
+        }
+    }
+
+    fn present_table_names(&self, tables: &[String]) -> Vec<String> {
+        match &self.schema_presentation {
+            SchemaPresentation::Raw => tables.to_vec(),
+            SchemaPresentation::Tokenized { allowlist } => self
+                .schema_tokenizer
+                .tokenize_table_names(tables, allowlist.as_deref()),
         }
     }
 }

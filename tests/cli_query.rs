@@ -97,7 +97,7 @@ fn query_rejects_unknown_table() {
 }
 
 #[test]
-fn query_omitted_columns_respects_schema_allowlist() {
+fn query_omitted_columns_uses_source_schema_policy_not_schema_allowlist() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
     let project = temp.path().join("project.toml");
@@ -132,13 +132,13 @@ fn query_omitted_columns_respects_schema_allowlist() {
     let row = rows.first().expect("row").as_object().expect("row object");
     assert!(row.contains_key("id"));
     assert!(row.contains_key("email"));
-    assert!(!row.contains_key("name"));
-    assert!(!row.contains_key("password"));
-    assert!(!row.contains_key("remember_token"));
+    assert!(row.contains_key("name"));
+    assert!(row.contains_key("password"));
+    assert!(row.contains_key("remember_token"));
 }
 
 #[test]
-fn query_rejects_explicit_column_outside_schema_allowlist() {
+fn query_allows_explicit_column_outside_schema_allowlist_when_source_policy_allows() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
     let project = temp.path().join("project.toml");
@@ -168,8 +168,13 @@ fn query_rejects_explicit_column_outside_schema_allowlist() {
         .output()
         .expect("run query");
 
-    assert!(!output.status.success(), "stdout: {}", stdout(&output));
-    assert!(stderr(&output).contains("SourceError: source failed"));
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rows = clean_rows(&stdout(&output));
+    let row = rows.first().expect("row").as_object().expect("row object");
+    assert_eq!(
+        row.get("password"),
+        Some(&serde_json::Value::String("[REDACTED]".to_string()))
+    );
 }
 
 fn seed_sqlite(path: &std::path::Path) {

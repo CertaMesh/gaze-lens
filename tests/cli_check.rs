@@ -371,7 +371,20 @@ fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
     let policy = temp.path().join("policy.toml");
     seed_sqlite(&db);
     std::fs::write(&policy, "[policy.database]\n").expect("policy");
-    write_profile(&project, &db, &policy);
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "local"
+            policy = "{}"
+            source = {{ kind = "sqlite", path = "{}", readonly_required = true }}
+            "#,
+            policy.display(),
+            db.display()
+        ),
+    )
+    .expect("profile");
 
     let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
     let output = cmd
@@ -464,7 +477,21 @@ fn check_explain_risk_json_emits_only_json_on_stdout() {
     let policy = temp.path().join("policy.toml");
     seed_sqlite(&db);
     std::fs::write(&policy, "[policy.database]\n").expect("policy");
-    write_profile(&project, &db, &policy);
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "local"
+            policy = "{}"
+            schema_allowlist = ["users", "email"]
+            source = {{ kind = "sqlite", path = "{}", readonly_required = true }}
+            "#,
+            policy.display(),
+            db.display()
+        ),
+    )
+    .expect("profile");
 
     let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
     let output = cmd
@@ -487,6 +514,53 @@ fn check_explain_risk_json_emits_only_json_on_stdout() {
     let stdout = stdout(&output);
     assert!(!stdout.contains("profile: ok"), "{stdout}");
     assert!(stderr(&output).contains("profile: ok (local)"));
+}
+
+#[test]
+fn check_warns_when_schema_allowlist_is_configured_in_raw_mode() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "local"
+            policy = "{}"
+            schema_allowlist = ["users", "email"]
+            source = {{ kind = "sqlite", path = "{}", readonly_required = true }}
+            "#,
+            policy.display(),
+            db.display()
+        ),
+    )
+    .expect("profile");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(
+        stdout.contains(
+            "warning: schema_allowlist has no presentation-tokenization effect in raw schema mode"
+        ),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -858,6 +932,7 @@ fn keyring_profile(name: &str, service: &str, account: &str) -> Profile {
         discovered_at: None,
         discovered_ssh_host_key_fingerprint: None,
         credential_class: None,
+        schema_tokenize: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
@@ -878,6 +953,7 @@ fn sqlite_profile(name: &str, path: std::path::PathBuf) -> Profile {
         discovered_at: None,
         discovered_ssh_host_key_fingerprint: None,
         credential_class: None,
+        schema_tokenize: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
@@ -904,6 +980,7 @@ fn postgres_env_profile(name: &str, env: &str) -> Profile {
         discovered_at: None,
         discovered_ssh_host_key_fingerprint: None,
         credential_class: None,
+        schema_tokenize: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,

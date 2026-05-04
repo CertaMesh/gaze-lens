@@ -123,7 +123,7 @@ impl McpFrontend {
             .await
     }
 
-    #[tool(name = "schema", description = "Describe one tokenized table schema.")]
+    #[tool(name = "schema", description = "Describe one table schema.")]
     async fn schema(
         &self,
         Parameters(args): Parameters<SchemaArgs>,
@@ -132,7 +132,7 @@ impl McpFrontend {
             .await
     }
 
-    #[tool(name = "list_tables", description = "List tokenized table names.")]
+    #[tool(name = "list_tables", description = "List table names.")]
     async fn list_tables(
         &self,
         Parameters(args): Parameters<ListTablesArgs>,
