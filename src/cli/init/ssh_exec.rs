@@ -152,12 +152,8 @@ async fn real_cat_capped(
     };
 
     if !status.success() {
-        let path_str = path.to_string_lossy();
-        let mut stderr = String::from_utf8_lossy(&stderr).into_owned();
-        stderr = stderr.replace(path_str.as_ref(), "<redacted>");
-        return Err(LensError::Profile {
-            detail: format!("ssh returned {:?}: {stderr}", status.code()),
-        });
+        let stderr = format_cat_env_failure(status.code(), &stderr, path);
+        return Err(LensError::Profile { detail: stderr });
     }
 
     let truncated = stdout.len() > ENV_STDOUT_CAP_BYTES;
@@ -168,6 +164,31 @@ async fn real_cat_capped(
         bytes: stdout,
         truncated,
     })
+}
+
+pub(crate) fn format_cat_env_failure(
+    status_code: Option<i32>,
+    stderr: &[u8],
+    path: &Path,
+) -> String {
+    let path_str = path.to_string_lossy();
+    let mut stderr = String::from_utf8_lossy(stderr).into_owned();
+    stderr = stderr.replace(path_str.as_ref(), "<redacted>");
+
+    let lower = stderr.to_ascii_lowercase();
+    let reason = if lower.contains("is a directory") {
+        "supplied --discover-env-path appears to be a directory"
+    } else if lower.contains("no such file or directory") || lower.contains("not found") {
+        "remote .env file was not found"
+    } else if lower.contains("permission denied") {
+        "permission denied reading remote .env"
+    } else {
+        "ssh could not read remote .env"
+    };
+
+    format!(
+        "{reason}. --discover-env-path must be a full path to a Laravel .env file, e.g. /home/ploi/site/.env or /home/ploi/site/current/.env. ssh returned {status_code:?}: {stderr}"
+    )
 }
 
 async fn real_host_key_fingerprint(host: &str, allow_new_host: bool) -> Result<String, LensError> {
@@ -434,5 +455,58 @@ mod tests {
         let err = ssh.cat_capped("deploy@app01", path, false).unwrap_err();
         assert!(!err.to_string().contains("/var/www/app/.env"));
         assert!(err.to_string().contains("<redacted>"));
+    }
+
+    #[test]
+    fn cat_env_failure_classifies_directory_path() {
+        let detail = format_cat_env_failure(
+            Some(1),
+            b"cat: /var/www/app: Is a directory",
+            Path::new("/var/www/app"),
+        );
+        assert!(detail.contains("appears to be a directory"), "{detail}");
+        assert!(
+            detail.contains("--discover-env-path must be a full path"),
+            "{detail}"
+        );
+        assert!(detail.contains("/home/ploi/site/.env"), "{detail}");
+        assert!(!detail.contains("/var/www/app"), "{detail}");
+        assert!(detail.contains("<redacted>"), "{detail}");
+    }
+
+    #[test]
+    fn cat_env_failure_classifies_missing_path() {
+        let detail = format_cat_env_failure(
+            Some(1),
+            b"cat: /var/www/app/.env: No such file or directory",
+            Path::new("/var/www/app/.env"),
+        );
+        assert!(
+            detail.contains("remote .env file was not found"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("--discover-env-path must be a full path"),
+            "{detail}"
+        );
+        assert!(!detail.contains("/var/www/app/.env"), "{detail}");
+    }
+
+    #[test]
+    fn cat_env_failure_classifies_permission_denied() {
+        let detail = format_cat_env_failure(
+            Some(1),
+            b"cat: /var/www/app/.env: Permission denied",
+            Path::new("/var/www/app/.env"),
+        );
+        assert!(
+            detail.contains("permission denied reading remote .env"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("--discover-env-path must be a full path"),
+            "{detail}"
+        );
+        assert!(!detail.contains("/var/www/app/.env"), "{detail}");
     }
 }

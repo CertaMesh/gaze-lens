@@ -298,7 +298,7 @@ fn populate_discovered_source_params<P: Prompter>(
     let raw = ssh.cat_capped(host, path, args.allow_new_ssh_host)?;
     if raw.truncated {
         return Err(LensError::Profile {
-            detail: format!(".env at {} exceeds 64 KiB cap; refusing", path.display()),
+            detail: "remote .env exceeds 64 KiB cap; refusing".into(),
         });
     }
     let text = std::str::from_utf8(&raw.bytes).map_err(|_| LensError::Profile {
