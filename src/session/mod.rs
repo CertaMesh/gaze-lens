@@ -590,17 +590,7 @@ impl Session {
                 actual: "different".to_string(),
             }),
             ColumnActionMode::MultiProfile(policies) => {
-                policies
-                    .get(profile)
-                    .cloned()
-                    .ok_or_else(|| LensError::ProfileUnknown {
-                        profile: profile.to_string(),
-                        loaded: {
-                            let mut loaded = policies.keys().cloned().collect::<Vec<_>>();
-                            loaded.sort();
-                            loaded
-                        },
-                    })
+                Ok(policies.get(profile).cloned().unwrap_or_default())
             }
         }
     }
