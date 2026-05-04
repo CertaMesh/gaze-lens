@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
+use log::LevelFilter;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow};
 use sqlx::types::BigDecimal;
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
@@ -60,6 +61,7 @@ impl PostgresSource {
             .username(username)
             .password(&password)
             .application_name("gaze-lens")
+            .log_statements(LevelFilter::Off)
             .disable_statement_logging();
         let pool = PgPoolOptions::new()
             .max_connections(1)

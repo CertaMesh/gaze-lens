@@ -20,6 +20,7 @@ dialoguer = { version = "0.11", default-features = false, features = ["password"
 gaze            = { git = "https://github.com/PIInuts/gaze.git", tag = "v0.6.4", version = "0.6.4" }
 gaze-recognizers = { git = "https://github.com/PIInuts/gaze.git", tag = "v0.6.4", version = "0.6.4" }
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+log = "0.4"
 rmcp = { version = "0.2", features = ["client", "transport-io"] }
 regex = "1"
 rusqlite = "0.32"

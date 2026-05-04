@@ -127,6 +127,13 @@ Secret status output names the backend and locator only; it never prints passwor
 
 `check` has no manifest or snapshot side effects.
 
+## Database Statement Logging
+
+Configured MySQL, Postgres, and SQLite sources disable sqlx statement logging on
+their connection options. Verbose `RUST_LOG` settings can still enable
+`gaze-lens` diagnostics, but they do not make sqlx log statement text for
+profile-backed database sources.
+
 ### Trust report (`--explain-risk`)
 
 Use `check --explain-risk` for a local-only trust report that describes what the selected profile exposes and what residual risks remain:

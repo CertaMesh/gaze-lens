@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
+use log::LevelFilter;
 use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
 use time::format_description::well_known::Rfc3339;
@@ -60,6 +61,7 @@ impl MysqlSource {
             .database(database)
             .username(username)
             .password(&password)
+            .log_statements(LevelFilter::Off)
             .disable_statement_logging();
         let pool = MySqlPoolOptions::new()
             .max_connections(1)

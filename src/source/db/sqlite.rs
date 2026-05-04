@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use async_trait::async_trait;
+use log::LevelFilter;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
 use time::OffsetDateTime;
@@ -54,6 +55,7 @@ impl SqliteSource {
         let options = SqliteConnectOptions::from_str(&uri)
             .map_err(|err| source_error(&profile.name, err.to_string(), None))?
             .read_only(true)
+            .log_statements(LevelFilter::Off)
             .disable_statement_logging();
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
