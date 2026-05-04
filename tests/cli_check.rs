@@ -30,6 +30,10 @@ fn trust_report_json_shape_is_stable() {
     }
     assert_eq!(v["input_surface"]["raw_sql"], "disabled (v1 lock, D5)");
     assert_eq!(v["input_surface"]["query_mode"], "canned-structured");
+    assert_eq!(
+        v["output_surface"]["schema_policy"]["column_redaction_mode"],
+        "schema/list_tables raw by default; query values use Gaze recognizer pack"
+    );
     assert!(v["process_surface"].get("profile_under_review").is_some());
     assert!(v["process_surface"].get("serve_default_scope").is_some());
 }
@@ -281,6 +285,12 @@ fn trust_report_text_lists_all_pillars() {
         assert!(text.contains(header), "missing {header}: {text}");
     }
     assert!(text.contains("raw_sql: disabled (v1 lock, D5)"), "{text}");
+    assert!(
+        text.contains(
+            "column_redaction_mode: schema/list_tables raw by default; query values use Gaze recognizer pack"
+        ),
+        "{text}"
+    );
     assert!(text.contains("(see src/session/mod.rs:304)"), "{text}");
 }
 
@@ -555,12 +565,9 @@ fn check_warns_when_schema_allowlist_is_configured_in_raw_mode() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let stdout = stdout(&output);
-    assert!(
-        stdout.contains(
-            "warning: schema_allowlist has no presentation-tokenization effect in raw schema mode"
-        ),
-        "{stdout}"
-    );
+    assert!(stdout.contains(
+        "warning: schema_allowlist has no presentation-tokenization effect in raw schema mode; set schema_tokenize = true to use it for schema/list_tables presentation"
+    ), "{stdout}");
 }
 
 #[test]
