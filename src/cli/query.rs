@@ -112,7 +112,7 @@ pub(crate) async fn build_db_session(
     let manifest = expand_path(manifest)?;
     let snapshot_dir = expand_path(snapshot_dir)?;
     super::retention::apply_retention_policy(&profile, &manifest, &snapshot_dir)?;
-    let (policy, pipeline) = runtime_policy(&profile)?;
+    let (policy, pipeline, column_actions) = runtime_policy(&profile)?;
     let session = Arc::new(Session::new_with_pipeline_for_profile(
         &policy,
         pipeline,
@@ -120,6 +120,7 @@ pub(crate) async fn build_db_session(
         &manifest,
         &snapshot_dir,
     )?);
+    session.register_column_action_policy(profile.name.clone(), column_actions)?;
     let limit_cap = crate::session::OutputCaps::default()
         .rows
         .min(u32::MAX as usize) as u32;

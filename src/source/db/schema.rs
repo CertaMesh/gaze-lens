@@ -23,6 +23,7 @@ impl SchemaTokenizer {
         profile_allowlist: Option<&[String]>,
     ) -> TableSchema {
         let allowlist = schema_allowlist(profile_allowlist);
+        let profile_scoped = profile_allowlist.is_some();
         let table_token = self.token_for("TABLE", &schema.table, &allowlist);
         TableSchema {
             table: schema.table.clone(),
@@ -35,7 +36,11 @@ impl SchemaTokenizer {
                     name_token: self.token_for("COL", &column.name, &allowlist),
                     data_type: column.data_type.clone(),
                     nullable: column.nullable,
-                    allowed: allowlist.contains(&column.name) || column.allowed,
+                    allowed: if profile_scoped {
+                        allowlist.contains(&column.name) || is_default_allowed_name(&column.name)
+                    } else {
+                        column.allowed || allowlist.contains(&column.name)
+                    },
                 })
                 .collect(),
             limit_cap: schema.limit_cap,

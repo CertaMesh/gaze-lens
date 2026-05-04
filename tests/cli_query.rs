@@ -96,6 +96,82 @@ fn query_rejects_unknown_table() {
     assert!(!stderr(&output).contains("missing"));
 }
 
+#[test]
+fn query_omitted_columns_respects_schema_allowlist() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    seed_sqlite(&db);
+    write_profile(&project, &db);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "query",
+            "--profile",
+            "local",
+            "--manifest",
+            temp.path()
+                .join("manifest.sqlite")
+                .to_str()
+                .expect("manifest"),
+            "--snapshot-dir",
+            temp.path().join("snapshots").to_str().expect("snapshots"),
+            "--table",
+            "users",
+            "--limit",
+            "1",
+        ])
+        .output()
+        .expect("run query");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let rows = clean_rows(&stdout(&output));
+    let row = rows.first().expect("row").as_object().expect("row object");
+    assert!(row.contains_key("id"));
+    assert!(row.contains_key("email"));
+    assert!(!row.contains_key("name"));
+    assert!(!row.contains_key("password"));
+    assert!(!row.contains_key("remember_token"));
+}
+
+#[test]
+fn query_rejects_explicit_column_outside_schema_allowlist() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    seed_sqlite(&db);
+    write_profile(&project, &db);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "query",
+            "--profile",
+            "local",
+            "--manifest",
+            temp.path()
+                .join("manifest.sqlite")
+                .to_str()
+                .expect("manifest"),
+            "--snapshot-dir",
+            temp.path().join("snapshots").to_str().expect("snapshots"),
+            "--table",
+            "users",
+            "--column",
+            "password",
+        ])
+        .output()
+        .expect("run query");
+
+    assert!(!output.status.success(), "stdout: {}", stdout(&output));
+    assert!(stderr(&output).contains("SourceError: source failed"));
+}
+
 fn seed_sqlite(path: &std::path::Path) {
     let conn = Connection::open(path).expect("sqlite");
     conn.execute_batch(
@@ -103,11 +179,14 @@ fn seed_sqlite(path: &std::path::Path) {
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             email TEXT NOT NULL,
+            name TEXT NOT NULL,
+            password TEXT NOT NULL,
+            remember_token TEXT NOT NULL,
             nickname TEXT NULL,
             empty_text TEXT NOT NULL
         );
-        INSERT INTO users (email, nickname, empty_text)
-        VALUES ('alice@example.com', NULL, '');
+        INSERT INTO users (email, name, password, remember_token, nickname, empty_text)
+        VALUES ('alice@example.com', 'Alice Example', 'hash-secret', 'remember-secret', NULL, '');
         "#,
     )
     .expect("seed");
@@ -124,6 +203,21 @@ fn write_profile(path: &std::path::Path, db: &std::path::Path) {
         column = "email"
         class = "email"
         action = "tokenize"
+
+        [[policy.database.columns]]
+        column = "name"
+        class = "name"
+        action = "tokenize"
+
+        [[policy.database.columns]]
+        column = "password"
+        class = "secret"
+        action = "redact"
+
+        [[policy.database.columns]]
+        column = "remember_token"
+        class = "secret"
+        action = "redact"
         "#,
     )
     .expect("policy");
@@ -150,4 +244,12 @@ fn stdout(output: &std::process::Output) -> String {
 
 fn stderr(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn clean_rows(stdout: &str) -> Vec<serde_json::Value> {
+    let output: serde_json::Value = serde_json::from_str(stdout).expect("tool result json");
+    output["clean"]["Rows"]["rows"]
+        .as_array()
+        .expect("rows")
+        .clone()
 }

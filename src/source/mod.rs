@@ -82,7 +82,7 @@ impl Source for DbSourceWrapper {
     async fn dispatch(&self, call: &ToolCall) -> Result<SourceOutput, LensError> {
         match call.tool_name.as_str() {
             "query" => {
-                let query: CannedQuery =
+                let mut query: CannedQuery =
                     serde_json::from_value(call.args.0.clone()).map_err(|err| {
                         LensError::SourceError {
                             source_name: call.tool_name.clone(),
@@ -91,6 +91,28 @@ impl Source for DbSourceWrapper {
                             stderr: None,
                         }
                     })?;
+                let schema = self.inner.schema(&query.table).await?;
+                let policy_schema = self
+                    .schema_tokenizer
+                    .tokenize_table_schema(&schema, self.schema_allowlist.as_deref());
+                query
+                    .compile_to_sql(&policy_schema)
+                    .map_err(|err| LensError::SourceError {
+                        source_name: call.tool_name.clone(),
+                        detail: err.to_string(),
+                        sql: Some("<canned>".to_string()),
+                        stderr: None,
+                    })?;
+                if query.columns.as_ref().is_none_or(Vec::is_empty) {
+                    query.columns = Some(
+                        policy_schema
+                            .columns
+                            .iter()
+                            .filter(|column| column.allowed)
+                            .map(|column| column.name.clone())
+                            .collect(),
+                    );
+                }
                 self.inner.query(&query).await.map(SourceOutput::Rows)
             }
             "schema" => {
