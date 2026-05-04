@@ -7,7 +7,7 @@ Profiles are loaded from two TOML files:
 
 When both files define the same profile, the project file owns PII policy and schema policy, while the user file owns transport overrides. In practice:
 
-- Project wins for `policy`, `schema_allowlist`, database name, username, secret reference, and read-only requirement.
+- Project wins for `policy`, `schema_tokenize`, `schema_allowlist`, database name, username, secret reference, and read-only requirement.
 - User wins for host, port, SSH host, local forwarded port, and local SQLite path when supplied.
 
 This lets teams commit the PII policy while each operator keeps laptop-specific transport in their home directory.
@@ -18,9 +18,11 @@ Only `conversation` scope is supported in v0.1. `persistent` is reserved for v1.
 
 ## Schema Policy
 
-Schema names are presentation-sensitive metadata. `schema` and `list_tables` tokenize table and column names through the `schema_metadata` source class unless names are allowlisted.
+Schema names are operational metadata. `schema` and `list_tables` show raw table and column labels by default so agents can write useful canned queries.
 
-Query access is separate from presentation tokenization. Canned queries are compiled only against columns whose `ColumnInfo.allowed` value is true. A displayed token or allowlisted label does not grant query access by itself.
+Set `schema_tokenize = true` to hide sensitive schema names in `schema` and `list_tables` output. In tokenized mode, `schema_allowlist` keeps selected labels raw; without `schema_tokenize = true`, `schema_allowlist` has no presentation-tokenization effect and `check` warns about it.
+
+Query access is separate from presentation tokenization. Canned queries are compiled only against columns whose `ColumnInfo.allowed` value is true. A displayed raw label, token, or allowlisted label does not grant query access by itself.
 
 Example:
 
@@ -28,6 +30,7 @@ Example:
 [[profiles]]
 name = "prod"
 policy = "./gaze-policy.toml"
+schema_tokenize = true
 schema_allowlist = ["id", "created_at", "updated_at"]
 
 [profiles.source]
@@ -58,6 +61,7 @@ Keyring profiles store only the keyring locator in TOML:
 [[profiles]]
 name = "prod"
 policy = "./gaze-policy.toml"
+schema_tokenize = true
 schema_allowlist = ["id", "created_at", "updated_at"]
 
 [profiles.source]
