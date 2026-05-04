@@ -1438,6 +1438,7 @@ dependencies = [
 [[package]]
 name = "gaze"
 version = "0.6.4"
+source = "git+https://github.com/PIInuts/gaze.git?tag=v0.6.4#72610e51eddbbeaf5cafd3528eb458be68842e54"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1498,6 +1499,7 @@ dependencies = [
 [[package]]
 name = "gaze-recognizers"
 version = "0.6.4"
+source = "git+https://github.com/PIInuts/gaze.git?tag=v0.6.4#72610e51eddbbeaf5cafd3528eb458be68842e54"
 dependencies = [
  "aho-corasick",
  "gaze-types",
@@ -1518,6 +1520,7 @@ dependencies = [
 [[package]]
 name = "gaze-types"
 version = "0.6.4"
+source = "git+https://github.com/PIInuts/gaze.git?tag=v0.6.4#72610e51eddbbeaf5cafd3528eb458be68842e54"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
