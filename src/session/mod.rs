@@ -14,6 +14,7 @@ use gaze::{Action, ClassRule, CleanDocument, DefaultRule, RawDocument};
 use gaze_recognizers::RegexDetector;
 
 use crate::errors::LensError;
+use crate::policy::{ColumnAction, ColumnActionPolicy};
 use crate::source::db::TableSchema;
 use crate::source::db::schema::SchemaTokenizer;
 use crate::source::{FakeSource, FakeSourceAdapter, Source, SourceOutput, ToolArgs};
@@ -34,6 +35,7 @@ struct SessionInner {
     lens_session_id: ulid::Ulid,
     gaze_session: gaze::Session,
     pipeline_mode: Mutex<PipelineMode>,
+    column_action_mode: Mutex<ColumnActionMode>,
     manifest: Arc<dyn ManifestStore>,
     snapshot_dir: PathBuf,
     sources: Mutex<HashMap<(SourceClass, String), Arc<LazySource>>>,
@@ -48,6 +50,15 @@ pub(crate) enum PipelineMode {
         pipeline: Arc<gaze::Pipeline>,
     },
     MultiProfile(HashMap<String, Arc<gaze::Pipeline>>),
+}
+
+#[derive(Clone)]
+enum ColumnActionMode {
+    SingleProfile {
+        name: String,
+        policy: ColumnActionPolicy,
+    },
+    MultiProfile(HashMap<String, ColumnActionPolicy>),
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -223,12 +234,17 @@ impl Session {
             lens_session_id,
             gaze_session.audit_session_id(),
         )?;
+        let profile_name = profile_name.into();
         Ok(Self::from_parts(
             lens_session_id,
             gaze_session,
             PipelineMode::SingleProfile {
-                name: profile_name.into(),
+                name: profile_name.clone(),
                 pipeline: Arc::new(pipeline),
+            },
+            ColumnActionMode::SingleProfile {
+                name: profile_name,
+                policy: ColumnActionPolicy::default(),
             },
             Arc::new(manifest),
             snapshot_dir.to_path_buf(),
@@ -252,6 +268,7 @@ impl Session {
             lens_session_id,
             gaze_session,
             PipelineMode::MultiProfile(HashMap::new()),
+            ColumnActionMode::MultiProfile(HashMap::new()),
             Arc::new(manifest),
             snapshot_dir.to_path_buf(),
             OutputCaps::default(),
@@ -266,6 +283,7 @@ impl Session {
         lens_session_id: ulid::Ulid,
         gaze_session: gaze::Session,
         pipeline_mode: PipelineMode,
+        column_action_mode: ColumnActionMode,
         manifest: Arc<dyn ManifestStore>,
         snapshot_dir: PathBuf,
         caps: OutputCaps,
@@ -275,6 +293,7 @@ impl Session {
                 lens_session_id,
                 gaze_session,
                 pipeline_mode: Mutex::new(pipeline_mode),
+                column_action_mode: Mutex::new(column_action_mode),
                 manifest,
                 snapshot_dir,
                 sources: Mutex::new(HashMap::new()),
@@ -304,6 +323,7 @@ impl Session {
     pub async fn dispatch_tool(&self, mut call: ToolCall) -> Result<ToolResult, LensError> {
         let profile_name = self.extract_profile(&mut call)?;
         let pipeline = self.pipeline_for(&profile_name)?;
+        let column_actions = self.column_actions_for(&profile_name)?;
         let redacted_args = self.redact_args(&call.args, &pipeline)?;
         self.inner.manifest.begin_call(&call, &redacted_args)?;
 
@@ -323,7 +343,7 @@ impl Session {
             }
         };
         let clean = match tokio::time::timeout(self.inner.caps.timeout, async {
-            self.redact_result(raw_result, &pipeline)
+            self.redact_result(raw_result, &pipeline, &column_actions)
         })
         .await
         {
@@ -407,6 +427,37 @@ impl Session {
             }),
             PipelineMode::MultiProfile(pipelines) => {
                 pipelines.insert(profile_name.into(), pipeline);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn register_column_action_policy(
+        &self,
+        profile_name: impl Into<String>,
+        policy: ColumnActionPolicy,
+    ) -> Result<(), LensError> {
+        let profile_name = profile_name.into();
+        let mut mode = self
+            .inner
+            .column_action_mode
+            .lock()
+            .expect("column action mode lock");
+        match &mut *mode {
+            ColumnActionMode::SingleProfile {
+                name,
+                policy: target,
+            } => {
+                if *name != profile_name {
+                    return Err(LensError::Internal {
+                        detail: "cannot register different profile column policy on single-profile session".to_string(),
+                    });
+                }
+                *target = policy;
+                Ok(())
+            }
+            ColumnActionMode::MultiProfile(policies) => {
+                policies.insert(profile_name, policy);
                 Ok(())
             }
         }
@@ -522,6 +573,28 @@ impl Session {
         }
     }
 
+    fn column_actions_for(&self, profile: &str) -> Result<ColumnActionPolicy, LensError> {
+        let mode = self
+            .inner
+            .column_action_mode
+            .lock()
+            .expect("column action mode lock");
+        match &*mode {
+            ColumnActionMode::SingleProfile { name, policy } if name == profile => {
+                Ok(policy.clone())
+            }
+            ColumnActionMode::SingleProfile { name, .. } => Err(LensError::ProfileMismatch {
+                profile: profile.to_string(),
+                tool: "unknown".to_string(),
+                required: name.clone(),
+                actual: "different".to_string(),
+            }),
+            ColumnActionMode::MultiProfile(policies) => {
+                Ok(policies.get(profile).cloned().unwrap_or_default())
+            }
+        }
+    }
+
     fn redact_args(
         &self,
         args: &ToolArgs,
@@ -612,9 +685,10 @@ impl Session {
         &self,
         output: SourceOutput,
         pipeline: &gaze::Pipeline,
+        column_actions: &ColumnActionPolicy,
     ) -> Result<CleanOutput, LensError> {
         match output {
-            SourceOutput::Rows(rows) => self.redact_rows(rows, pipeline),
+            SourceOutput::Rows(rows) => self.redact_rows(rows, pipeline, column_actions),
             SourceOutput::Text(text) => self.redact_text_output(text, Vec::new(), pipeline),
             SourceOutput::TextWithTruncation { text, truncated_at } => {
                 self.redact_text_output(text, truncated_at, pipeline)
@@ -626,6 +700,7 @@ impl Session {
         &self,
         rows: Vec<LensRow>,
         pipeline: &gaze::Pipeline,
+        column_actions: &ColumnActionPolicy,
     ) -> Result<CleanOutput, LensError> {
         let mut truncated_at = Vec::new();
         if rows.len() > self.inner.caps.rows {
@@ -637,7 +712,15 @@ impl Session {
             let mut raw_fields = std::collections::BTreeMap::new();
             let mut redacted_row = row;
             for (key, value) in &mut redacted_row {
-                value.redact_with(&self.inner.gaze_session, pipeline)?;
+                if let Some(column_action) = column_actions.action_for(key) {
+                    apply_column_action(value, &self.inner.gaze_session, column_action)?;
+                }
+                if !matches!(
+                    value,
+                    LensValue::String(_) | LensValue::Json(serde_json::Value::String(_))
+                ) {
+                    value.redact_with(&self.inner.gaze_session, pipeline)?;
+                }
                 if let Some(lowered) = value.lower_for_redaction()? {
                     raw_fields.insert(key.clone(), lowered);
                 }
@@ -760,6 +843,10 @@ impl Session {
                 name: "test".to_string(),
                 pipeline: Arc::new(default_pipeline()?),
             },
+            ColumnActionMode::SingleProfile {
+                name: "test".to_string(),
+                policy: ColumnActionPolicy::default(),
+            },
             manifest,
             snapshot_dir.to_path_buf(),
             caps,
@@ -833,6 +920,81 @@ fn lens_value_to_json(value: LensValue) -> Result<serde_json::Value, LensError> 
                 detail: err.to_string(),
             })
         }),
+    }
+}
+
+fn apply_column_action(
+    value: &mut LensValue,
+    gaze_session: &gaze::Session,
+    column_action: &ColumnAction,
+) -> Result<(), LensError> {
+    match value {
+        LensValue::String(text) => {
+            *text = apply_action_to_text(text, gaze_session, column_action)?;
+        }
+        LensValue::Json(json) => {
+            apply_column_action_to_json(json, gaze_session, column_action)?;
+        }
+        _ => {
+            value.lower_for_redaction()?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_column_action_to_json(
+    value: &mut serde_json::Value,
+    gaze_session: &gaze::Session,
+    column_action: &ColumnAction,
+) -> Result<(), LensError> {
+    match value {
+        serde_json::Value::String(text) => {
+            *text = apply_action_to_text(text, gaze_session, column_action)?;
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                apply_column_action_to_json(value, gaze_session, column_action)?;
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values_mut() {
+                apply_column_action_to_json(value, gaze_session, column_action)?;
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
+    Ok(())
+}
+
+fn apply_action_to_text(
+    text: &str,
+    gaze_session: &gaze::Session,
+    column_action: &ColumnAction,
+) -> Result<String, LensError> {
+    Ok(match column_action.action {
+        Action::Tokenize => gaze_session
+            .tokenize(&column_action.class, text)
+            .map_err(|err| LensError::RedactionFailed {
+                detail: err.to_string(),
+            })?,
+        Action::Redact => "[REDACTED]".to_string(),
+        Action::FormatPreserve => gaze_session
+            .format_preserving_fake(&column_action.class, text)
+            .map_err(|err| LensError::RedactionFailed {
+                detail: err.to_string(),
+            })?,
+        Action::Generalize => generalize_column_value(&column_action.class),
+        Action::Preserve => text.to_string(),
+    })
+}
+
+fn generalize_column_value(class: &gaze::PiiClass) -> String {
+    match class {
+        gaze::PiiClass::Email => "[EMAIL]".to_string(),
+        gaze::PiiClass::Name => "[NAME]".to_string(),
+        gaze::PiiClass::Location => "[LOCATION]".to_string(),
+        gaze::PiiClass::Organization => "[ORGANIZATION]".to_string(),
+        gaze::PiiClass::Custom(name) => format!("[{}]", name.to_ascii_uppercase()),
     }
 }
 

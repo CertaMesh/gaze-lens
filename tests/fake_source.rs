@@ -124,13 +124,22 @@ impl DbSource for RecordingDbSource {
         Ok(TableSchema {
             table: table.to_string(),
             table_token: table.to_string(),
-            columns: vec![ColumnInfo {
-                name: "email_address".to_string(),
-                name_token: "email_address".to_string(),
-                data_type: "varchar".to_string(),
-                nullable: false,
-                allowed: true,
-            }],
+            columns: vec![
+                ColumnInfo {
+                    name: "email".to_string(),
+                    name_token: "email".to_string(),
+                    data_type: "varchar".to_string(),
+                    nullable: false,
+                    allowed: true,
+                },
+                ColumnInfo {
+                    name: "email_address".to_string(),
+                    name_token: "email_address".to_string(),
+                    data_type: "varchar".to_string(),
+                    nullable: false,
+                    allowed: true,
+                },
+            ],
             limit_cap: Some(10),
         })
     }
