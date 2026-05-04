@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.2] — TBD
+## [0.2.2] — 2026-05-04
 
 ### Added
 - `init` writes a guided setup flow that emits per-agent MCP snippets and an
