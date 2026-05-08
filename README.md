@@ -111,12 +111,12 @@ The agent sees five tools and nothing else:
 | Tool | Purpose |
 |---|---|
 | `query` | Run a canned structured DB query (no raw SQL accepted). |
-| `schema` | Describe one table schema. |
-| `list_tables` | List table names. |
+| `schema` | Describe one raw configured table schema. |
+| `list_tables` | List table names, raw by default. |
 | `log_tail` | Tail a configured SSH log source. |
 | `log_grep` | Search a configured SSH log source. |
 
-Every tool result routes through `Session::dispatch_tool` before it leaves the process. Tool args are tokenized through the Gaze path before the manifest is written, so the manifest never stores raw arguments. Schema/list output shows raw table and column names by default; set `schema_tokenize = true` in the profile when schema names themselves are sensitive.
+Every tool result routes through `Session::dispatch_tool` before it leaves the process. Tool args are tokenized through the Gaze path before the manifest is written, so the manifest never stores raw arguments. Schema/list output shows raw table and column names by default; set `schema_tokenize = true` in the profile when schema names themselves are sensitive. In tokenized mode, `schema_allowlist` is presentation-only: it keeps selected labels raw but does not grant query access, and canned queries still use raw configured table and column names. Restart or reload the MCP server after profile edits.
 
 ## Threat model — short version
 

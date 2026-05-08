@@ -12,6 +12,7 @@ use gaze_lens::frontend::mcp::McpFrontend;
 use gaze_lens::frontend::{Frontend, FrontendError, ShutdownToken};
 use gaze_lens::session::Session;
 use rmcp::model::ErrorCode;
+use rusqlite::Connection;
 
 struct ShutdownObservingFrontend {
     observed: Arc<AtomicBool>,
@@ -270,6 +271,82 @@ fn test_serve_without_restrict_list_exposes_all_profiles() {
     assert_eq!(prepared.loaded_profiles, vec!["dev", "prod", "staging"]);
 }
 
+#[tokio::test]
+async fn test_serve_profile_reload_applies_schema_allowlist_presentation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project_config = temp.path().join("profiles.toml");
+    let user_config = temp.path().join("user.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_schema_db(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    std::fs::write(&user_config, "").expect("user profile");
+
+    write_schema_profile(&project_config, &policy, &db, false);
+    let raw_prepared = prepare_session_for_test(
+        serve_args(&temp, &[]),
+        Some(&project_config),
+        Some(&user_config),
+    )
+    .expect("raw prepared");
+    let raw_frontend = McpFrontend::with_session(raw_prepared.session);
+    let raw_list = raw_frontend
+        .call_tool_json("list_tables", serde_json::json!({"profile": "local"}))
+        .await
+        .expect("raw list_tables");
+    assert_eq!(
+        clean_text(&raw_list),
+        "[\"customer_pii\",\"orders_sensitive\"]"
+    );
+
+    write_schema_profile(&project_config, &policy, &db, true);
+    let tokenized_prepared = prepare_session_for_test(
+        serve_args(&temp, &[]),
+        Some(&project_config),
+        Some(&user_config),
+    )
+    .expect("tokenized prepared");
+    let tokenized_frontend = McpFrontend::with_session(tokenized_prepared.session);
+
+    let list = tokenized_frontend
+        .call_tool_json("list_tables", serde_json::json!({"profile": "local"}))
+        .await
+        .expect("tokenized list_tables");
+    assert_eq!(clean_text(&list), "[\"customer_pii\",\"<TABLE_001>\"]");
+
+    let schema = tokenized_frontend
+        .call_tool_json(
+            "schema",
+            serde_json::json!({"profile": "local", "table": "customer_pii"}),
+        )
+        .await
+        .expect("tokenized schema");
+    let schema_text = clean_text(&schema);
+    assert!(
+        schema_text.contains("\"table_token\":\"customer_pii\""),
+        "{schema_text}"
+    );
+    assert!(
+        schema_text.contains("\"name_token\":\"id\""),
+        "{schema_text}"
+    );
+    assert!(schema_text.contains("<COL_"), "{schema_text}");
+    assert!(!schema_text.contains("email_address"), "{schema_text}");
+
+    tokenized_frontend
+        .call_tool_json(
+            "query",
+            serde_json::json!({
+                "profile": "local",
+                "table": "customer_pii",
+                "columns": ["email_address"],
+                "limit": 1
+            }),
+        )
+        .await
+        .expect("query still uses raw configured names");
+}
+
 fn policy() -> gaze::Policy {
     gaze::Policy {
         session: gaze::SessionPolicy {
@@ -310,6 +387,55 @@ fn write_profiles(path: &std::path::Path, profiles: &[(&str, &std::path::Path)])
         ));
     }
     std::fs::write(path, toml).expect("profiles");
+}
+
+fn write_schema_profile(
+    path: &std::path::Path,
+    policy: &std::path::Path,
+    db: &std::path::Path,
+    tokenize: bool,
+) {
+    std::fs::write(
+        path,
+        format!(
+            r#"
+            [[profiles]]
+            name = "local"
+            policy = "{}"
+            schema_tokenize = {tokenize}
+            schema_allowlist = ["customer_pii", "id"]
+            source = {{ kind = "sqlite", path = "{}", readonly_required = true }}
+            "#,
+            policy.display(),
+            db.display()
+        ),
+    )
+    .expect("schema profile");
+}
+
+fn seed_schema_db(path: &std::path::Path) {
+    let conn = Connection::open(path).expect("sqlite");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE customer_pii (
+            id INTEGER PRIMARY KEY,
+            email_address TEXT
+        );
+        INSERT INTO customer_pii (email_address) VALUES ('alice@example.com');
+        CREATE TABLE orders_sensitive (
+            id INTEGER PRIMARY KEY,
+            internal_note TEXT
+        );
+        "#,
+    )
+    .expect("seed schema db");
+}
+
+fn clean_text(result: &serde_json::Value) -> &str {
+    result["clean"]["Text"]["text"]
+        .as_str()
+        .or_else(|| result["clean"]["text"].as_str())
+        .expect("clean text")
 }
 
 fn query_args(profile: &str) -> serde_json::Value {

@@ -20,9 +20,9 @@ Only `conversation` scope is supported in v0.1. `persistent` is reserved for v1.
 
 Schema names are operational metadata. `schema` and `list_tables` show raw table and column labels by default so agents can write useful canned queries.
 
-Set `schema_tokenize = true` to hide sensitive schema names in `schema` and `list_tables` output. In tokenized mode, `schema_allowlist` keeps selected labels raw; without `schema_tokenize = true`, `schema_allowlist` has no presentation-tokenization effect and `check` warns about it.
+Set `schema_tokenize = true` to hide sensitive schema names in `schema` and `list_tables` output. In tokenized mode, `schema_allowlist` keeps selected table or column labels raw; without `schema_tokenize = true`, `schema_allowlist` has no presentation-tokenization effect and `check` warns about it. After editing a profile, restart or reload the MCP server so the lazy source is rebuilt with the new schema presentation policy.
 
-Query access is separate from presentation tokenization. Canned queries are compiled only against columns whose `ColumnInfo.allowed` value is true. A displayed raw label, token, or allowlisted label does not grant query access by itself.
+Query access is separate from presentation tokenization. Canned queries still use raw configured table and column names, and are compiled only against columns whose `ColumnInfo.allowed` value is true. A displayed raw label, token, or allowlisted label does not grant query access by itself.
 
 Example:
 

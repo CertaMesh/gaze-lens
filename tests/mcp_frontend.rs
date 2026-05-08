@@ -79,6 +79,55 @@ fn test_every_tool_requires_profile() {
     }
 }
 
+#[test]
+fn test_schema_tool_descriptions_explain_tokenized_presentation() {
+    let frontend = McpFrontend::new();
+    let tools = frontend.list_all_tools();
+    let schema = tools
+        .iter()
+        .find(|tool| tool.name == "schema")
+        .expect("schema tool");
+    let list_tables = tools
+        .iter()
+        .find(|tool| tool.name == "list_tables")
+        .expect("list_tables tool");
+    let schema_description = schema.description.as_deref().expect("schema description");
+    let list_description = list_tables
+        .description
+        .as_deref()
+        .expect("list_tables description");
+
+    for description in [schema_description, list_description] {
+        assert!(
+            description.contains("schema_tokenize = true"),
+            "{description}"
+        );
+        assert!(
+            description.contains("schema_allowlist only keeps selected"),
+            "{description}"
+        );
+        assert!(description.contains("presentation"), "{description}");
+        assert!(
+            description.contains("restarting/reloading the MCP server"),
+            "{description}"
+        );
+    }
+
+    let schema_properties = schema
+        .input_schema
+        .as_ref()
+        .get("properties")
+        .and_then(|value| value.as_object())
+        .expect("schema properties");
+    let table_description = schema_properties["table"]["description"]
+        .as_str()
+        .expect("table description");
+    assert!(
+        table_description.contains("raw table names"),
+        "{table_description}"
+    );
+}
+
 #[tokio::test]
 async fn test_log_tail_and_grep_dispatch_through_source() {
     let manifest = Arc::new(RecordingManifest::default());

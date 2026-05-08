@@ -162,6 +162,35 @@ async fn db_source_wrapper_tokenizes_schema_metadata_when_enabled() {
 }
 
 #[tokio::test]
+async fn db_source_wrapper_keeps_allowlisted_schema_metadata_raw_when_tokenized() {
+    let source = DbSourceWrapper::with_schema_presentation(
+        Arc::new(RecordingDbSource),
+        SchemaPresentation::Tokenized {
+            allowlist: Some(vec!["users".to_string(), "email_address".to_string()]),
+        },
+    );
+    let output = source
+        .dispatch(&ToolCall {
+            call_id: "call-1".to_string(),
+            tool_name: "schema".to_string(),
+            args: ToolArgs(serde_json::json!({"table": "users"})),
+        })
+        .await
+        .expect("dispatch");
+
+    match output {
+        SourceOutput::SchemaText(text) => {
+            assert!(text.contains("\"table_token\":\"users\""), "{text}");
+            assert!(text.contains("\"name_token\":\"email_address\""), "{text}");
+            assert!(!text.contains("<TABLE_"), "{text}");
+        }
+        SourceOutput::Rows(_) | SourceOutput::Text(_) | SourceOutput::TextWithTruncation { .. } => {
+            panic!("expected schema text")
+        }
+    }
+}
+
+#[tokio::test]
 async fn db_source_wrapper_tokenizes_list_tables_when_enabled() {
     let source = DbSourceWrapper::with_schema_presentation(
         Arc::new(RecordingDbSource),
@@ -180,6 +209,33 @@ async fn db_source_wrapper_tokenizes_list_tables_when_enabled() {
     match output {
         SourceOutput::SchemaText(text) => {
             assert_eq!(text, "[\"<TABLE_001>\"]");
+        }
+        SourceOutput::Rows(_) | SourceOutput::Text(_) | SourceOutput::TextWithTruncation { .. } => {
+            panic!("expected schema text")
+        }
+    }
+}
+
+#[tokio::test]
+async fn db_source_wrapper_keeps_allowlisted_table_names_raw_when_tokenized() {
+    let source = DbSourceWrapper::with_schema_presentation(
+        Arc::new(RecordingDbSource),
+        SchemaPresentation::Tokenized {
+            allowlist: Some(vec!["users".to_string()]),
+        },
+    );
+    let output = source
+        .dispatch(&ToolCall {
+            call_id: "call-1".to_string(),
+            tool_name: "list_tables".to_string(),
+            args: ToolArgs(serde_json::json!({})),
+        })
+        .await
+        .expect("dispatch");
+
+    match output {
+        SourceOutput::SchemaText(text) => {
+            assert_eq!(text, "[\"users\"]");
         }
         SourceOutput::Rows(_) | SourceOutput::Text(_) | SourceOutput::TextWithTruncation { .. } => {
             panic!("expected schema text")
