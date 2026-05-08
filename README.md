@@ -67,7 +67,7 @@ gaze-lens query --profile prod --table users --limit 5
 gaze-lens replay <session_ulid>
 ```
 
-`init` is the preferred setup path. It prompts for source kind (`mysql`, `postgres`, `sqlite`, or `ssh-log`), connection details, where to write the profile, which MCP client to configure, and whether to append an AGENTS.md primer. For Laravel-style SSH targets, it can inspect an explicit remote `.env` path and guide you toward a read-only credential instead of copying production app secrets blindly.
+`init` is the preferred setup path. It prompts for source kind (`mysql`, `postgres`, `sqlite`, or `ssh-log`), connection details, where to write the profile, optional Claude Code `.mcp.json` setup, and whether to append an AGENTS.md primer. Codex and Cursor MCP config files are written only when supplied explicitly with repeatable `--client codex` or `--client cursor` flags. For Laravel-style SSH targets, it can inspect an explicit remote `.env` path and guide you toward a read-only credential instead of copying production app secrets blindly.
 
 By default, interactive init can write:
 
