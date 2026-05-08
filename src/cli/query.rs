@@ -1,5 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
+use std::{io, io::IsTerminal, io::Write};
 
 use clap::{Args, ValueEnum};
 
@@ -88,6 +92,7 @@ pub async fn run(
         order_by: parse_order_by(args.order_by_json)?,
         limit: args.limit,
     };
+    let _status = QueryStatus::start();
     let session = build_db_session(
         &args.profile,
         project_config,
@@ -95,7 +100,8 @@ pub async fn run(
         &args.manifest,
         &args.snapshot_dir,
     )
-    .await?;
+    .await
+    .map_err(|err| annotate_source_error(&args.profile, err))?;
     let result = session
         .dispatch_tool(ToolCall {
             call_id: ulid::Ulid::new().to_string(),
@@ -106,9 +112,71 @@ pub async fn run(
                 })?,
             ),
         })
-        .await?;
+        .await
+        .map_err(|err| annotate_source_error(&args.profile, err))?;
     print_tool_result(&result, args.format)?;
     Ok(())
+}
+
+fn annotate_source_error(profile: &str, err: LensError) -> LensError {
+    if matches!(err, LensError::SourceError { .. }) {
+        eprintln!(
+            "source failed while connecting/querying profile `{profile}`. If the database host is private, configure source ssh_host/local_port or rerun `gaze-lens init` with tunnel settings."
+        );
+    }
+    err
+}
+
+struct QueryStatus {
+    done: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl QueryStatus {
+    fn start() -> Self {
+        if !io::stderr().is_terminal() {
+            let _ = writeln!(io::stderr(), "Running query...");
+            return Self {
+                done: Arc::new(AtomicBool::new(true)),
+                handle: None,
+            };
+        }
+
+        let done = Arc::new(AtomicBool::new(false));
+        let thread_done = Arc::clone(&done);
+        let handle = thread::spawn(move || {
+            let frames = ["|", "/", "-", "\\"];
+            let mut stderr = io::stderr();
+            let mut index = 0;
+            while !thread_done.load(Ordering::Relaxed) {
+                let _ = write!(
+                    stderr,
+                    "\rRunning query... {}",
+                    frames[index % frames.len()]
+                );
+                let _ = stderr.flush();
+                index += 1;
+                thread::sleep(Duration::from_millis(120));
+            }
+        });
+
+        Self {
+            done,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for QueryStatus {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+            let mut stderr = io::stderr();
+            let _ = write!(stderr, "\r\x1b[2K");
+            let _ = stderr.flush();
+        }
+    }
 }
 
 pub(crate) async fn build_db_session(

@@ -121,7 +121,10 @@ async fn run_with_writer(
         }
     }
 
-    validate_source(&profile).await?;
+    if let Err(err) = validate_source(&profile).await {
+        render_source_error(stderr, &profile.name, &err)?;
+        return Err(err);
+    }
     writeln!(out, "source: ok").map_err(write_error)?;
 
     let _pipeline = validated_policy.pipeline;
@@ -188,6 +191,21 @@ fn render_secret_error(out: &mut dyn Write, err: &LensError) -> Result<(), LensE
         _ => writeln!(out, "secret: ERROR"),
     }
     .map_err(write_error)
+}
+
+fn render_source_error(
+    stderr: &mut dyn Write,
+    profile_name: &str,
+    err: &LensError,
+) -> Result<(), LensError> {
+    if matches!(err, LensError::SourceError { .. }) {
+        writeln!(
+            stderr,
+            "source failed while connecting/querying profile `{profile_name}`. If the database host is private, configure source ssh_host/local_port or rerun `gaze-lens init` with tunnel settings."
+        )
+        .map_err(write_error)?;
+    }
+    Ok(())
 }
 
 struct ValidatedPolicy {
