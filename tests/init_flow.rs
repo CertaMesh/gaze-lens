@@ -97,6 +97,27 @@ fn project_auto_purge_in_non_interactive_mode_yields_purge_without_prompting() {
 }
 
 #[test]
+fn profile_scope_prompt_explains_each_scope_impact() {
+    let env = InitEnv::test_with_home("/tmp/fake-home", "/tmp/fake-cwd", None, None);
+    let mut args = InitArgs::default_for_test();
+    args.profile = Some("p".into());
+    args.source_kind = Some(SourceKind::Sqlite);
+    args.source_path = Some("/tmp/x.db".into());
+    args.no_mcp_config = true;
+    args.no_agents_md = true;
+    let mut p = FakePrompter::new().with_select(0);
+    let _plan = run_guided(&args, &mut p, &env).expect("plan");
+    let choices = p.last_select_choices.expect("scope choices");
+    let joined = choices.join("\n");
+    assert!(joined.contains("user - local-only config in ~/.gaze-lens/profiles.toml"));
+    assert!(joined.contains("not committed to repo"));
+    assert!(joined.contains("project - shared project config in .gaze-lens.toml"));
+    assert!(joined.contains("secrets still come from env/keyring"));
+    assert!(joined.contains("project-auto-purge - same as project"));
+    assert!(joined.contains("automatic deletion of old raw replay snapshot files"));
+}
+
+#[test]
 fn ssh_log_non_interactive_renders_host_and_path() {
     let env = InitEnv::test_with_home("/tmp/fake-home", "/tmp/fake-cwd", None, None);
     let mut args = InitArgs::default_for_test();

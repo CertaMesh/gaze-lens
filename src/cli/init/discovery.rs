@@ -56,9 +56,9 @@ pub enum DiscoveryPath {
 }
 
 pub const DISCOVERY_PATH_CHOICES: &[&str] = &[
-    "Host + database only; enter a separate readonly credential",
-    "Store discovered production credential as-is",
-    "Abort discovery",
+    "Use separate read-only credential - keep discovered host/database, then enter readonly DB username/password; recommended for least-privilege agent access",
+    "Store discovered production credential as-is - save DB username/password found in remote .env; fast but usually too broad",
+    "Abort - stop discovery without writing config",
 ];
 
 pub fn parse_env(input: &str) -> Result<Vec<EnvVar>, LensError> {

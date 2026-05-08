@@ -7,9 +7,10 @@
 //! via `.allow_defaults()`.
 //!
 //! `last_prompt` records the most recent prompt message issued via any of the
-//! four prompter methods. It is `#[doc(hidden)] pub` (NOT `#[cfg(test)]`-gated)
-//! because integration tests under `tests/*.rs` link the lib without `cfg(test)`
-//! and therefore cannot reach `cfg(test)`-only symbols. Same exposure recipe as
+//! four prompter methods. `last_select_choices` records the most recent select
+//! list. They are `#[doc(hidden)] pub` (NOT `#[cfg(test)]`-gated) because
+//! integration tests under `tests/*.rs` link the lib without `cfg(test)` and
+//! therefore cannot reach `cfg(test)`-only symbols. Same exposure recipe as
 //! `InitArgs::default_for_test`.
 
 use std::collections::VecDeque;
@@ -110,6 +111,9 @@ pub struct FakePrompter {
     /// to assert prompt-template substrings.
     #[doc(hidden)]
     pub last_prompt: Option<String>,
+    /// `#[doc(hidden)] pub` for the same reason as `last_prompt`.
+    #[doc(hidden)]
+    pub last_select_choices: Option<Vec<String>>,
 }
 
 impl FakePrompter {
@@ -180,8 +184,9 @@ impl Prompter for FakePrompter {
         Err(PromptError::ScriptExhausted { kind: "confirm" })
     }
 
-    fn select(&mut self, msg: &str, _choices: &[&str]) -> Result<usize, PromptError> {
+    fn select(&mut self, msg: &str, choices: &[&str]) -> Result<usize, PromptError> {
         self.record(msg);
+        self.last_select_choices = Some(choices.iter().map(|choice| choice.to_string()).collect());
         self.selects
             .pop_front()
             .ok_or(PromptError::ScriptExhausted { kind: "select" })
