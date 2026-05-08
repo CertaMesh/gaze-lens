@@ -102,7 +102,11 @@ pub fn resolve_profile_path(scope: InitScope, env: &InitEnv) -> PathBuf {
 }
 
 const SOURCE_KINDS: &[&str] = &["mysql", "postgres", "sqlite", "ssh-log"];
-const SCOPES: &[&str] = &["user", "project", "project-auto-purge"];
+const SCOPES: &[&str] = &[
+    "user - local-only config in ~/.gaze-lens/profiles.toml; good for personal experiments or machine-specific access; not committed to repo",
+    "project - shared project config in .gaze-lens.toml; good for team policy/profile defaults; secrets still come from env/keyring",
+    "project-auto-purge - same as project, plus automatic deletion of old raw replay snapshot files after the retention window",
+];
 
 pub fn run_guided<P: Prompter>(
     args: &InitArgs,
@@ -174,7 +178,7 @@ pub fn run_guided<P: Prompter>(
         None => {
             require_interactive(args)?;
             let i = p
-                .select("Where to write the profile?", SCOPES)
+                .select("Where to write the profile? Choose profile scope:", SCOPES)
                 .map_err(prompt_to_lens)?;
             scope_from_index(i)
         }
