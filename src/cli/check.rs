@@ -62,7 +62,7 @@ async fn run_with_writer(
             json_mode,
             out,
             stderr,
-            "warning: schema_allowlist has no presentation-tokenization effect in raw schema mode; set schema_tokenize = true to use it for schema/list_tables presentation",
+            "warning: schema_allowlist has no presentation-tokenization effect in raw schema mode; set schema_tokenize = true to use it for schema/list_tables presentation, then restart/reload the MCP server",
         )?;
     }
 

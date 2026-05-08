@@ -31,6 +31,9 @@ pub struct SchemaArgs {
         regex(pattern = r"^[a-z0-9][a-z0-9_-]{0,63}$")
     )]
     pub profile: String,
+    #[schemars(
+        description = "Raw configured table name to inspect. Even when schema_tokenize = true changes presentation output, requests still use raw table names from the profile policy."
+    )]
     pub table: String,
 }
 
@@ -123,7 +126,10 @@ impl McpFrontend {
             .await
     }
 
-    #[tool(name = "schema", description = "Describe one table schema.")]
+    #[tool(
+        name = "schema",
+        description = "Describe one raw configured table schema. Table/column labels are raw by default; schema_tokenize = true tokenizes presentation output, schema_allowlist only keeps selected labels raw for presentation, and profile edits require restarting/reloading the MCP server."
+    )]
     async fn schema(
         &self,
         Parameters(args): Parameters<SchemaArgs>,
@@ -132,7 +138,10 @@ impl McpFrontend {
             .await
     }
 
-    #[tool(name = "list_tables", description = "List table names.")]
+    #[tool(
+        name = "list_tables",
+        description = "List table names. Names are raw by default; schema_tokenize = true tokenizes presentation output, schema_allowlist only keeps selected names raw for presentation, and profile edits require restarting/reloading the MCP server."
+    )]
     async fn list_tables(
         &self,
         Parameters(args): Parameters<ListTablesArgs>,
