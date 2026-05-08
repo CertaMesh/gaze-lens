@@ -100,7 +100,7 @@ readonly_required = true
             snapshot_dir: temp.path().join("snapshots"),
         },
         Some(&project_config),
-        None,
+        Some(&empty_user_config(&temp)),
     )
     .await
     .expect_err("stdio frontend exits in test harness");
@@ -143,7 +143,11 @@ fn test_serve_rejects_malformed_policy_file_at_startup() {
     std::fs::write(&policy, "not valid toml =").expect("policy");
     write_profiles(&project_config, &[("dev", &policy)]);
 
-    let err = match prepare_session_for_test(serve_args(&temp, &[]), Some(&project_config), None) {
+    let err = match prepare_session_for_test(
+        serve_args(&temp, &[]),
+        Some(&project_config),
+        Some(&empty_user_config(&temp)),
+    ) {
         Ok(_) => panic!("malformed policy must fail startup"),
         Err(err) => err,
     };
@@ -167,7 +171,11 @@ fn test_serve_rejects_malformed_profile_toml_with_position() {
     )
     .expect("profile");
 
-    let err = match prepare_session_for_test(serve_args(&temp, &[]), Some(&project_config), None) {
+    let err = match prepare_session_for_test(
+        serve_args(&temp, &[]),
+        Some(&project_config),
+        Some(&empty_user_config(&temp)),
+    ) {
         Ok(_) => panic!("malformed profile TOML must fail startup"),
         Err(err) => err,
     };
@@ -191,7 +199,11 @@ fn test_serve_rejects_invalid_configured_profile_names() {
     )
     .expect("profile");
 
-    let err = match prepare_session_for_test(serve_args(&temp, &[]), Some(&project_config), None) {
+    let err = match prepare_session_for_test(
+        serve_args(&temp, &[]),
+        Some(&project_config),
+        Some(&empty_user_config(&temp)),
+    ) {
         Ok(_) => panic!("invalid configured name must fail startup"),
         Err(err) => err,
     };
@@ -217,9 +229,12 @@ async fn test_serve_restrict_list_single_profile_exposes_only_that_profile() {
     std::fs::write(&policy, "[policy.database]\n").expect("policy");
     write_profiles(&project_config, &[("dev", &policy), ("prod", &policy)]);
 
-    let prepared =
-        prepare_session_for_test(serve_args(&temp, &["dev"]), Some(&project_config), None)
-            .expect("prepared");
+    let prepared = prepare_session_for_test(
+        serve_args(&temp, &["dev"]),
+        Some(&project_config),
+        Some(&empty_user_config(&temp)),
+    )
+    .expect("prepared");
     assert_eq!(prepared.loaded_profiles, vec!["dev"]);
 
     let err = McpFrontend::with_session(prepared.session)
@@ -244,7 +259,7 @@ fn test_serve_restrict_list_multiple_profiles_exposes_both() {
     let prepared = prepare_session_for_test(
         serve_args(&temp, &["prod", "staging"]),
         Some(&project_config),
-        None,
+        Some(&empty_user_config(&temp)),
     )
     .expect("prepared");
     assert_eq!(prepared.loaded_profiles, vec!["prod", "staging"]);
@@ -260,12 +275,10 @@ fn test_serve_without_restrict_list_exposes_all_profiles() {
         &project_config,
         &[("dev", &policy), ("prod", &policy), ("staging", &policy)],
     );
-    let user_config = temp.path().join("user.toml");
-
     let prepared = prepare_session_for_test(
         serve_args(&temp, &[]),
         Some(&project_config),
-        Some(&user_config),
+        Some(&empty_user_config(&temp)),
     )
     .expect("prepared");
     assert_eq!(prepared.loaded_profiles, vec!["dev", "prod", "staging"]);
@@ -371,6 +384,12 @@ fn serve_args(temp: &tempfile::TempDir, profiles: &[&str]) -> ServeArgs {
         manifest: temp.path().join("manifest.sqlite"),
         snapshot_dir: temp.path().join("snapshots"),
     }
+}
+
+fn empty_user_config(temp: &tempfile::TempDir) -> std::path::PathBuf {
+    let path = temp.path().join("user.toml");
+    std::fs::write(&path, "").expect("empty user profile config");
+    path
 }
 
 fn write_profiles(path: &std::path::Path, profiles: &[(&str, &std::path::Path)]) {
