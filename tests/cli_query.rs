@@ -46,8 +46,16 @@ fn query_routes_through_session_and_preserves_null_vs_empty() {
     let stdout = stdout(&output);
     assert!(!stdout.contains("alice@example.com"));
     assert!(stdout.contains("Email_1"));
-    assert!(stdout.contains("\"nickname\":\"Null\""));
-    assert!(stdout.contains("\"empty_text\":\"\""));
+    let rows = clean_rows(&stdout);
+    let row = rows.first().expect("row").as_object().expect("row object");
+    assert_eq!(
+        row.get("nickname"),
+        Some(&serde_json::Value::String("Null".to_string()))
+    );
+    assert_eq!(
+        row.get("empty_text"),
+        Some(&serde_json::Value::String(String::new()))
+    );
     assert!(manifest.exists());
     assert!(snapshots.read_dir().expect("snapshots").next().is_some());
 
@@ -60,6 +68,89 @@ fn query_routes_through_session_and_preserves_null_vs_empty() {
         )
         .expect("call count");
     assert_eq!(calls, 1);
+}
+
+#[test]
+fn query_defaults_to_pretty_json_output() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    seed_sqlite(&db);
+    write_profile(&project, &db);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "query",
+            "--profile",
+            "local",
+            "--manifest",
+            temp.path()
+                .join("manifest.sqlite")
+                .to_str()
+                .expect("manifest"),
+            "--snapshot-dir",
+            temp.path().join("snapshots").to_str().expect("snapshots"),
+            "--table",
+            "users",
+            "--limit",
+            "1",
+        ])
+        .output()
+        .expect("run query");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(
+        stdout.lines().count() > 1,
+        "stdout was not pretty JSON: {stdout}"
+    );
+    clean_rows(&stdout);
+}
+
+#[test]
+fn query_format_json_keeps_compact_machine_output() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    seed_sqlite(&db);
+    write_profile(&project, &db);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "query",
+            "--profile",
+            "local",
+            "--manifest",
+            temp.path()
+                .join("manifest.sqlite")
+                .to_str()
+                .expect("manifest"),
+            "--snapshot-dir",
+            temp.path().join("snapshots").to_str().expect("snapshots"),
+            "--table",
+            "users",
+            "--limit",
+            "1",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run query");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "stdout was not compact JSON: {stdout}"
+    );
+    clean_rows(&stdout);
 }
 
 #[test]

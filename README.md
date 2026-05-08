@@ -64,6 +64,8 @@ gaze-lens check --profile prod
 
 # 3. Dry-run one human query through the same audit + redaction path as MCP.
 gaze-lens query --profile prod --table users --limit 5
+# Use compact JSON for scripts.
+gaze-lens query --profile prod --table users --limit 5 --format json
 
 # 4. Later, replay an agent session locally to restore original values.
 gaze-lens replay <session_ulid>
