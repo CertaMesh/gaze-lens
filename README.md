@@ -65,6 +65,8 @@ gaze-lens check --profile prod
 
 # 3. Dry-run a canned query as a human (same audit + redaction path as MCP).
 gaze-lens query --profile prod --table users --limit 5
+# Use compact JSON for scripts.
+gaze-lens query --profile prod --table users --limit 5 --format json
 
 # 4. Restore the tokenized arguments of a recorded session locally.
 gaze-lens replay <session_ulid>

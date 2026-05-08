@@ -15,6 +15,14 @@ use crate::source::{DbSourceWrapper, SchemaPresentation, Source, ToolArgs};
 
 use super::serve::runtime_policy;
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum QueryFormat {
+    /// Indented JSON for human CLI reading.
+    PrettyJson,
+    /// Compact JSON for scripts and tools.
+    Json,
+}
+
 #[derive(Debug, Args)]
 pub struct QueryArgs {
     #[arg(long, default_value = "default")]
@@ -43,6 +51,8 @@ pub struct QueryArgs {
     pub order_by_json: Option<String>,
     #[arg(long)]
     pub limit: Option<u32>,
+    #[arg(long, value_enum, default_value_t = QueryFormat::PrettyJson)]
+    pub format: QueryFormat,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -97,7 +107,7 @@ pub async fn run(
             ),
         })
         .await?;
-    print_tool_result(&result)?;
+    print_tool_result(&result, args.format)?;
     Ok(())
 }
 
@@ -172,8 +182,12 @@ fn parse_json_arg<T: serde::de::DeserializeOwned>(
         .transpose()
 }
 
-fn print_tool_result(result: &ToolResult) -> Result<(), LensError> {
-    let json = serde_json::to_string(result).map_err(|err| LensError::Internal {
+fn print_tool_result(result: &ToolResult, format: QueryFormat) -> Result<(), LensError> {
+    let json = match format {
+        QueryFormat::PrettyJson => serde_json::to_string_pretty(result),
+        QueryFormat::Json => serde_json::to_string(result),
+    }
+    .map_err(|err| LensError::Internal {
         detail: err.to_string(),
     })?;
     println!("{json}");
