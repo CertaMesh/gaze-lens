@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5] — 2026-05-08
+
+### Fixed
+- `init` discovered credential prompt help no longer duplicates menu labels
+  above the select list, completing the prompt UX cleanup after the short
+  selectable labels shipped in v0.2.4. (#49)
+
 ## [0.2.4] — 2026-05-08
 
 ### Fixed
