@@ -7,7 +7,7 @@ use clap::Args;
 use crate::errors::LensError;
 use crate::frontend::mcp::McpFrontend;
 use crate::frontend::{Frontend, ShutdownToken};
-use crate::policy::{PolicyError, PolicyFile, build_pipeline};
+use crate::policy::{ColumnActionPolicy, PolicyError, PolicyFile, build_pipeline};
 use crate::profile::Profile;
 use crate::profile::{SourceSpec, load_profiles, validate_profile_name};
 use crate::session::{OutputCaps, Session, SourceClass};
@@ -17,7 +17,7 @@ use crate::source::db::postgres::PostgresSource;
 use crate::source::db::sqlite::SqliteSource;
 use crate::source::log::SshLogSourceWrapper;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
-use crate::source::{DbSourceWrapper, Source};
+use crate::source::{DbSourceWrapper, SchemaPresentation, Source};
 
 #[derive(Debug, Args)]
 pub struct ServeArgs {
@@ -84,8 +84,9 @@ fn prepare_session(
         &manifest,
         &snapshot_dir,
     )?);
-    for (profile, (_policy, pipeline)) in runtime {
+    for (profile, (_policy, pipeline, column_actions)) in runtime {
         session.register_pipeline(profile.name.clone(), Arc::new(pipeline))?;
+        session.register_column_action_policy(profile.name.clone(), column_actions)?;
         register_lazy_source(&session, profile);
     }
 
@@ -191,9 +192,16 @@ async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError>
             });
         }
     };
-    Ok(Arc::new(DbSourceWrapper::with_schema_allowlist(
+    let schema_presentation = if profile.schema_tokenize() {
+        SchemaPresentation::Tokenized {
+            allowlist: profile.schema_allowlist,
+        }
+    } else {
+        SchemaPresentation::Raw
+    };
+    Ok(Arc::new(DbSourceWrapper::with_schema_presentation(
         db_source,
-        profile.schema_allowlist,
+        schema_presentation,
     )))
 }
 
@@ -280,7 +288,9 @@ where
 }
 
 #[doc(hidden)]
-pub fn runtime_policy(profile: &Profile) -> Result<(gaze::Policy, gaze::Pipeline), LensError> {
+pub fn runtime_policy(
+    profile: &Profile,
+) -> Result<(gaze::Policy, gaze::Pipeline, ColumnActionPolicy), LensError> {
     let policy_file = match &profile.policy {
         Some(path) => {
             let path = expand_path(path)?;
@@ -293,7 +303,9 @@ pub fn runtime_policy(profile: &Profile) -> Result<(gaze::Policy, gaze::Pipeline
     };
     let policy = policy_file.to_gaze_policy().map_err(policy_error)?;
     let pipeline = build_pipeline(&policy_file).map_err(policy_error)?;
-    Ok((policy, pipeline))
+    let column_actions =
+        ColumnActionPolicy::from_policy_file(&policy_file).map_err(policy_error)?;
+    Ok((policy, pipeline, column_actions))
 }
 
 fn default_policy_file() -> Result<PolicyFile, LensError> {

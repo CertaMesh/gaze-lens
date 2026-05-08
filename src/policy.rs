@@ -93,6 +93,40 @@ pub struct LogsPolicy {
     pub strip_patterns: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ColumnAction {
+    pub action: Action,
+    pub class: PiiClass,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ColumnActionPolicy {
+    actions: HashMap<String, ColumnAction>,
+}
+
+impl ColumnActionPolicy {
+    pub fn from_policy_file(policy: &PolicyFile) -> Result<Self, PolicyError> {
+        let mut actions = HashMap::new();
+        for rule in &policy.policy.database.column_rules {
+            actions.insert(
+                rule.column.clone(),
+                ColumnAction {
+                    action: parse_action(
+                        rule.action.as_deref().unwrap_or("tokenize"),
+                        &rule.column,
+                    )?,
+                    class: parse_class(&rule.class, &rule.column)?,
+                },
+            );
+        }
+        Ok(Self { actions })
+    }
+
+    pub fn action_for(&self, column: &str) -> Option<&ColumnAction> {
+        self.actions.get(column)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum PolicyError {
     #[error("failed to parse TOML: {0}")]

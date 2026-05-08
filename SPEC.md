@@ -1,9 +1,9 @@
 # gaze-lens — product spec v1
 
 > **Status:** locked 2026-04-26 via `/interview-me` + `/grill-me` sessions.
-> **Org:** [PIInuts](https://github.com/PIInuts)
-> **Engine:** built on the Gaze pseudonymization runtime (closed source).
-> **Naming:** all PIInuts products carry the `gaze-` prefix. Decided 2026-04-26 with Markus. The original working name "Glance" was retired in favor of `gaze-lens` to fit the family convention.
+> **Org:** [EmpireTwo](https://github.com/EmpireTwo)
+> **Engine:** built on the Gaze pseudonymization runtime.
+> **Naming:** all EmpireTwo products carry the `gaze-` prefix. Decided 2026-04-26 with Markus. The original working name "Glance" was retired in favor of `gaze-lens` to fit the family convention.
 
 ## Problem
 
@@ -23,7 +23,7 @@ Developer mid-incident. AI agent (Claude Code, Cursor, Codex, custom) running on
 - **`gaze-lens` binary on the engineer's laptop.** Zero server-side install required at v1 — adoption-blocker for devs without prod-install rights.
 - **MCP server is the primary surface** (stdio). Agent connects, calls tools, gets pseudonymized results. CLI is secondary, for humans to dry-run, replay sessions, configure profiles. **A single `gaze-lens serve` process exposes all configured profiles; each MCP tool call carries a required `profile` argument selecting which configured source to dispatch.** (D17)
 - **`gaze-lens` owns connections + creds.** Reads from existing tooling (`.env`, Doppler, Vault, `~/.ssh/config`). Agent never sees raw connection strings.
-- **Powered by Gaze engine** (closed-source dependency) for pseudonymization, audit log, restore manifest.
+- **Powered by the Gaze engine** for pseudonymization, audit log, restore manifest.
 - **Pluggable spine** — source trait + frontend trait + shared session/manifest core. v1 fills DB+log sources behind an MCP frontend; v1.x adds new sources/frontends additively.
 - v1 manifest is a **gaze-lens-local SQLite manifest**, distinct from Gaze's metadata-only redaction log. Snapshot blobs (`gaze::SensitiveSnapshot`) are stored as out-of-row 0600 files referenced from the manifest. (D9)
 
@@ -84,7 +84,7 @@ The `demo` subcommand is a CLI-only inline-replay helper for adopters; it does n
 - **Whole-session replay only at v1.** `gaze-lens replay <session_ulid>` walks the manifest call history and restores tokens via `gaze::Session::import(snapshot)`. Per-call replay is v1.x stop-gated on Gaze feedback for redaction-row correlation. (D8)
 - Default Gaze session scope is `Scope::Conversation(<lens_session_id>)`; gaze-lens rejects `Scope::Ephemeral` at session construction because `Session::export()` rejects it. (D10)
 - Tool args (SQL `where` AST, grep patterns, table/column names) are tokenized via the same `Pipeline::redact` path as result data **before** manifest write. Manifest never stores raw args. Raw args are reconstructable on operator replay via the session snapshot. (D7)
-- Schema metadata (table/column names) flows through Gaze with a `schema_metadata` source class. This is presentation privacy for schema/list output, not an access-control grant. Query access is governed by each column's `ColumnInfo.allowed` value during canned-query validation. Default-deny posture; allowlist common safe names via `[schema] allow_columns = [...]`. Tokens are session-stable. (D2)
+- Schema metadata (table/column names) is operational metadata shown raw by default in `schema` and `list_tables` response bodies for agent utility. Profiles may opt into presentation tokenization with `schema_tokenize = true`; then `schema_allowlist` leaves selected labels raw and other schema labels use session-stable tokens. This is presentation privacy only, not an access-control grant. Query access is governed by each column's `ColumnInfo.allowed` value during canned-query validation. Raw schema names can appear in manifest-protected response bodies and replay snapshots unless tokenized mode is enabled, so snapshot storage still assumes operator-managed disk encryption. (D2)
 
 ## Snapshot retention (v0.2 opt-in)
 
@@ -136,10 +136,10 @@ Shared snapshot_dir means the sweep affects all profiles' replay. Most-restricti
 
 ## Sibling products in the gaze-* family
 
-- **gaze** — pseudonymization engine. Closed source. The substrate `gaze-lens` and every other PIInuts product builds on.
+- **gaze** — open-source pseudonymization engine. The substrate `gaze-lens` and every other EmpireTwo product builds on.
 - **gaze-laravel** — Laravel adapter for the Gaze engine. Already in development.
 - **`gaze-lens`** (this product) — laptop-side, agent reaches OUT to prod via SSH/DB.
-- **Future server-side companion (name TBD).** Installable on the prod box itself; inspects incoming SSH access to enable team-wide PII-safe access without each engineer running their own `gaze-lens`. Deferred: scoped + named in a separate session when ready. Likely repo `PIInuts/gaze-<X>`.
+- **Future server-side companion (name TBD).** Installable on the prod box itself; inspects incoming SSH access to enable team-wide PII-safe access without each engineer running their own `gaze-lens`. Deferred: scoped + named in a separate session when ready. Likely repo `EmpireTwo/gaze-<X>`.
 
 ## Explicitly out of roadmap
 

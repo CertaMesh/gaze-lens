@@ -16,6 +16,7 @@ fn two_file_merge_with_pii_policy_collision_project_wins() {
             [[profiles]]
             name = "prod"
             policy = "project-policy.toml"
+            schema_tokenize = true
             schema_allowlist = ["email"]
             source = { kind = "mysql", host = "project-db", port = 3306, database = "project_db", username = "project_user", password_env = "PROJECT_DB_PASSWORD" }
         "#,
@@ -37,6 +38,8 @@ fn two_file_merge_with_pii_policy_collision_project_wins() {
         profile.policy.as_deref(),
         Some(std::path::Path::new("project-policy.toml"))
     );
+    assert_eq!(profile.schema_tokenize, Some(true));
+    assert!(profile.schema_tokenize());
     assert_eq!(profile.schema_allowlist, Some(vec!["email".to_string()]));
     match profile.source {
         SourceSpec::Mysql {
@@ -51,6 +54,57 @@ fn two_file_merge_with_pii_policy_collision_project_wins() {
         }
         _ => panic!("expected mysql"),
     }
+}
+
+#[test]
+fn schema_tokenize_omitted_defaults_to_raw_even_with_allowlist() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "prod"
+            schema_allowlist = ["email"]
+            source = { kind = "sqlite", path = "/tmp/app.sqlite" }
+        "#,
+    );
+
+    let profile = load_profile("prod", Some(&project), None).expect("profile");
+
+    assert_eq!(profile.schema_tokenize, None);
+    assert!(!profile.schema_tokenize());
+    assert_eq!(profile.schema_allowlist, Some(vec!["email".to_string()]));
+}
+
+#[test]
+fn project_schema_tokenize_false_overrides_user_true() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    let user = temp.path().join("user.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "prod"
+            schema_tokenize = false
+            source = { kind = "sqlite", path = "/project/app.sqlite" }
+        "#,
+    );
+    write(
+        &user,
+        r#"
+            [[profiles]]
+            name = "prod"
+            schema_tokenize = true
+            source = { kind = "sqlite", path = "/user/app.sqlite" }
+        "#,
+    );
+
+    let profile = load_profile("prod", Some(&project), Some(&user)).expect("profile");
+
+    assert_eq!(profile.schema_tokenize, Some(false));
+    assert!(!profile.schema_tokenize());
 }
 
 #[test]

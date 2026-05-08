@@ -11,7 +11,7 @@ use crate::source::db::mysql::MysqlSource;
 use crate::source::db::postgres::PostgresSource;
 use crate::source::db::query::{CannedQuery, OrderBy, WhereClause, WhereCombinator};
 use crate::source::db::sqlite::SqliteSource;
-use crate::source::{DbSourceWrapper, Source, ToolArgs};
+use crate::source::{DbSourceWrapper, SchemaPresentation, Source, ToolArgs};
 
 use super::serve::runtime_policy;
 
@@ -112,7 +112,7 @@ pub(crate) async fn build_db_session(
     let manifest = expand_path(manifest)?;
     let snapshot_dir = expand_path(snapshot_dir)?;
     super::retention::apply_retention_policy(&profile, &manifest, &snapshot_dir)?;
-    let (policy, pipeline) = runtime_policy(&profile)?;
+    let (policy, pipeline, column_actions) = runtime_policy(&profile)?;
     let session = Arc::new(Session::new_with_pipeline_for_profile(
         &policy,
         pipeline,
@@ -120,6 +120,7 @@ pub(crate) async fn build_db_session(
         &manifest,
         &snapshot_dir,
     )?);
+    session.register_column_action_policy(profile.name.clone(), column_actions)?;
     let limit_cap = crate::session::OutputCaps::default()
         .rows
         .min(u32::MAX as usize) as u32;
@@ -135,9 +136,16 @@ pub(crate) async fn build_db_session(
             });
         }
     };
-    let source: Arc<dyn Source> = Arc::new(DbSourceWrapper::with_schema_allowlist(
+    let schema_presentation = if profile.schema_tokenize() {
+        SchemaPresentation::Tokenized {
+            allowlist: profile.schema_allowlist,
+        }
+    } else {
+        SchemaPresentation::Raw
+    };
+    let source: Arc<dyn Source> = Arc::new(DbSourceWrapper::with_schema_presentation(
         db_source,
-        profile.schema_allowlist,
+        schema_presentation,
     ));
     session.register_source_for_profile(
         crate::session::SourceClass::Database,

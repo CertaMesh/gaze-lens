@@ -35,7 +35,7 @@ Notes vs original spine sketch:
 
 - `log/file_log.rs` was DROP per the mining audit; the actual v1 log source is `log/ssh_log.rs` (D16, PR2b).
 - `value.rs` holds `LensValue` and the typed row plumbing introduced in PR1.
-- `source/db/{query.rs,schema.rs}` split the canned-query AST and tokenized schema metadata out of the per-engine adapters (PR2a/PR3).
+- `source/db/{query.rs,schema.rs}` split the canned-query AST and schema presentation helpers out of the per-engine adapters (PR2a/PR3). `schema`/`list_tables` present raw labels by default; `schema_tokenize = true` enables legacy tokenized presentation with allowlist exceptions.
 - `bin/replay-fixture.rs` is a small helper binary used by cross-process replay tests.
 - `cli/demo.rs` (added in v0.2.0) provides the `gaze-lens demo` inline-replay subcommand: it builds a tempdir manifest + snapshot dir, dispatches a canned in-memory query through the same `Session::dispatch_tool` chokepoint as `query`/`serve`, then calls `gaze::Session::import` against the just-written snapshot to restore the tokenized result in the same process. No persistent state is touched.
 

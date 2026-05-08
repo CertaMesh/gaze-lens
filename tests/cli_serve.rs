@@ -259,9 +259,14 @@ fn test_serve_without_restrict_list_exposes_all_profiles() {
         &project_config,
         &[("dev", &policy), ("prod", &policy), ("staging", &policy)],
     );
+    let user_config = temp.path().join("user.toml");
 
-    let prepared = prepare_session_for_test(serve_args(&temp, &[]), Some(&project_config), None)
-        .expect("prepared");
+    let prepared = prepare_session_for_test(
+        serve_args(&temp, &[]),
+        Some(&project_config),
+        Some(&user_config),
+    )
+    .expect("prepared");
     assert_eq!(prepared.loaded_profiles, vec!["dev", "prod", "staging"]);
 }
 

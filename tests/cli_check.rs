@@ -30,6 +30,10 @@ fn trust_report_json_shape_is_stable() {
     }
     assert_eq!(v["input_surface"]["raw_sql"], "disabled (v1 lock, D5)");
     assert_eq!(v["input_surface"]["query_mode"], "canned-structured");
+    assert_eq!(
+        v["output_surface"]["schema_policy"]["column_redaction_mode"],
+        "schema/list_tables raw by default; query values use Gaze recognizer pack"
+    );
     assert!(v["process_surface"].get("profile_under_review").is_some());
     assert!(v["process_surface"].get("serve_default_scope").is_some());
 }
@@ -281,6 +285,12 @@ fn trust_report_text_lists_all_pillars() {
         assert!(text.contains(header), "missing {header}: {text}");
     }
     assert!(text.contains("raw_sql: disabled (v1 lock, D5)"), "{text}");
+    assert!(
+        text.contains(
+            "column_redaction_mode: schema/list_tables raw by default; query values use Gaze recognizer pack"
+        ),
+        "{text}"
+    );
     assert!(text.contains("(see src/session/mod.rs:304)"), "{text}");
 }
 
@@ -371,7 +381,20 @@ fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
     let policy = temp.path().join("policy.toml");
     seed_sqlite(&db);
     std::fs::write(&policy, "[policy.database]\n").expect("policy");
-    write_profile(&project, &db, &policy);
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "local"
+            policy = "{}"
+            source = {{ kind = "sqlite", path = "{}", readonly_required = true }}
+            "#,
+            policy.display(),
+            db.display()
+        ),
+    )
+    .expect("profile");
 
     let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
     let output = cmd
@@ -421,7 +444,7 @@ fn check_without_explain_risk_unchanged_backward_compat() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "profile: ok (local)\npolicy: ok\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
+        "profile: ok (local)\nwarning: schema_allowlist has no presentation-tokenization effect in raw schema mode; set schema_tokenize = true to use it for schema/list_tables presentation\npolicy: ok\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
     );
 }
 
@@ -451,7 +474,7 @@ fn check_explain_risk_text_appends_after_status_lines() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let stdout = stdout(&output);
     assert!(stdout.starts_with(
-        "profile: ok (local)\npolicy: ok\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
+        "profile: ok (local)\nwarning: schema_allowlist has no presentation-tokenization effect in raw schema mode; set schema_tokenize = true to use it for schema/list_tables presentation\npolicy: ok\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
     ), "{stdout}");
     assert!(stdout.contains("Input surface"), "{stdout}");
 }
@@ -464,7 +487,21 @@ fn check_explain_risk_json_emits_only_json_on_stdout() {
     let policy = temp.path().join("policy.toml");
     seed_sqlite(&db);
     std::fs::write(&policy, "[policy.database]\n").expect("policy");
-    write_profile(&project, &db, &policy);
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "local"
+            policy = "{}"
+            schema_allowlist = ["users", "email"]
+            source = {{ kind = "sqlite", path = "{}", readonly_required = true }}
+            "#,
+            policy.display(),
+            db.display()
+        ),
+    )
+    .expect("profile");
 
     let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
     let output = cmd
@@ -487,6 +524,50 @@ fn check_explain_risk_json_emits_only_json_on_stdout() {
     let stdout = stdout(&output);
     assert!(!stdout.contains("profile: ok"), "{stdout}");
     assert!(stderr(&output).contains("profile: ok (local)"));
+}
+
+#[test]
+fn check_warns_when_schema_allowlist_is_configured_in_raw_mode() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "local"
+            policy = "{}"
+            schema_allowlist = ["users", "email"]
+            source = {{ kind = "sqlite", path = "{}", readonly_required = true }}
+            "#,
+            policy.display(),
+            db.display()
+        ),
+    )
+    .expect("profile");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.contains(
+        "warning: schema_allowlist has no presentation-tokenization effect in raw schema mode; set schema_tokenize = true to use it for schema/list_tables presentation"
+    ), "{stdout}");
 }
 
 #[test]
@@ -858,6 +939,7 @@ fn keyring_profile(name: &str, service: &str, account: &str) -> Profile {
         discovered_at: None,
         discovered_ssh_host_key_fingerprint: None,
         credential_class: None,
+        schema_tokenize: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
@@ -878,6 +960,7 @@ fn sqlite_profile(name: &str, path: std::path::PathBuf) -> Profile {
         discovered_at: None,
         discovered_ssh_host_key_fingerprint: None,
         credential_class: None,
+        schema_tokenize: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
@@ -904,6 +987,7 @@ fn postgres_env_profile(name: &str, env: &str) -> Profile {
         discovered_at: None,
         discovered_ssh_host_key_fingerprint: None,
         credential_class: None,
+        schema_tokenize: None,
         schema_allowlist: None,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,

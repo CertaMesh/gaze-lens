@@ -4,9 +4,9 @@ PII-safe read-access for live production investigation by AI agents.
 
 `gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.com`. The engineer can later replay the agent's session locally to see the original values.
 
-Built on the [Gaze](https://github.com/PIInuts) pseudonymization engine. Part of the [PIInuts](https://github.com/PIInuts) product family — every product in the family is named `gaze-X`.
+Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine. Part of the [EmpireTwo](https://github.com/EmpireTwo) product family — every product in the family is named `gaze-X`.
 
-> **Status:** v0.2.0 is the latest tagged release; `main` is preparing v0.2.2. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
+> **Status:** v0.2.2 is the latest tagged release. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
 
 ## Why
 
@@ -24,26 +24,28 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 > Prebuilt binaries currently target Apple Silicon macOS (`aarch64-apple-darwin`). Other platforms should build from source until the native ONNX Runtime distribution blocker is resolved.
 
 ```sh
-curl -L https://github.com/PIInuts/gaze-lens/releases/download/v0.2.0/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+curl -L https://github.com/EmpireTwo/gaze-lens/releases/download/v0.2.2/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
 ./gaze-lens demo
 ```
 
 `gaze-lens demo` tokenizes a small canned dataset (3 emails, 2 phones, 1 SSN-shaped string) and inline-restores it in a single process — both sections print side by side. The demo writes nothing to `~/.gaze-lens/`; everything lives in a tempdir that is wiped on exit. No follow-up `gaze-lens replay <id>` is required.
 
+The v0.2.2 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
+
 ### Prebuilt binaries
 
-Releases attach prebuilt tarballs to the [GitHub releases page](https://github.com/PIInuts/gaze-lens/releases). Near-term release automation intentionally builds only the Apple Silicon macOS archive. Intel macOS, Linux, and Windows remain source-build or future binary targets while the Gaze recognizer backend is made portable.
+Releases attach prebuilt tarballs to the [GitHub releases page](https://github.com/EmpireTwo/gaze-lens/releases). Near-term release automation intentionally builds only the Apple Silicon macOS archive. Intel macOS, Linux, and Windows remain source-build or future binary targets while the Gaze recognizer backend is made portable.
 
 ### Building from source
 
 ```sh
-git clone https://github.com/PIInuts/gaze-lens
+git clone https://github.com/EmpireTwo/gaze-lens
 cd gaze-lens
 cargo build --release
 ./target/release/gaze-lens demo
 ```
 
-The `gaze` and `gaze-recognizers` crates are wired as git dependencies pinned to a `PIInuts/gaze` tag (currently `v0.6.4`). See [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin) for the pin policy and the local-checkout patch recipe.
+The `gaze` and `gaze-recognizers` crates are wired as git dependencies pinned to an `EmpireTwo/gaze` tag (currently `v0.6.4`). See [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin) for the pin policy and the local-checkout patch recipe.
 
 `gaze-lens` builds with stable Rust 1.89+.
 
@@ -109,12 +111,12 @@ The agent sees five tools and nothing else:
 | Tool | Purpose |
 |---|---|
 | `query` | Run a canned structured DB query (no raw SQL accepted). |
-| `schema` | Describe one tokenized table schema. |
-| `list_tables` | List tokenized table names. |
+| `schema` | Describe one table schema. |
+| `list_tables` | List table names. |
 | `log_tail` | Tail a configured SSH log source. |
 | `log_grep` | Search a configured SSH log source. |
 
-Every tool result routes through `gaze::Pipeline::redact` before it leaves the process. Tool args are tokenized through the same path before the manifest is written, so the manifest never stores raw arguments.
+Every tool result routes through `Session::dispatch_tool` before it leaves the process. Tool args are tokenized through the Gaze path before the manifest is written, so the manifest never stores raw arguments. Schema/list output shows raw table and column names by default; set `schema_tokenize = true` in the profile when schema names themselves are sensitive.
 
 ## Threat model — short version
 

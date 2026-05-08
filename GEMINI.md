@@ -50,7 +50,7 @@ cargo run -- query --profile dev --table users --limit 5
 cargo run -- serve --profile dev    # MCP stdio server
 ```
 
-`gaze` and `gaze-recognizers` are git deps from `https://github.com/PIInuts/gaze.git`, pinned with `tag = "v0.6.4"` + `version = "0.6.4"`. Local development can patch them to a checkout via `[patch."..."]` in `~/.cargo/config.toml` — see [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin).
+`gaze` and `gaze-recognizers` are git deps from `https://github.com/EmpireTwo/gaze.git`, pinned with `tag = "v0.6.4"` + `version = "0.6.4"`. Local development can patch them to a checkout via `[patch."..."]` in `~/.cargo/config.toml` — see [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin).
 
 Detailed Rust conventions auto-load from `.claude/rules/rust.md` when editing `*.rs` files (paths-frontmatter; no `@import` needed).
 
@@ -101,4 +101,4 @@ For full architectural detail, file-by-file mining verdicts, and the 16 locked d
 
 ## Status
 
-v0.2.0 shipped from source 2026-04-29; v0.2.2 in flight (see CHANGELOG.md). Crates.io publish + prebuilt binaries via cargo-dist are tracked separately. The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
+v0.2.2 shipped 2026-05-04 (see CHANGELOG.md). Crates.io publish is tracked separately. The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.

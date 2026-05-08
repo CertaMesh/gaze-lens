@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.2] — TBD
+## [0.2.2] — 2026-05-04
 
 ### Added
 - `init` writes a guided setup flow that emits per-agent MCP snippets and an
@@ -36,6 +36,10 @@
   the `profile` arg to the configured profile name). (#355)
 
 ### Changed
+- `schema` and `list_tables` now show raw table/column names by default for
+  agent utility. Profiles can opt back into presentation tokenization with
+  `schema_tokenize = true`; `schema_allowlist` only affects presentation in
+  that mode. Query authorization remains governed by source schema policy.
 - Bumped Gaze pinned dependency from `v0.4.6` to `v0.6.4`. `gaze::Value`
   conversion contract (D11) preserved through the existing exhaustiveness
   pin in `gaze_value_to_json`. Manifest serialization continues to use
@@ -80,7 +84,7 @@
   patches to an already-shipped release line, the version bump rides with
   the dependency change. (#503)
 - CONTRIBUTING.md documents how to regenerate `Cargo.lock` for committable
-  state when `~/.cargo/config.toml` has a local `[patch."https://github.com/PIInuts/gaze.git"]`
+  state when `~/.cargo/config.toml` has a local `[patch."https://github.com/EmpireTwo/gaze.git"]`
   block — disable the patch before running `cargo update`, then verify
   the lockfile records `source = "git+...?tag=vX.Y.Z#<sha>"` rather than a
   path-based resolution. (#504)

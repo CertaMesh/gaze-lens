@@ -21,6 +21,7 @@ The product surface is exactly:
 - **No `sqlx::query!` / `query_as!` macros for production-source adapters.** See [CONTRIBUTING.md §sqlx macro policy](./CONTRIBUTING.md#sqlx-macro-policy-banned-for-production-source-queries).
 - **SSH command construction never uses interpolated strings.** Always use the `ssh -- <host> <command> -- <quoted_path>` form with validated host arguments. Reject `-`-prefixed hosts.
 - **`LensValue` decode-failures reject the row.** Never silently fall back to empty string. SQLite JSON-in-TEXT must be policy-driven via the `json_text_columns` allowlist (default-deny).
+- **Schema presentation is raw by default.** `schema` and `list_tables` may return raw table/column names unless the profile explicitly sets `schema_tokenize = true`. `schema_allowlist` is only a presentation exception in tokenized mode; it must not grant query access or imply tokenized mode by itself.
 
 ## Commands
 
@@ -50,7 +51,7 @@ cargo run -- query --profile dev --table users --limit 5
 cargo run -- serve --profile dev    # MCP stdio server
 ```
 
-`gaze` and `gaze-recognizers` are git deps from `https://github.com/PIInuts/gaze.git`, pinned with `tag = "v0.6.4"` + `version = "0.6.4"`. Local development can patch them to a checkout via `[patch."..."]` in `~/.cargo/config.toml` — see [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin).
+`gaze` and `gaze-recognizers` are git deps from `https://github.com/EmpireTwo/gaze.git`, pinned with `tag = "v0.6.4"` + `version = "0.6.4"`. Local development can patch them to a checkout via `[patch."..."]` in `~/.cargo/config.toml` — see [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin).
 
 Detailed Rust conventions auto-load from `.claude/rules/rust.md` when editing `*.rs` files (paths-frontmatter; no `@import` needed).
 
@@ -101,4 +102,4 @@ For full architectural detail, file-by-file mining verdicts, and the 16 locked d
 
 ## Status
 
-v0.2.0 shipped from source 2026-04-29; v0.2.2 in flight (see CHANGELOG.md). Crates.io publish + prebuilt binaries via cargo-dist are tracked separately. The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
+v0.2.2 shipped 2026-05-04 (see CHANGELOG.md). Crates.io publish is tracked separately. The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
