@@ -20,7 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::cli::init::discovery::{DISCOVERY_PATH_CHOICES, DiscoveryPath};
+use crate::cli::init::discovery::{DISCOVERY_PATH_CHOICES, DISCOVERY_PATH_PROMPT, DiscoveryPath};
 use crate::cli::init::plan::{
     AgentsMdPatch, AutoPurgeChoice, CredentialClass, InitPlan, McpTarget, PlannedSecret,
     ProfileSection,
@@ -330,10 +330,7 @@ fn populate_discovered_source_params<P: Prompter>(
     } else {
         require_interactive(args)?;
         let i = p
-            .select(
-                "Use discovered database credential?",
-                DISCOVERY_PATH_CHOICES,
-            )
+            .select(DISCOVERY_PATH_PROMPT, DISCOVERY_PATH_CHOICES)
             .map_err(prompt_to_lens)?;
         match i {
             0 => DiscoveryPath::HostDbOnly,
