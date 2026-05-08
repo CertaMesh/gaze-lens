@@ -84,7 +84,7 @@
   patches to an already-shipped release line, the version bump rides with
   the dependency change. (#503)
 - CONTRIBUTING.md documents how to regenerate `Cargo.lock` for committable
-  state when `~/.cargo/config.toml` has a local `[patch."https://github.com/PIInuts/gaze.git"]`
+  state when `~/.cargo/config.toml` has a local `[patch."https://github.com/EmpireTwo/gaze.git"]`
   block — disable the patch before running `cargo update`, then verify
   the lockfile records `source = "git+...?tag=vX.Y.Z#<sha>"` rather than a
   path-based resolution. (#504)

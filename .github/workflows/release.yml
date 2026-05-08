@@ -60,8 +60,6 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Configure git for private Gaze access
-        run: git config --global url."https://${{ secrets.GAZE_REPO_TOKEN }}@github.com/PIInuts/gaze.git".insteadOf "https://github.com/PIInuts/gaze.git"
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -117,8 +115,6 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Configure git for private Gaze access
-        run: git config --global url."https://${{ secrets.GAZE_REPO_TOKEN }}@github.com/PIInuts/gaze.git".insteadOf "https://github.com/PIInuts/gaze.git"
       - name: Install Rust non-interactively if not already installed
         if: ${{ matrix.container }}
         run: |
@@ -178,8 +174,6 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Configure git for private Gaze access
-        run: git config --global url."https://${{ secrets.GAZE_REPO_TOKEN }}@github.com/PIInuts/gaze.git".insteadOf "https://github.com/PIInuts/gaze.git"
       - name: Install cached dist
         uses: actions/download-artifact@v8
         with:

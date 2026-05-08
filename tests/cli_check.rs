@@ -444,7 +444,7 @@ fn check_without_explain_risk_unchanged_backward_compat() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "profile: ok (local)\npolicy: ok\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
+        "profile: ok (local)\nwarning: schema_allowlist has no presentation-tokenization effect in raw schema mode; set schema_tokenize = true to use it for schema/list_tables presentation\npolicy: ok\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
     );
 }
 
@@ -474,7 +474,7 @@ fn check_explain_risk_text_appends_after_status_lines() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let stdout = stdout(&output);
     assert!(stdout.starts_with(
-        "profile: ok (local)\npolicy: ok\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
+        "profile: ok (local)\nwarning: schema_allowlist has no presentation-tokenization effect in raw schema mode; set schema_tokenize = true to use it for schema/list_tables presentation\npolicy: ok\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
     ), "{stdout}");
     assert!(stdout.contains("Input surface"), "{stdout}");
 }
