@@ -144,10 +144,17 @@ fn discover_credential_prompt_keeps_select_labels_short_and_help_outside_items()
 
     let prompt = p.last_prompt.expect("discovery prompt");
     assert!(prompt.contains("keep discovered host/database"));
-    assert!(prompt.contains("recommended for least-privilege agent access"));
+    assert!(prompt.contains("least-privilege agent access"));
     assert!(prompt.contains("save DB username/password found in remote .env"));
-    assert!(prompt.contains("fast but usually too broad"));
+    assert!(prompt.contains("usually too broad"));
     assert!(prompt.contains("stop discovery without writing config"));
+    for choice in &choices {
+        let duplicate_help_prefix = format!("{choice}:");
+        assert!(
+            !prompt.contains(&duplicate_help_prefix),
+            "prompt help must not repeat select label as a detail heading: {duplicate_help_prefix}"
+        );
+    }
     assert!(!prompt.contains("prod-secret"));
 }
 

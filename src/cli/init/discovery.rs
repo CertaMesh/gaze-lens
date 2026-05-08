@@ -64,9 +64,9 @@ pub const DISCOVERY_PATH_CHOICES: &[&str] = &[
 pub const DISCOVERY_PATH_PROMPT: &str = "\
 Use discovered database credential?
 
-Use separate read-only credential: keep discovered host/database, then enter readonly DB username/password; recommended for least-privilege agent access.
-Store discovered production credential: save DB username/password found in remote .env; fast but usually too broad.
-Abort without writing config: stop discovery without writing config.";
+Recommended: keep discovered host/database, then enter readonly DB username/password for least-privilege agent access.
+Fast path: save DB username/password found in remote .env; usually too broad.
+Exit: stop discovery without writing config.";
 
 pub fn parse_env(input: &str) -> Result<Vec<EnvVar>, LensError> {
     let mut vars = Vec::new();
