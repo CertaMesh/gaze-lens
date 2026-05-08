@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.4] — 2026-05-08
+
+### Fixed
+- `init` SSH discovery credential prompt choices now use short, stable
+  selectable labels and keep longer explanations outside selectable rows,
+  fixing terminal repaint/flood UX when operators navigate with arrow keys.
+  A regression test pins the short-label contract.
+
 ## [0.2.3] — 2026-05-08
 
 ### Added
