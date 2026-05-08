@@ -111,7 +111,7 @@ fn discover_path_c_returns_profile_error() {
 }
 
 #[test]
-fn discover_credential_prompt_explains_each_choice_impact() {
+fn discover_credential_prompt_keeps_select_labels_short_and_help_outside_items() {
     let ssh = MockSsh::default().with_response(
         "deploy@app01",
         "/var/www/app/.env",
@@ -125,15 +125,30 @@ fn discover_credential_prompt_explains_each_choice_impact() {
     let mut p = FakePrompter::new().with_select(2);
     let _err = run_guided(&args, &mut p, &env).unwrap_err();
     let choices = p.last_select_choices.expect("discovery choices");
-    let joined = choices.join("\n");
-    assert!(joined.contains("Use separate read-only credential"));
-    assert!(joined.contains("keep discovered host/database"));
-    assert!(joined.contains("recommended for least-privilege agent access"));
-    assert!(joined.contains("Store discovered production credential as-is"));
-    assert!(joined.contains("save DB username/password found in remote .env"));
-    assert!(joined.contains("fast but usually too broad"));
-    assert!(joined.contains("Abort - stop discovery without writing config"));
-    assert!(!joined.contains("prod-secret"));
+    assert_eq!(
+        choices,
+        vec![
+            "Use separate read-only credential",
+            "Store discovered production credential",
+            "Abort without writing config",
+        ]
+    );
+    assert!(
+        choices.iter().all(|choice| choice.len() <= 40),
+        "select labels should stay short enough for stable arrow-key repaint: {choices:?}"
+    );
+    assert!(
+        choices.iter().all(|choice| !choice.contains(';')),
+        "select labels must not carry long explanatory clauses: {choices:?}"
+    );
+
+    let prompt = p.last_prompt.expect("discovery prompt");
+    assert!(prompt.contains("keep discovered host/database"));
+    assert!(prompt.contains("recommended for least-privilege agent access"));
+    assert!(prompt.contains("save DB username/password found in remote .env"));
+    assert!(prompt.contains("fast but usually too broad"));
+    assert!(prompt.contains("stop discovery without writing config"));
+    assert!(!prompt.contains("prod-secret"));
 }
 
 #[test]
