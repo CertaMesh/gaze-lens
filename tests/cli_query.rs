@@ -144,13 +144,18 @@ fn query_format_json_keeps_compact_machine_output() {
         .expect("run query");
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("Running query..."),
+        "stderr should show query status"
+    );
     let stdout = stdout(&output);
     assert_eq!(
         stdout.lines().count(),
         1,
         "stdout was not compact JSON: {stdout}"
     );
-    clean_rows(&stdout);
+    let rows = clean_rows(&stdout);
+    assert_eq!(rows.len(), 1);
 }
 
 #[test]
@@ -184,6 +189,11 @@ fn query_rejects_unknown_table() {
 
     assert!(!output.status.success(), "stdout: {}", stdout(&output));
     assert!(stderr(&output).contains("SourceError: source failed"));
+    assert!(
+        stderr(&output).contains("configure source ssh_host/local_port"),
+        "stderr should include tunnel mitigation: {}",
+        stderr(&output)
+    );
     assert!(!stderr(&output).contains("missing"));
 }
 
