@@ -6,6 +6,9 @@
 - `init` discovered credential prompt help no longer duplicates menu labels
   above the select list, completing the prompt UX cleanup after the short
   selectable labels shipped in v0.2.4. (#49)
+- `gaze-lens query` now emits stderr-only progress/loading status while
+  preserving stdout/JSON output, and query/check `SourceError` failures now
+  include generic private-DB/SSH-tunnel mitigation guidance. (#51)
 
 ## [0.2.4] — 2026-05-08
 
