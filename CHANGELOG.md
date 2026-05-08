@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.3] — 2026-05-08
+
+### Added
+- README onboarding now gives a guided first-run path for installation,
+  initialization, MCP wiring, agent verification, and replay. (#37, #551)
+- `gaze-lens query` defaults to readable CLI output, with compact machine JSON
+  available through `--format json`. (#42, #554)
+- `init` prompts now explain profile scope and Laravel SSH discovery choices
+  inline, so operators can choose intentionally during setup. (#43, #553)
+
+### Changed
+- `schema` and `list_tables` documentation and help text now spell out raw
+  default presentation, tokenized mode, allowlist behavior, and profile reload
+  expectations. Allowlist/profile reload tests pin that UX contract. (#44, #558)
+
+### Fixed
+- MySQL, Postgres, and SQLite adapters now force sqlx statement logging off
+  with `LevelFilter::Off`, preventing SQL/log argument leakage through tracing
+  subscribers. (#38, #242)
+- `cli_serve` tests are hermetic against user profile configuration, avoiding
+  local `~/.gaze-lens` state leaks into test results. (#45, #695)
+
 ## [0.2.2] — 2026-05-04
 
 ### Added
