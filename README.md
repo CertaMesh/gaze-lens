@@ -6,7 +6,7 @@ PII-safe read-access for live production investigation by AI agents.
 
 Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine. Part of the [EmpireTwo](https://github.com/EmpireTwo) product family — every product in the family is named `gaze-X`.
 
-> **Status:** v0.2.4 is the latest tagged release. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
+> **Status:** v0.2.5 is the latest tagged release. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
 
 ## Why
 
@@ -24,13 +24,13 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 > Prebuilt binaries currently target Apple Silicon macOS (`aarch64-apple-darwin`). Other platforms should build from source until the native ONNX Runtime distribution blocker is resolved.
 
 ```sh
-curl -L https://github.com/EmpireTwo/gaze-lens/releases/download/v0.2.4/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+curl -L https://github.com/EmpireTwo/gaze-lens/releases/download/v0.2.5/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
 ./gaze-lens demo
 ```
 
 `gaze-lens demo` tokenizes a small canned dataset (3 emails, 2 phones, 1 SSN-shaped string) and inline-restores it in a single process — both sections print side by side. The demo writes nothing to `~/.gaze-lens/`; everything lives in a tempdir that is wiped on exit. No follow-up `gaze-lens replay <id>` is required.
 
-The v0.2.4 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
+The v0.2.5 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
 
 ### Prebuilt binaries
 
