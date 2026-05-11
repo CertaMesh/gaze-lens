@@ -535,16 +535,22 @@ async fn output_caps_timeout_records_manifest_without_raw_values() {
         .expect_err("dispatch should timeout");
 
     assert!(matches!(err, LensError::Truncated(TruncatedAt::Timeout)));
-    let summary = manifest_summary(&manifest_path);
-    assert_eq!(summary["truncated_at"], serde_json::json!(["Timeout"]));
-    let stored: String = Connection::open(&manifest_path)
+    let (status, result_summary, snapshot_ref, stored): (
+        String,
+        String,
+        Option<String>,
+        String,
+    ) = Connection::open(&manifest_path)
         .expect("manifest")
         .query_row(
-            "SELECT redacted_args_json || COALESCE(result_summary, '') FROM calls",
+            "SELECT status, result_summary, snapshot_ref, redacted_args_json || COALESCE(result_summary, '') FROM calls",
             [],
-            |row| row.get(0),
-        )
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )
         .expect("stored");
+    assert_eq!(status, "error");
+    assert_eq!(result_summary, "Truncated: Timeout");
+    assert!(snapshot_ref.is_none());
     assert!(!stored.contains("arg@example.com"));
     assert!(!stored.contains("alice@example.com"));
 }

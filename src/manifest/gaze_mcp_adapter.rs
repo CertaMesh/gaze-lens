@@ -84,20 +84,6 @@ impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter<'_> {
         handle: CallHandle,
         reason: FailureReason,
     ) -> Result<(), ManifestError> {
-        if is_timeout_failure(&reason) {
-            let snapshot_ref =
-                persist_snapshot(&self.snapshot_dir, self.lens_session_id, self.gaze_session)
-                    .map_err(ManifestError::backend)?;
-            let summary = ResultSummary {
-                rows: 0,
-                bytes: 0,
-                truncated_at: vec![TruncatedAt::Timeout],
-            };
-            return self
-                .inner
-                .finish_call(&handle.id().to_string(), &summary, &snapshot_ref)
-                .map_err(ManifestError::backend);
-        }
         let err = lens_error_from_failure(reason);
         self.summaries
             .lock()
@@ -109,15 +95,11 @@ impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter<'_> {
     }
 }
 
-fn is_timeout_failure(reason: &FailureReason) -> bool {
-    match reason {
-        FailureReason::ToolError { message, .. } => message.contains("output truncated at Timeout"),
-        _ => false,
-    }
-}
-
 fn lens_error_from_failure(reason: FailureReason) -> LensError {
     match reason {
+        FailureReason::ToolError { class: _, message } if is_timeout_message(&message) => {
+            LensError::Truncated(TruncatedAt::Timeout)
+        }
         FailureReason::ToolError { class, message } => lens_internal(format!("{class}: {message}")),
         FailureReason::AuthDenied { reason } => lens_internal(format!("auth denied: {reason}")),
         FailureReason::RedactionFailed { message } => {
@@ -126,6 +108,10 @@ fn lens_error_from_failure(reason: FailureReason) -> LensError {
         FailureReason::Other { message } => lens_internal(message),
         _ => lens_internal("unknown gaze-mcp-core failure".to_string()),
     }
+}
+
+fn is_timeout_message(message: &str) -> bool {
+    message.contains("output truncated at Timeout")
 }
 
 fn lens_internal(detail: String) -> LensError {
