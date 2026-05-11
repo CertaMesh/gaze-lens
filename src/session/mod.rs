@@ -14,6 +14,13 @@ use gaze::{Action, ClassRule, CleanDocument, DefaultRule, RawDocument};
 use gaze_recognizers::RegexDetector;
 
 use crate::errors::LensError;
+use crate::manifest::gaze_mcp_adapter::GazeMcpManifestAdapter;
+use crate::mcp::auth::LensAuthHook;
+use crate::mcp::tools::list_tables::ListTablesTool;
+use crate::mcp::tools::log_grep::LogGrepTool;
+use crate::mcp::tools::log_tail::LogTailTool;
+use crate::mcp::tools::query::QueryTool;
+use crate::mcp::tools::schema::SchemaTool;
 use crate::policy::{ColumnAction, ColumnActionPolicy};
 use crate::source::db::TableSchema;
 use crate::source::db::schema::SchemaTokenizer;
@@ -37,6 +44,7 @@ struct SessionInner {
     pipeline_mode: Mutex<PipelineMode>,
     column_action_mode: Mutex<ColumnActionMode>,
     manifest: Arc<dyn LensManifestStore>,
+    core_summaries: Arc<Mutex<HashMap<String, ResultSummary>>>,
     snapshot_dir: PathBuf,
     sources: Mutex<HashMap<(SourceClass, String), Arc<LazySource>>>,
     legacy_sources: Mutex<HashMap<String, Arc<dyn Source>>>,
@@ -295,6 +303,7 @@ impl Session {
                 pipeline_mode: Mutex::new(pipeline_mode),
                 column_action_mode: Mutex::new(column_action_mode),
                 manifest,
+                core_summaries: Arc::new(Mutex::new(HashMap::new())),
                 snapshot_dir,
                 sources: Mutex::new(HashMap::new()),
                 legacy_sources: Mutex::new(HashMap::new()),
@@ -323,46 +332,71 @@ impl Session {
     pub async fn dispatch_tool(&self, mut call: ToolCall) -> Result<ToolResult, LensError> {
         let profile_name = self.extract_profile(&mut call)?;
         let pipeline = self.pipeline_for(&profile_name)?;
-        let column_actions = self.column_actions_for(&profile_name)?;
-        let redacted_args = self.redact_args(&call.args, &pipeline)?;
-        self.inner.manifest.begin_call(&call, &redacted_args)?;
-
-        let raw_result = match tokio::time::timeout(
-            self.inner.caps.timeout,
-            self.invoke_source(&call, &profile_name),
-        )
-        .await
-        {
-            Ok(result) => result.inspect_err(|err| {
-                let _ = self.inner.manifest.fail_call(&call.call_id, err);
-            })?,
-            Err(_) => {
-                let err = LensError::Truncated(TruncatedAt::Timeout);
-                self.finish_truncated_call(&call.call_id, TruncatedAt::Timeout)?;
-                return Err(err);
-            }
-        };
-        let clean = match tokio::time::timeout(self.inner.caps.timeout, async {
-            self.redact_result(raw_result, &pipeline, &column_actions)
-        })
-        .await
-        {
-            Ok(result) => result?,
-            Err(_) => {
-                let err = LensError::Truncated(TruncatedAt::Timeout);
-                self.finish_truncated_call(&call.call_id, TruncatedAt::Timeout)?;
-                return Err(err);
-            }
-        };
-        let snapshot_ref = self.persist_snapshot()?;
-        let summary = clean.summary();
-        self.inner
-            .manifest
-            .finish_call(&call.call_id, &summary, &snapshot_ref)?;
+        let registry = self.core_tool_registry()?;
+        let auth = LensAuthHook;
+        let manifest = GazeMcpManifestAdapter::new(
+            self.inner.manifest.clone(),
+            &self.inner.snapshot_dir,
+            self.inner.lens_session_id,
+            &self.inner.gaze_session,
+            self.inner.core_summaries.clone(),
+        );
+        let session_id_policy = gaze_mcp_core::SessionIdPolicy::default_strict();
+        let envelope = gaze_mcp_core::PiiEnvelope::new(
+            &registry,
+            &auth,
+            &manifest,
+            &pipeline,
+            &self.inner.gaze_session,
+            &[],
+            &session_id_policy,
+        );
+        let response = envelope
+            .dispatch(
+                &gaze_mcp_core::Principal::new("lens-agent"),
+                &call.tool_name,
+                call.args.0,
+                None,
+            )
+            .await
+            .map_err(dispatch_error_to_lens_error)?;
+        let mut clean: CleanOutput =
+            serde_json::from_value(response.payload).map_err(|err| LensError::Internal {
+                detail: err.to_string(),
+            })?;
+        if matches!(call.tool_name.as_str(), "schema" | "list_tables") {
+            clean.restore_gaze_tokens(&self.inner.gaze_session)?;
+        }
         Ok(ToolResult {
             clean,
-            snapshot_ref,
+            snapshot_ref: SnapshotRef {
+                path: self
+                    .inner
+                    .snapshot_dir
+                    .join(format!("{}.snap", self.inner.lens_session_id)),
+            },
         })
+    }
+
+    fn core_tool_registry(&self) -> Result<gaze_mcp_core::ToolRegistry, LensError> {
+        let session = Arc::new(self.clone());
+        let mut registry = gaze_mcp_core::ToolRegistry::new();
+        registry
+            .register(QueryTool::new(session.clone()))
+            .map_err(tool_registry_error)?;
+        registry
+            .register(SchemaTool::new(session.clone()))
+            .map_err(tool_registry_error)?;
+        registry
+            .register(ListTablesTool::new(session.clone()))
+            .map_err(tool_registry_error)?;
+        registry
+            .register(LogTailTool::new(session.clone()))
+            .map_err(tool_registry_error)?;
+        registry
+            .register(LogGrepTool::new(session))
+            .map_err(tool_registry_error)?;
+        Ok(registry)
     }
 
     pub(crate) async fn invoke_core_tool(
@@ -385,11 +419,17 @@ impl Session {
         )
         .await
         .map_err(|_| LensError::Truncated(TruncatedAt::Timeout))??;
-        tokio::time::timeout(self.inner.caps.timeout, async {
+        let clean = tokio::time::timeout(self.inner.caps.timeout, async {
             self.redact_result(raw_result, &pipeline, &column_actions)
         })
         .await
-        .map_err(|_| LensError::Truncated(TruncatedAt::Timeout))?
+        .map_err(|_| LensError::Truncated(TruncatedAt::Timeout))??;
+        self.inner
+            .core_summaries
+            .lock()
+            .expect("core summary map lock")
+            .insert(call.call_id.clone(), clean.summary());
+        Ok(clean)
     }
 
     pub fn register_source(&self, name: impl Into<String>, source: Arc<dyn Source>) {
@@ -622,30 +662,6 @@ impl Session {
         }
     }
 
-    fn redact_args(
-        &self,
-        args: &ToolArgs,
-        pipeline: &gaze::Pipeline,
-    ) -> Result<RedactedToolArgs, LensError> {
-        let raw = serde_json::to_string(&args.0).map_err(|err| LensError::RedactionFailed {
-            detail: err.to_string(),
-        })?;
-        let clean = pipeline
-            .redact(&self.inner.gaze_session, RawDocument::Text(raw))
-            .map_err(|err| LensError::RedactionFailed {
-                detail: err.to_string(),
-            })?;
-        match clean {
-            CleanDocument::Text(json) => Ok(RedactedToolArgs { json }),
-            CleanDocument::Structured(_) => Err(LensError::RedactionFailed {
-                detail: "text args produced structured output".to_string(),
-            }),
-            _ => Err(LensError::RedactionFailed {
-                detail: "text args produced unsupported output".to_string(),
-            }),
-        }
-    }
-
     async fn invoke_source(
         &self,
         call: &ToolCall,
@@ -858,26 +874,6 @@ impl Session {
         Ok(CleanOutput::Text { text, truncated_at })
     }
 
-    fn persist_snapshot(&self) -> Result<SnapshotRef, LensError> {
-        persist_snapshot(
-            &self.inner.snapshot_dir,
-            self.inner.lens_session_id,
-            &self.inner.gaze_session,
-        )
-    }
-
-    fn finish_truncated_call(&self, call_id: &str, reason: TruncatedAt) -> Result<(), LensError> {
-        let snapshot_ref = self.persist_snapshot()?;
-        let summary = ResultSummary {
-            rows: 0,
-            bytes: 0,
-            truncated_at: vec![reason],
-        };
-        self.inner
-            .manifest
-            .finish_call(call_id, &summary, &snapshot_ref)
-    }
-
     #[doc(hidden)]
     pub fn new_with_manifest_for_tests(
         policy: &gaze::Policy,
@@ -906,6 +902,22 @@ impl Session {
 }
 
 impl CleanOutput {
+    fn restore_gaze_tokens(&mut self, session: &gaze::Session) -> Result<(), LensError> {
+        match self {
+            CleanOutput::Rows { rows, .. } => {
+                for row in rows {
+                    for value in row.values_mut() {
+                        restore_gaze_tokens_in_value(session, value)?;
+                    }
+                }
+            }
+            CleanOutput::Text { text, .. } => {
+                *text = restore_gaze_tokens_in_string(session, text)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn summary(&self) -> ResultSummary {
         match self {
             CleanOutput::Rows { rows, truncated_at } => ResultSummary {
@@ -923,6 +935,48 @@ impl CleanOutput {
             },
         }
     }
+}
+
+fn restore_gaze_tokens_in_value(
+    session: &gaze::Session,
+    value: &mut serde_json::Value,
+) -> Result<(), LensError> {
+    match value {
+        serde_json::Value::String(text) => {
+            *text = restore_gaze_tokens_in_string(session, text)?;
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                restore_gaze_tokens_in_value(session, value)?;
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values_mut() {
+                restore_gaze_tokens_in_value(session, value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn restore_gaze_tokens_in_string(session: &gaze::Session, text: &str) -> Result<String, LensError> {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    for token in gaze::token_shape::pattern().find_iter(text) {
+        if !session.contains_token(token.as_str()) {
+            continue;
+        }
+        out.push_str(&text[cursor..token.start()]);
+        out.push_str(&session.restore_strict(token.as_str()).map_err(|err| {
+            LensError::RedactionFailed {
+                detail: err.to_string(),
+            }
+        })?);
+        cursor = token.end();
+    }
+    out.push_str(&text[cursor..]);
+    Ok(out)
 }
 
 fn insert_capped_cell(
@@ -1051,6 +1105,67 @@ fn generalize_column_value(class: &gaze::PiiClass) -> String {
         gaze::PiiClass::Location => "[LOCATION]".to_string(),
         gaze::PiiClass::Organization => "[ORGANIZATION]".to_string(),
         gaze::PiiClass::Custom(name) => format!("[{}]", name.to_ascii_uppercase()),
+    }
+}
+
+fn dispatch_error_to_lens_error(err: gaze_mcp_core::DispatchError) -> LensError {
+    match err {
+        gaze_mcp_core::DispatchError::ToolError(tool_err) => tool_error_to_lens_error(tool_err),
+        gaze_mcp_core::DispatchError::Redaction(detail) => LensError::RedactionFailed { detail },
+        gaze_mcp_core::DispatchError::UnknownTool(tool) => LensError::SourceError {
+            source_name: tool,
+            detail: "unknown source".to_string(),
+            sql: None,
+            stderr: None,
+        },
+        gaze_mcp_core::DispatchError::SessionId(err) => LensError::Profile {
+            detail: err.to_string(),
+        },
+        gaze_mcp_core::DispatchError::Auth(err) => LensError::Internal {
+            detail: err.to_string(),
+        },
+        gaze_mcp_core::DispatchError::Manifest(err) => manifest_error_to_lens_error(err),
+        gaze_mcp_core::DispatchError::ResponseSerialization(err) => LensError::Internal {
+            detail: err.to_string(),
+        },
+        _ => LensError::Internal {
+            detail: "unknown gaze-mcp-core dispatch error".to_string(),
+        },
+    }
+}
+
+fn tool_error_to_lens_error(err: gaze_mcp_core::ToolError) -> LensError {
+    match err {
+        gaze_mcp_core::ToolError::InvalidArgs(detail)
+        | gaze_mcp_core::ToolError::NotFound(detail) => LensError::Profile { detail },
+        gaze_mcp_core::ToolError::Internal(err) => boxed_error_to_lens_error(err),
+        _ => LensError::Internal {
+            detail: "unknown gaze-mcp-core tool error".to_string(),
+        },
+    }
+}
+
+fn manifest_error_to_lens_error(err: gaze_mcp_core::ManifestError) -> LensError {
+    match err {
+        gaze_mcp_core::ManifestError::Backend(err) => boxed_error_to_lens_error(err),
+        other => LensError::Internal {
+            detail: other.to_string(),
+        },
+    }
+}
+
+fn boxed_error_to_lens_error(err: Box<dyn std::error::Error + Send + Sync>) -> LensError {
+    match err.downcast::<LensError>() {
+        Ok(err) => *err,
+        Err(err) => LensError::Internal {
+            detail: err.to_string(),
+        },
+    }
+}
+
+fn tool_registry_error(err: gaze_mcp_core::ToolRegistryError) -> LensError {
+    LensError::Internal {
+        detail: err.to_string(),
     }
 }
 

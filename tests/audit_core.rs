@@ -21,7 +21,7 @@ fn policy(scope: gaze::SessionScope) -> gaze::Policy {
 fn call(args: serde_json::Value) -> ToolCall {
     ToolCall {
         call_id: ulid::Ulid::new().to_string(),
-        tool_name: "fake".to_string(),
+        tool_name: "query".to_string(),
         args: ToolArgs(args),
     }
 }
@@ -152,7 +152,7 @@ async fn begin_happens_before_source_access() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: events.clone(),
             rows: vec![row_with_email("alice@example.com")],
@@ -187,7 +187,7 @@ async fn begin_failure_prevents_source_access() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: events.clone(),
             rows: vec![row_with_email("alice@example.com")],
@@ -220,7 +220,7 @@ async fn finish_failure_returns_error_without_tool_result() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: events.clone(),
             rows: vec![row_with_email("alice@example.com")],
@@ -251,7 +251,7 @@ async fn raw_args_are_redacted_before_manifest_write() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: Arc::new(Mutex::new(Vec::new())),
             rows: vec![row_with_email("bob@example.com")],
@@ -312,7 +312,7 @@ async fn output_caps_truncate_rows_and_manifest_summary_records_it() {
         .map(|index| row_with_email(&format!("user{index}@example.com")))
         .collect::<Vec<_>>();
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: Arc::new(Mutex::new(Vec::new())),
             rows,
@@ -362,7 +362,7 @@ async fn output_caps_truncate_total_bytes_and_manifest_summary_records_it() {
         })
         .collect::<Vec<_>>();
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: Arc::new(Mutex::new(Vec::new())),
             rows,
@@ -403,7 +403,7 @@ async fn output_caps_replace_large_cells_and_manifest_summary_records_it() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: Arc::new(Mutex::new(Vec::new())),
             rows: vec![BTreeMap::from([(
@@ -447,7 +447,7 @@ async fn output_caps_truncate_text_bytes_and_manifest_summary_records_it() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(TextSource {
             text: "x".repeat(500),
         }),
@@ -487,7 +487,7 @@ async fn source_text_byte_truncation_is_recorded_in_manifest_summary() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(TruncatedTextSource {
             text: "x".repeat(100),
             truncated_at: vec![TruncatedAt::Bytes],
@@ -527,7 +527,7 @@ async fn output_caps_timeout_records_manifest_without_raw_values() {
         },
     )
     .expect("session");
-    session.register_fake_source("fake", Box::new(SlowSource));
+    session.register_fake_source("query", Box::new(SlowSource));
 
     let err = session
         .dispatch_tool(call(serde_json::json!({"email": "arg@example.com"})))
@@ -561,7 +561,7 @@ async fn dispatch_with_nested_json_args_redacted() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: Arc::new(Mutex::new(Vec::new())),
             rows: vec![row_with_email("bob@example.com")],
@@ -596,7 +596,7 @@ async fn dispatch_with_bytes_preserves_base64_metadata() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: Arc::new(Mutex::new(Vec::new())),
             rows: vec![BTreeMap::from([(
@@ -639,7 +639,7 @@ async fn snapshot_file_and_dir_permissions_are_private() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(RecordingSource {
             events: Arc::new(Mutex::new(Vec::new())),
             rows: vec![row_with_email("alice@example.com")],

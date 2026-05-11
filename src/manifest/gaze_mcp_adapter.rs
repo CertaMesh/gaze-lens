@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use gaze_mcp_core::manifest::{
@@ -8,34 +9,37 @@ use gaze_mcp_core::manifest::{
 
 use crate::errors::LensError;
 use crate::session::manifest::LensManifestStore;
-use crate::session::{RedactedToolArgs, ResultSummary, ToolCall, persist_snapshot};
+use crate::session::{RedactedToolArgs, ResultSummary, ToolCall, TruncatedAt, persist_snapshot};
 use crate::source::ToolArgs;
 
-pub struct GazeMcpManifestAdapter {
+pub struct GazeMcpManifestAdapter<'a> {
     inner: Arc<dyn LensManifestStore>,
     snapshot_dir: PathBuf,
     lens_session_id: ulid::Ulid,
-    gaze_session: Arc<gaze::Session>,
+    summaries: Arc<Mutex<HashMap<String, ResultSummary>>>,
+    gaze_session: &'a gaze::Session,
 }
 
-impl GazeMcpManifestAdapter {
+impl<'a> GazeMcpManifestAdapter<'a> {
     pub fn new(
         inner: Arc<dyn LensManifestStore>,
         snapshot_dir: impl AsRef<Path>,
         lens_session_id: ulid::Ulid,
-        gaze_session: Arc<gaze::Session>,
+        gaze_session: &'a gaze::Session,
+        summaries: Arc<Mutex<HashMap<String, ResultSummary>>>,
     ) -> Self {
         Self {
             inner,
             snapshot_dir: snapshot_dir.as_ref().to_path_buf(),
             lens_session_id,
+            summaries,
             gaze_session,
         }
     }
 }
 
 #[async_trait]
-impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter {
+impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter<'_> {
     async fn begin_call(&self, ctx: BeginCallContext<'_>) -> Result<CallHandle, ManifestError> {
         let call = ToolCall {
             call_id: ctx.call_id.to_string(),
@@ -57,17 +61,19 @@ impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter {
         handle: CallHandle,
         snapshot: CoreSnapshotRef,
     ) -> Result<(), ManifestError> {
-        let snapshot_ref = persist_snapshot(
-            &self.snapshot_dir,
-            self.lens_session_id,
-            self.gaze_session.as_ref(),
-        )
-        .map_err(ManifestError::backend)?;
-        let summary = ResultSummary {
-            rows: 0,
-            bytes: snapshot.byte_len,
-            truncated_at: Vec::new(),
-        };
+        let snapshot_ref =
+            persist_snapshot(&self.snapshot_dir, self.lens_session_id, self.gaze_session)
+                .map_err(ManifestError::backend)?;
+        let summary = self
+            .summaries
+            .lock()
+            .expect("core summary map lock")
+            .remove(&handle.id().to_string())
+            .unwrap_or(ResultSummary {
+                rows: 0,
+                bytes: snapshot.byte_len,
+                truncated_at: Vec::new(),
+            });
         self.inner
             .finish_call(&handle.id().to_string(), &summary, &snapshot_ref)
             .map_err(ManifestError::backend)
@@ -78,10 +84,35 @@ impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter {
         handle: CallHandle,
         reason: FailureReason,
     ) -> Result<(), ManifestError> {
+        if is_timeout_failure(&reason) {
+            let snapshot_ref =
+                persist_snapshot(&self.snapshot_dir, self.lens_session_id, self.gaze_session)
+                    .map_err(ManifestError::backend)?;
+            let summary = ResultSummary {
+                rows: 0,
+                bytes: 0,
+                truncated_at: vec![TruncatedAt::Timeout],
+            };
+            return self
+                .inner
+                .finish_call(&handle.id().to_string(), &summary, &snapshot_ref)
+                .map_err(ManifestError::backend);
+        }
         let err = lens_error_from_failure(reason);
+        self.summaries
+            .lock()
+            .expect("core summary map lock")
+            .remove(&handle.id().to_string());
         self.inner
             .fail_call(&handle.id().to_string(), &err)
             .map_err(ManifestError::backend)
+    }
+}
+
+fn is_timeout_failure(reason: &FailureReason) -> bool {
+    match reason {
+        FailureReason::ToolError { message, .. } => message.contains("output truncated at Timeout"),
+        _ => false,
     }
 }
 
@@ -122,10 +153,9 @@ mod tests {
         let manifest_path = temp.path().join("manifest.sqlite");
         let snapshot_dir = temp.path().join("snapshots");
         let lens_session_id = ulid::Ulid::new();
-        let gaze_session = Arc::new(
+        let gaze_session =
             gaze::Session::new(gaze::Scope::Conversation(lens_session_id.to_string()))
-                .expect("gaze session"),
-        );
+                .expect("gaze session");
         let writer = ManifestWriter::new(
             &manifest_path,
             lens_session_id,
@@ -136,7 +166,8 @@ mod tests {
             Arc::new(writer),
             &snapshot_dir,
             lens_session_id,
-            gaze_session,
+            &gaze_session,
+            Arc::new(Mutex::new(HashMap::new())),
         );
         let pipeline = gaze::Pipeline::builder()
             .rule(gaze::DefaultRule::new(gaze::Action::Preserve))
@@ -151,7 +182,7 @@ mod tests {
             &auth,
             &adapter,
             &pipeline,
-            adapter.gaze_session.as_ref(),
+            &gaze_session,
             &[],
             &session_id_policy,
         );

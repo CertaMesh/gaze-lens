@@ -46,7 +46,7 @@ async fn session_constructs_and_dispatches_without_frontend() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(DirectSource {
             calls: calls.clone(),
         }),
@@ -55,7 +55,7 @@ async fn session_constructs_and_dispatches_without_frontend() {
     session
         .dispatch_tool(ToolCall {
             call_id: ulid::Ulid::new().to_string(),
-            tool_name: "fake".to_string(),
+            tool_name: "query".to_string(),
             args: ToolArgs(serde_json::json!({"email": "alice@example.com"})),
         })
         .await
@@ -75,7 +75,7 @@ async fn dropping_frontend_handle_does_not_drop_session_state() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(DirectSource {
             calls: calls.clone(),
         }),
@@ -86,7 +86,7 @@ async fn dropping_frontend_handle_does_not_drop_session_state() {
     session
         .dispatch_tool(ToolCall {
             call_id: ulid::Ulid::new().to_string(),
-            tool_name: "fake".to_string(),
+            tool_name: "query".to_string(),
             args: ToolArgs(serde_json::json!({"email": "alice@example.com"})),
         })
         .await
