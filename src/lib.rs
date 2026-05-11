@@ -2,6 +2,7 @@ pub mod cli;
 pub mod errors;
 pub mod frontend;
 pub mod manifest;
+pub mod mcp;
 pub mod policy;
 pub mod profile;
 pub mod session;

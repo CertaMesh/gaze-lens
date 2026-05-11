@@ -365,6 +365,33 @@ impl Session {
         })
     }
 
+    pub(crate) async fn invoke_core_tool(
+        &self,
+        tool_name: &str,
+        call_id: ulid::Ulid,
+        args: serde_json::Value,
+    ) -> Result<CleanOutput, LensError> {
+        let mut call = ToolCall {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            args: ToolArgs(args),
+        };
+        let profile_name = self.extract_profile(&mut call)?;
+        let pipeline = self.pipeline_for(&profile_name)?;
+        let column_actions = self.column_actions_for(&profile_name)?;
+        let raw_result = tokio::time::timeout(
+            self.inner.caps.timeout,
+            self.invoke_source(&call, &profile_name),
+        )
+        .await
+        .map_err(|_| LensError::Truncated(TruncatedAt::Timeout))??;
+        tokio::time::timeout(self.inner.caps.timeout, async {
+            self.redact_result(raw_result, &pipeline, &column_actions)
+        })
+        .await
+        .map_err(|_| LensError::Truncated(TruncatedAt::Timeout))?
+    }
+
     pub fn register_source(&self, name: impl Into<String>, source: Arc<dyn Source>) {
         self.inner
             .legacy_sources
