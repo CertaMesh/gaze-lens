@@ -613,6 +613,9 @@ impl Session {
             CleanDocument::Structured(_) => Err(LensError::RedactionFailed {
                 detail: "text args produced structured output".to_string(),
             }),
+            _ => Err(LensError::RedactionFailed {
+                detail: "text args produced unsupported output".to_string(),
+            }),
         }
     }
 
@@ -741,6 +744,11 @@ impl Session {
                         detail: "structured rows produced text output".to_string(),
                     });
                 }
+                _ => {
+                    return Err(LensError::RedactionFailed {
+                        detail: "structured rows produced unsupported output".to_string(),
+                    });
+                }
             };
             let mut out = serde_json::Map::new();
             for (key, value) in redacted_row {
@@ -804,6 +812,9 @@ impl Session {
             CleanDocument::Text(text) => Ok(CleanOutput::Text { text, truncated_at }),
             CleanDocument::Structured(_) => Err(LensError::RedactionFailed {
                 detail: "text output produced structured output".to_string(),
+            }),
+            _ => Err(LensError::RedactionFailed {
+                detail: "text output produced unsupported output".to_string(),
             }),
         }
     }
@@ -998,6 +1009,11 @@ fn apply_action_to_text(
             })?,
         Action::Generalize => generalize_column_value(&column_action.class),
         Action::Preserve => text.to_string(),
+        _ => {
+            return Err(LensError::RedactionFailed {
+                detail: "unsupported column action".to_string(),
+            });
+        }
     })
 }
 

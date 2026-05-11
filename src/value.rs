@@ -122,6 +122,9 @@ fn redact_text(
         CleanDocument::Structured(_) => Err(LensError::RedactionFailed {
             detail: "text value produced structured output".to_string(),
         }),
+        _ => Err(LensError::RedactionFailed {
+            detail: "text value produced unsupported output".to_string(),
+        }),
     }
 }
 
@@ -133,9 +136,8 @@ fn redact_text(
 /// produce structured output that bypasses redaction; if it does, that's a
 /// bug we want to fail loudly on rather than silently flatten.
 ///
-/// NOTE: This match is the exhaustiveness pin for `gaze::Value`. Any new
-/// variant added upstream must be handled explicitly here; there is no
-/// wildcard arm.
+/// NOTE: `gaze::Value` is non-exhaustive upstream. Unknown future variants
+/// must fail closed rather than flattening into the manifest.
 pub fn gaze_value_to_json(value: &gaze::Value) -> Result<serde_json::Value, LensError> {
     match value {
         gaze::Value::Null => Ok(serde_json::Value::Null),
@@ -145,6 +147,9 @@ pub fn gaze_value_to_json(value: &gaze::Value) -> Result<serde_json::Value, Lens
         gaze::Value::Array(_) | gaze::Value::Object(_) => Err(LensError::RedactionFailed {
             detail: "gaze::Value composite shape (Array/Object) not supported in manifest"
                 .to_string(),
+        }),
+        _ => Err(LensError::RedactionFailed {
+            detail: "gaze::Value unsupported shape not supported in manifest".to_string(),
         }),
     }
 }

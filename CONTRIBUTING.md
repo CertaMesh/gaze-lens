@@ -30,21 +30,22 @@ Do not bypass for shared branches or tags; the hook exists to keep main and rele
 
 ## Gaze dependency pin
 
-`Cargo.toml` pins `gaze` and `gaze-recognizers` to an `EmpireTwo/gaze` Git tag with a matching crate version, e.g. `tag = "v0.6.4"` + `version = "0.6.4"`. Do not silently float to an arbitrary Gaze checkout. When adopting new Gaze features, bump both `tag` and `version` together in `Cargo.toml`, run `cargo update -p gaze -p gaze-recognizers` so `Cargo.lock` records the resolved sha, and bump the gaze-lens patch version in the same PR.
+`Cargo.toml` pins `gaze` to crates.io `gaze-pii` through Cargo's `package = "gaze-pii"` alias, plus `gaze-recognizers` and `gaze-mcp-core` from crates.io. Do not silently float these dependencies. When adopting new Gaze features, bump the crates.io versions together in `Cargo.toml`, run `cargo update -p gaze-pii -p gaze-recognizers -p gaze-mcp-core`, and bump the gaze-lens version in the same PR.
 
 During an in-flight v0.x.y release cycle, Gaze dependency bumps inside that cycle do not require an immediate gaze-lens patch version bump; the release cut rolls up the Gaze bump with the rest of the cycle's changes. For patches to an already-shipped release line, bump the gaze-lens patch version in the same PR as the Gaze dependency change.
 
 Local development can use a local Gaze checkout through a per-developer Cargo patch. Add this to `~/.cargo/config.toml` and do not commit it:
 
 ```toml
-[patch."https://github.com/EmpireTwo/gaze.git"]
-gaze = { path = "/abs/path/to/Gaze/crates/gaze" }
+[patch.crates-io]
+gaze-pii = { path = "/abs/path/to/Gaze/crates/gaze" }
 gaze-recognizers = { path = "/abs/path/to/Gaze/crates/gaze-recognizers" }
+gaze-mcp-core = { path = "/abs/path/to/Gaze/crates/gaze-mcp-core" }
 ```
 
 ### Regenerating Cargo.lock for committable state
 
-Before running `cargo update -p gaze -p gaze-recognizers` for a commit, temporarily disable any `[patch."https://github.com/EmpireTwo/gaze.git"]` block in `~/.cargo/config.toml` by commenting it out. After the update, verify the `Cargo.lock` entries for `gaze` and `gaze-recognizers` include `source = "git+https://github.com/EmpireTwo/gaze.git?tag=vX.Y.Z#<sha>"` instead of a path-based resolution. Re-enable the `[patch]` block after committing for local development.
+Before running `cargo update -p gaze-pii -p gaze-recognizers -p gaze-mcp-core` for a commit, temporarily disable any local `[patch.crates-io]` block in `~/.cargo/config.toml` by commenting it out. After the update, verify the `Cargo.lock` entries for `gaze-pii`, `gaze-recognizers`, and `gaze-mcp-core` resolve from crates.io instead of a path-based resolution. Re-enable the `[patch]` block after committing for local development.
 
 An optional future hardening step is a CI guard that rejects committable lockfiles with path-based Gaze resolutions.
 
@@ -59,7 +60,7 @@ Releases are tag-driven through [cargo-dist](https://opensource.axo.dev/cargo-di
 
 The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured archives, generates installers, and uploads everything to the GitHub release for that tag. The near-term binary target is Apple Silicon macOS (`aarch64-apple-darwin`) only. Intel macOS, Linux, and Windows remain future binary targets until the Gaze recognizer backend can build and run without the native ONNX Runtime distribution blocker.
 
-The release workflow assumes `EmpireTwo/gaze` is publicly readable. When changing the required Gaze revision, bump the `tag = "..."` + `version = "..."` pair in `Cargo.toml`, refresh `Cargo.lock`, bump the patch version, and call out the Gaze tag in the release PR description.
+The release workflow uses public crates.io Gaze packages. When changing the required Gaze revision, bump the dependency versions in `Cargo.toml`, refresh `Cargo.lock`, bump the package version, and call out the crates.io versions in the release PR description.
 
 ## sqlx macro policy (banned for production-source queries)
 

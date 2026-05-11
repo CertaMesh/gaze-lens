@@ -12,21 +12,10 @@ use gaze_lens::value::{LensRow, LensValue};
 use rusqlite::Connection;
 
 fn policy(scope: gaze::SessionScope) -> gaze::Policy {
-    gaze::Policy {
-        session: gaze::SessionPolicy {
-            scope,
-            ttl_secs: None,
-        },
-        detectors: Vec::new(),
-        dictionaries: Vec::new(),
-        rules: Vec::new(),
-        ner: None,
-        rulepacks: gaze::RulepackPolicy {
-            bundled: vec!["core".to_string()],
-            paths: Vec::new(),
-        },
-        locale: None,
-    }
+    let mut policy = gaze::Policy::default();
+    policy.session.scope = scope;
+    policy.rulepacks.bundled = vec!["core".to_string()];
+    policy
 }
 
 fn call(args: serde_json::Value) -> ToolCall {
