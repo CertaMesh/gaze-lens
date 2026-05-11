@@ -24,7 +24,7 @@ pub mod maintenance;
 pub mod manifest;
 pub mod restore;
 
-use manifest::{ManifestStore, ManifestWriter, SnapshotRef};
+use manifest::{LensManifestStore, ManifestWriter, SnapshotRef};
 
 #[derive(Clone)]
 pub struct Session {
@@ -36,7 +36,7 @@ struct SessionInner {
     gaze_session: gaze::Session,
     pipeline_mode: Mutex<PipelineMode>,
     column_action_mode: Mutex<ColumnActionMode>,
-    manifest: Arc<dyn ManifestStore>,
+    manifest: Arc<dyn LensManifestStore>,
     snapshot_dir: PathBuf,
     sources: Mutex<HashMap<(SourceClass, String), Arc<LazySource>>>,
     legacy_sources: Mutex<HashMap<String, Arc<dyn Source>>>,
@@ -284,7 +284,7 @@ impl Session {
         gaze_session: gaze::Session,
         pipeline_mode: PipelineMode,
         column_action_mode: ColumnActionMode,
-        manifest: Arc<dyn ManifestStore>,
+        manifest: Arc<dyn LensManifestStore>,
         snapshot_dir: PathBuf,
         caps: OutputCaps,
     ) -> Self {
@@ -854,7 +854,7 @@ impl Session {
     #[doc(hidden)]
     pub fn new_with_manifest_for_tests(
         policy: &gaze::Policy,
-        manifest: Arc<dyn ManifestStore>,
+        manifest: Arc<dyn LensManifestStore>,
         snapshot_dir: &Path,
         caps: OutputCaps,
     ) -> Result<Self, LensError> {
@@ -1042,7 +1042,7 @@ fn default_pipeline() -> Result<gaze::Pipeline, LensError> {
         })
 }
 
-fn persist_snapshot(
+pub(crate) fn persist_snapshot(
     snapshot_dir: &Path,
     lens_session_id: ulid::Ulid,
     gaze_session: &gaze::Session,

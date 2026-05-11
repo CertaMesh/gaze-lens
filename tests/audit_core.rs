@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use gaze_lens::errors::LensError;
-use gaze_lens::session::manifest::{ManifestStore, ManifestWriter, SnapshotRef};
+use gaze_lens::session::manifest::{LensManifestStore, ManifestWriter, SnapshotRef};
 use gaze_lens::session::{
     CleanOutput, OutputCaps, RedactedToolArgs, ResultSummary, Session, ToolCall, TruncatedAt,
 };
@@ -36,7 +36,7 @@ struct RecordingManifest {
     fail_finish: bool,
 }
 
-impl ManifestStore for RecordingManifest {
+impl LensManifestStore for RecordingManifest {
     fn begin_call(
         &self,
         call: &ToolCall,

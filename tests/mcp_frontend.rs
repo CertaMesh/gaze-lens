@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use gaze_lens::frontend::mcp::McpFrontend;
-use gaze_lens::session::manifest::{ManifestStore, SnapshotRef};
+use gaze_lens::session::manifest::{LensManifestStore, SnapshotRef};
 use gaze_lens::session::{OutputCaps, RedactedToolArgs, ResultSummary, Session, ToolCall};
 use gaze_lens::source::{FakeSource, InMemoryFakeSource, SourceOutput, ToolArgs};
 use gaze_lens::value::LensValue;
@@ -15,7 +15,7 @@ fn policy() -> gaze::Policy {
     policy
 }
 
-fn session_with_manifest(manifest: Arc<dyn ManifestStore>) -> Session {
+fn session_with_manifest(manifest: Arc<dyn LensManifestStore>) -> Session {
     let temp = tempfile::tempdir().expect("tempdir");
     let snapshot_dir = temp.path().to_path_buf();
     let session = Session::new_with_manifest_for_tests(
@@ -271,7 +271,7 @@ fn text_output(result: &serde_json::Value) -> String {
         .to_string()
 }
 
-impl ManifestStore for RecordingManifest {
+impl LensManifestStore for RecordingManifest {
     fn begin_call(
         &self,
         _call: &ToolCall,

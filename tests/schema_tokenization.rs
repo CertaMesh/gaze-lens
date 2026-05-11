@@ -159,7 +159,7 @@ impl DbSource for SensitiveSchemaSource {
     }
 }
 
-impl gaze_lens::session::manifest::ManifestStore for NoopManifest {
+impl gaze_lens::session::manifest::LensManifestStore for NoopManifest {
     fn begin_call(
         &self,
         _call: &gaze_lens::session::ToolCall,
