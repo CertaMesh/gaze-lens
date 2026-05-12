@@ -37,7 +37,7 @@ Notes vs original spine sketch:
 - `value.rs` holds `LensValue` and the typed row plumbing introduced in PR1.
 - `source/db/{query.rs,schema.rs}` split the canned-query AST and schema presentation helpers out of the per-engine adapters (PR2a/PR3). `schema`/`list_tables` present raw labels by default; `schema_tokenize = true` enables legacy tokenized presentation with allowlist exceptions.
 - `bin/replay-fixture.rs` is a small helper binary used by cross-process replay tests.
-- `cli/demo.rs` (added in v0.2.0) provides the `gaze-lens demo` inline-replay subcommand: it builds a tempdir manifest + snapshot dir, dispatches a canned in-memory query through the same `Session::dispatch_tool` chokepoint as `query`/`serve`, then calls `gaze::Session::import` against the just-written snapshot to restore the tokenized result in the same process. No persistent state is touched.
+- `cli/demo.rs` (added in v0.2.0) provides the `gaze-lens demo` inline-replay subcommand: it builds a tempdir manifest + snapshot dir, dispatches a canned in-memory query through the same `Session::dispatch_tool` entry as `query`/`serve` (which v0.3.0 reroutes onto `gaze_mcp_core::PiiEnvelope::dispatch`), then calls `gaze::Session::import` against the just-written snapshot to restore the tokenized result in the same process. No persistent state is touched.
 
 ## Core traits (v1)
 
@@ -72,13 +72,14 @@ From plan rev 2 §4 PR1 acceptance.
 
 - `Session` owns one shared `gaze::Session`, a per-profile `gaze::Pipeline` registry, a source map keyed by `(SourceClass, profile_name) -> Arc<LazySource>`, and `ManifestWriter`.
 - Session is **decoupled from MCP stdio** — constructible without any frontend.
-- `dispatch_tool(call)` flow:
+- `dispatch_tool(call)` flow (v0.3.0+ delegates the redact/manifest sequencing to `gaze_mcp_core::PiiEnvelope`; the lens-layer responsibilities are profile routing and `ManifestStore` adaptation):
   0. Extract `profile` from `call.args` raw (mode-aware: required in MultiProfile, defaults to configured name in SingleProfile); resolve `(tool_kind(tool), profile) -> Arc<LazySource>`; resolve `profile -> Arc<gaze::Pipeline>`.
-  1. `manifest.begin_call(&call)` — fail-closed.
-  2. Adapter returns raw values/text.
-  3. `Pipeline::redact(&gaze_session, RawDocument::*)` produces clean output and `SqliteLogger` metadata.
-  4. `manifest.finish_call(...)` stores tokenized args, status, result summary, snapshot reference.
-  5. If begin/finish fails, no raw output is returned.
+  1. Build a `PiiEnvelope` over the per-profile pipeline, `LensAuthHook`, and `GazeMcpManifestAdapter` (which wraps the `LensManifestStore` over `~/.gaze-lens/manifest.sqlite`).
+  2. `envelope.dispatch(...)` calls `manifest.begin_call(...)` — fail-closed.
+  3. The matching `Tool::invoke` runs through a sealed `ToolCtx`; the adapter returns raw values/text into the envelope.
+  4. `Pipeline::redact(&gaze_session, RawDocument::*)` produces clean output and `SqliteLogger` metadata before the envelope returns.
+  5. `manifest.finish_call(...)` stores tokenized args, status, result summary, snapshot reference.
+  6. If begin/finish fails, no raw output is returned. The sealed `ToolCtx` parameter makes a "raw output escapes without redaction" path a type error rather than a runtime check.
 
 ### Multi-profile session map
 
