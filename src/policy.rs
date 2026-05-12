@@ -158,21 +158,11 @@ impl PolicyFile {
                 scope: self.session.scope.clone(),
             });
         };
-        Ok(gaze::Policy {
-            session: gaze::SessionPolicy {
-                scope,
-                ttl_secs: self.session.ttl_secs,
-            },
-            detectors: Vec::new(),
-            dictionaries: Vec::new(),
-            rules: Vec::new(),
-            ner: None,
-            rulepacks: gaze::RulepackPolicy {
-                bundled: vec!["core".to_string()],
-                paths: Vec::new(),
-            },
-            locale: None,
-        })
+        let mut policy = gaze::Policy::default();
+        policy.session.scope = scope;
+        policy.session.ttl_secs = self.session.ttl_secs;
+        policy.rulepacks.bundled = vec!["core".to_string()];
+        Ok(policy)
     }
 }
 

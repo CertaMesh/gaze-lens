@@ -45,7 +45,7 @@ cargo build --release
 ./target/release/gaze-lens demo
 ```
 
-The `gaze` and `gaze-recognizers` crates are wired as git dependencies pinned to an `EmpireTwo/gaze` tag (currently `v0.6.4`). See [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin) for the pin policy and the local-checkout patch recipe.
+The `gaze`, `gaze-recognizers`, and `gaze-mcp-core` crates are wired from crates.io. `gaze` aliases the published `gaze-pii` package so existing imports stay stable. See [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin) for the pin policy and the local-checkout patch recipe.
 
 `gaze-lens` builds with stable Rust 1.89+.
 

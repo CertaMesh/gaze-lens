@@ -13,7 +13,7 @@ pub struct SnapshotRef {
     pub path: PathBuf,
 }
 
-pub trait ManifestStore: Send + Sync {
+pub trait LensManifestStore: Send + Sync {
     fn begin_call(
         &self,
         call: &ToolCall,
@@ -84,7 +84,7 @@ impl ManifestWriter {
     }
 }
 
-impl ManifestStore for ManifestWriter {
+impl LensManifestStore for ManifestWriter {
     fn begin_call(
         &self,
         call: &ToolCall,

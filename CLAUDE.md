@@ -58,7 +58,7 @@ cargo run -- serve --profile dev    # MCP stdio server, dev restrict-list
 
 Local pre-push gate runs `fmt --check` + `clippy -D warnings` + `test --all-targets`. See [CONTRIBUTING.md §Local pre-push hook](./CONTRIBUTING.md#local-pre-push-hook).
 
-`gaze` and `gaze-recognizers` are git deps from `https://github.com/EmpireTwo/gaze.git`, pinned with `tag = "v0.6.4"` + `version = "0.6.4"`. Local development can patch them to a checkout via `[patch."..."]` in `~/.cargo/config.toml` — see [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin).
+`gaze`, `gaze-recognizers`, and `gaze-mcp-core` are crates.io deps. `gaze` aliases the `gaze-pii` package with `package = "gaze-pii"` so existing `use gaze::*` sites keep working. Local development can patch them to a checkout via `[patch.crates-io]` in `~/.cargo/config.toml` — see [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin).
 
 Detailed Rust conventions auto-load from `.claude/rules/rust.md` when editing `*.rs` files (paths-frontmatter; no `@import` needed).
 

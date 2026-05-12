@@ -307,19 +307,8 @@ fn assert_column(schema: &TableSchema, name: &str, data_type: &str, nullable: bo
 }
 
 fn policy() -> gaze::Policy {
-    gaze::Policy {
-        session: gaze::SessionPolicy {
-            scope: gaze::SessionScope::Conversation,
-            ttl_secs: None,
-        },
-        detectors: Vec::new(),
-        dictionaries: Vec::new(),
-        rules: Vec::new(),
-        ner: None,
-        rulepacks: gaze::RulepackPolicy {
-            bundled: vec!["core".to_string()],
-            paths: Vec::new(),
-        },
-        locale: None,
-    }
+    let mut policy = gaze::Policy::default();
+    policy.session.scope = gaze::SessionScope::Conversation;
+    policy.rulepacks.bundled = vec!["core".to_string()];
+    policy
 }

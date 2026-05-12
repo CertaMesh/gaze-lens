@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.0] — 2026-05-11
+
+### Changed
+- Internal MCP dispatch now routes through `gaze_mcp_core::PiiEnvelope::dispatch`
+  while keeping the locked 5-tool MCP surface unchanged: `query`, `schema`,
+  `list_tables`, `log_tail`, and `log_grep`.
+- Switched Gaze runtime dependencies from the private git tag to crates.io:
+  `gaze = { package = "gaze-pii", version = "0.7.0" }`,
+  `gaze-recognizers = "0.7.0"`, and `gaze-mcp-core = "0.7.0"`.
+  The package alias keeps existing `use gaze::*` imports stable.
+- Adopted the Gaze v0.7.0 redaction wave, including validator veto,
+  anchored context, and ambiguity side-channel support in the shared
+  redaction path.
+
+### Added
+- A chokepoint regression test pins the envelope ordering: manifest begin
+  happens before source access, tool output is redacted, and manifest finish
+  records the completed call row and snapshot reference.
+
+### Removed
+- Private Gaze git dependency setup is no longer required. `cargo install
+  gaze-lens` can resolve all Gaze crates from crates.io without a repository
+  token.
+
 ## [0.2.5] — 2026-05-08
 
 ### Fixed

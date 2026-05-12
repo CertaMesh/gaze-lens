@@ -8,21 +8,10 @@ use gaze_lens::source::{FakeSource, SourceOutput, ToolArgs};
 use gaze_lens::value::LensValue;
 
 fn policy() -> gaze::Policy {
-    gaze::Policy {
-        session: gaze::SessionPolicy {
-            scope: gaze::SessionScope::Conversation,
-            ttl_secs: None,
-        },
-        detectors: Vec::new(),
-        dictionaries: Vec::new(),
-        rules: Vec::new(),
-        ner: None,
-        rulepacks: gaze::RulepackPolicy {
-            bundled: vec!["core".to_string()],
-            paths: Vec::new(),
-        },
-        locale: None,
-    }
+    let mut policy = gaze::Policy::default();
+    policy.session.scope = gaze::SessionScope::Conversation;
+    policy.rulepacks.bundled = vec!["core".to_string()];
+    policy
 }
 
 struct FrontendHandle;
@@ -57,7 +46,7 @@ async fn session_constructs_and_dispatches_without_frontend() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(DirectSource {
             calls: calls.clone(),
         }),
@@ -66,7 +55,7 @@ async fn session_constructs_and_dispatches_without_frontend() {
     session
         .dispatch_tool(ToolCall {
             call_id: ulid::Ulid::new().to_string(),
-            tool_name: "fake".to_string(),
+            tool_name: "query".to_string(),
             args: ToolArgs(serde_json::json!({"email": "alice@example.com"})),
         })
         .await
@@ -86,7 +75,7 @@ async fn dropping_frontend_handle_does_not_drop_session_state() {
     )
     .expect("session");
     session.register_fake_source(
-        "fake",
+        "query",
         Box::new(DirectSource {
             calls: calls.clone(),
         }),
@@ -97,7 +86,7 @@ async fn dropping_frontend_handle_does_not_drop_session_state() {
     session
         .dispatch_tool(ToolCall {
             call_id: ulid::Ulid::new().to_string(),
-            tool_name: "fake".to_string(),
+            tool_name: "query".to_string(),
             args: ToolArgs(serde_json::json!({"email": "alice@example.com"})),
         })
         .await
