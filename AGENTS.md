@@ -16,7 +16,7 @@ The product surface is exactly:
 ## Non-negotiables
 
 - **No raw SQL.** v1 accepts canned structured queries only (`{table, columns?, where?, order_by?, limit?}`). Raw SQL behind opt-in profile flag is a v1.x candidate; do not introduce it as part of v1 work.
-- **All retrievals route through `Session::dispatch_tool`** in `src/session/mod.rs`. That call wraps every adapter result in `gaze::Pipeline::redact` before the manifest is written or output is returned. New sources must dispatch through the same path; do not let raw values bypass redaction into the manifest, tracing, or error formatting.
+- **All retrievals route through the gaze-mcp-core chokepoint.** `Session::dispatch_tool` in `src/session/mod.rs` is the Lens-layer entry point; it constructs a `gaze_mcp_core::PiiEnvelope` and calls `envelope.dispatch(...)`. The envelope enforces redact→manifest→return ordering at the type level via the sealed `ToolCtx` parameter every `Tool::invoke` receives — adapters cannot return raw output to the agent without going through `gaze::Pipeline::redact` and the `ManifestStore`. New sources register a `Tool` impl in `Session::core_tool_registry` and dispatch through the same envelope; do not let raw values bypass redaction into the manifest, tracing, or error formatting.
 - **Snapshot files require disk encryption.** `~/.gaze-lens/snapshots/` holds raw token mappings as `0600` files in a `0700` directory. v1 does not implement per-snapshot encryption-at-rest. The threat model assumes operators run FileVault / LUKS. Do not weaken that assumption without a SPEC update.
 - **No `sqlx::query!` / `query_as!` macros for production-source adapters.** See [CONTRIBUTING.md §sqlx macro policy](./CONTRIBUTING.md#sqlx-macro-policy-banned-for-production-source-queries).
 - **SSH command construction never uses interpolated strings.** Always use the `ssh -- <host> <command> -- <quoted_path>` form with validated host arguments. Reject `-`-prefixed hosts.
@@ -62,7 +62,10 @@ The big picture: an AI agent calls one of 5 MCP tools over stdio. `gaze-lens` re
 ```
 agent → rmcp stdio → frontend::mcp::McpFrontend
                           ↓
-                Session::dispatch_tool  ◄── single chokepoint
+                Session::dispatch_tool
+                          ↓
+       gaze_mcp_core::PiiEnvelope::dispatch  ◄── type-level chokepoint
+       (sealed ToolCtx enforces redact + manifest ordering)
                           ↓
    ┌──────────────────────┼──────────────────────┐
    ↓                      ↓                      ↓
@@ -75,14 +78,15 @@ DbSource           LogSource (SSH)        SchemaTokenizer
                           ↓
    ┌──────────────────────┼──────────────────────┐
    ↓                                              ↓
-ManifestWriter (SQLite)              tokenized result → agent
+GazeMcpManifestAdapter →             tokenized result → agent
+LensManifestStore (SQLite)
    ↓
 SensitiveSnapshot (out-of-row 0600 file)
    ↓
 gaze-lens replay <session_ulid> → gaze::Session::import → original values
 ```
 
-**Key invariant:** the CLI `query` command and the MCP `query` tool both route through `Session::dispatch_tool` — they share the same redaction + manifest path. Do not introduce a parallel direct-to-source code path.
+**Key invariant:** the CLI `query` command and the MCP `query` tool both route through `Session::dispatch_tool`, which builds the same `PiiEnvelope` from gaze-mcp-core — they share the redaction + manifest path. The envelope's sealed `ToolCtx` makes "raw adapter output reaching the agent without redaction" a compile-time error, not a runtime guard. Do not introduce a parallel direct-to-source code path.
 
 **Source/Frontend split** is a pluggable spine — see `src/source/mod.rs` for the unified `Source` trait. v1 adapters: `db/{mysql,postgres,sqlite}.rs`, `log/ssh_log.rs`. Future v1.x adapters drop in additively without rewriting session/audit/restore.
 
@@ -96,10 +100,10 @@ For full architectural detail, file-by-file mining verdicts, and the 16 locked d
 
 - [SPEC.md](./SPEC.md) — locked product spec, threat model, anti-features, v1.x / v2 roadmap.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — implementer spine, core traits, session/manifest flow, file-by-file mining verdict.
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — dev workflow, Gaze git-dep tag pinning, sqlx ban, PR review routing, integration-test feature flags.
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — dev workflow, crates.io Gaze dependency pinning, sqlx ban, PR review routing, integration-test feature flags.
 - [docs/profiles.md](./docs/profiles.md) — profile schema, project vs user file precedence, schema policy.
 - [docs/replay.md](./docs/replay.md) — `replay` command usage and snapshot operator controls.
 
 ## Status
 
-v0.2.2 shipped 2026-05-04 (see CHANGELOG.md). Crates.io publish is tracked separately. The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
+v0.3.0 shipped 2026-05-11 (see CHANGELOG.md). The Gaze runtime now resolves from crates.io (`gaze-pii`, `gaze-recognizers`, `gaze-mcp-core` at 0.7.0); the legacy `GAZE_REPO_TOKEN` PAT is no longer required. Crates.io publish of `gaze-lens` itself is tracked separately. The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.

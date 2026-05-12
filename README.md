@@ -6,7 +6,7 @@ PII-safe read-access for live production investigation by AI agents.
 
 Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine. Part of the [EmpireTwo](https://github.com/EmpireTwo) product family — every product in the family is named `gaze-X`.
 
-> **Status:** v0.2.5 is the latest tagged release. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
+> **Status:** v0.3.0 is the latest tagged release. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. v0.3.0 moves the internal MCP chokepoint onto `gaze-mcp-core::PiiEnvelope` and switches the Gaze runtime to crates.io. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
 
 ## Why
 
@@ -24,13 +24,13 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 > Prebuilt binaries currently target Apple Silicon macOS (`aarch64-apple-darwin`). Other platforms should build from source until the native ONNX Runtime distribution blocker is resolved.
 
 ```sh
-curl -L https://github.com/EmpireTwo/gaze-lens/releases/download/v0.2.5/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+curl -L https://github.com/EmpireTwo/gaze-lens/releases/download/v0.3.0/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
 ./gaze-lens demo
 ```
 
 `gaze-lens demo` tokenizes a small canned dataset (3 emails, 2 phones, 1 SSN-shaped string) and inline-restores it in a single process — both sections print side by side. The demo writes nothing to `~/.gaze-lens/`; everything lives in a tempdir that is wiped on exit. No follow-up `gaze-lens replay <id>` is required.
 
-The v0.2.5 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
+The v0.3.0 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
 
 ### Prebuilt binaries
 
@@ -118,7 +118,7 @@ The agent sees five tools and nothing else:
 | `log_tail` | Tail a configured SSH log source. |
 | `log_grep` | Search a configured SSH log source. |
 
-Every tool result routes through `Session::dispatch_tool` before it leaves the process. Tool args are tokenized through the Gaze path before the manifest is written, so the manifest never stores raw arguments. Schema/list output shows raw table and column names by default; set `schema_tokenize = true` in the profile when schema names themselves are sensitive. In tokenized mode, `schema_allowlist` is presentation-only: it keeps selected labels raw but does not grant query access, and canned queries still use raw configured table and column names. Restart or reload the MCP server after profile edits.
+Every tool result routes through `Session::dispatch_tool` before it leaves the process. Under the hood, `dispatch_tool` builds a `gaze_mcp_core::PiiEnvelope` whose sealed `ToolCtx` makes the redact→manifest→return ordering a compile-time invariant rather than a hand-rolled runtime guard. Tool args are tokenized through the Gaze path before the manifest is written, so the manifest never stores raw arguments. Schema/list output shows raw table and column names by default; set `schema_tokenize = true` in the profile when schema names themselves are sensitive. In tokenized mode, `schema_allowlist` is presentation-only: it keeps selected labels raw but does not grant query access, and canned queries still use raw configured table and column names. Restart or reload the MCP server after profile edits.
 
 ## Threat model — short version
 
