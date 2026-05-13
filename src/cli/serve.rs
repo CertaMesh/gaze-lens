@@ -11,10 +11,7 @@ use crate::policy::{ColumnActionPolicy, PolicyError, PolicyFile, build_pipeline}
 use crate::profile::Profile;
 use crate::profile::{SourceSpec, load_profiles, validate_profile_name};
 use crate::session::{OutputCaps, Session, SourceClass};
-use crate::source::db::DbSource;
-use crate::source::db::mysql::MysqlSource;
-use crate::source::db::postgres::PostgresSource;
-use crate::source::db::sqlite::SqliteSource;
+use crate::source::db::connect_db_source;
 use crate::source::log::SshLogSourceWrapper;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 use crate::source::{DbSourceWrapper, SchemaPresentation, Source};
@@ -180,12 +177,10 @@ fn register_lazy_source(session: &Arc<Session>, profile: Profile) {
 
 async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
     let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
-    let db_source: Arc<dyn DbSource> = match &profile.source {
-        SourceSpec::Mysql { .. } => Arc::new(MysqlSource::connect(&profile, limit_cap).await?),
-        SourceSpec::Postgres { .. } => {
-            Arc::new(PostgresSource::connect(&profile, limit_cap).await?)
+    let db_source = match &profile.source {
+        SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
+            connect_db_source(&profile, limit_cap).await?
         }
-        SourceSpec::Sqlite { .. } => Arc::new(SqliteSource::connect(&profile, limit_cap).await?),
         SourceSpec::SshLog { .. } => {
             return Err(LensError::Profile {
                 detail: format!("profile `{}` is not a database source", profile.name),

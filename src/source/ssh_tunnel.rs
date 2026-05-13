@@ -28,7 +28,7 @@ pub struct SshTunnel {
 
 impl SshTunnel {
     pub fn open(spec: &TunnelSpec) -> Result<Self, SshError> {
-        let host = validate_ssh_host(&spec.ssh_host)?;
+        let host = validate_ssh_login_host(&spec.ssh_host)?;
         let control_path = Self::control_path(spec.local_port);
         let status = Command::new("ssh")
             .args(open_argv_for_control_path(spec, host, &control_path)?)
@@ -54,7 +54,7 @@ impl SshTunnel {
     }
 
     pub fn close(&mut self) -> Result<(), SshError> {
-        let host = validate_ssh_host(&self.ssh_host)?;
+        let host = validate_ssh_login_host(&self.ssh_host)?;
         let _ = Command::new("ssh")
             .args(close_argv_for_control_path(host, &self.control_path)?)
             .status();
@@ -188,12 +188,12 @@ pub(crate) fn remote_argv(
 }
 
 pub fn open_argv(spec: &TunnelSpec) -> Result<Vec<String>, SshError> {
-    let host = validate_ssh_host(&spec.ssh_host)?;
+    let host = validate_ssh_login_host(&spec.ssh_host)?;
     open_argv_for_control_path(spec, host, &SshTunnel::control_path(spec.local_port))
 }
 
 pub fn close_argv(host: &str, control_path: &Path) -> Result<Vec<String>, SshError> {
-    let host = validate_ssh_host(host)?;
+    let host = validate_ssh_login_host(host)?;
     close_argv_for_control_path(host, control_path)
 }
 

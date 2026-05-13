@@ -32,9 +32,21 @@ impl std::fmt::Debug for PostgresSource {
 
 impl PostgresSource {
     pub async fn connect(profile: &Profile, limit_cap: u32) -> Result<Self, LensError> {
+        let SourceSpec::Postgres { host, port, .. } = &profile.source else {
+            return Err(LensError::Profile {
+                detail: format!("profile `{}` is not postgres", profile.name),
+            });
+        };
+        Self::connect_with_target(profile, limit_cap, host, *port).await
+    }
+
+    pub async fn connect_with_target(
+        profile: &Profile,
+        limit_cap: u32,
+        connect_host: &str,
+        connect_port: u16,
+    ) -> Result<Self, LensError> {
         let SourceSpec::Postgres {
-            host,
-            port,
             database,
             username,
             readonly_required,
@@ -55,8 +67,8 @@ impl PostgresSource {
         }
         let password = profile.resolve_password().await?;
         let options = PgConnectOptions::new()
-            .host(host)
-            .port(*port)
+            .host(connect_host)
+            .port(connect_port)
             .database(database)
             .username(username)
             .password(&password)

@@ -1,16 +1,12 @@
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
 
 use clap::Args;
 
 use crate::errors::LensError;
 use crate::policy::{PolicyFile, build_pipeline};
 use crate::profile::{SourceSpec, load_profile};
-use crate::source::db::DbSource;
-use crate::source::db::mysql::MysqlSource;
-use crate::source::db::postgres::PostgresSource;
-use crate::source::db::sqlite::SqliteSource;
+use crate::source::db::connect_db_source;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 
 use super::check_trust::{TrustFormat, build_report, render_text, validate_text_report};
@@ -282,19 +278,8 @@ async fn validate_source(profile: &crate::profile::Profile) -> Result<(), LensEr
         .rows
         .min(u32::MAX as usize) as u32;
     match &profile.source {
-        SourceSpec::Mysql { .. } => {
-            let source: Arc<dyn DbSource> =
-                Arc::new(MysqlSource::connect(profile, limit_cap).await?);
-            let _ = source.list_tables().await?;
-        }
-        SourceSpec::Postgres { .. } => {
-            let source: Arc<dyn DbSource> =
-                Arc::new(PostgresSource::connect(profile, limit_cap).await?);
-            let _ = source.list_tables().await?;
-        }
-        SourceSpec::Sqlite { .. } => {
-            let source: Arc<dyn DbSource> =
-                Arc::new(SqliteSource::connect(profile, limit_cap).await?);
+        SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
+            let source = connect_db_source(profile, limit_cap).await?;
             let _ = source.list_tables().await?;
         }
         SourceSpec::SshLog { host, path } => {

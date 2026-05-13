@@ -39,6 +39,36 @@ fn test_command_includes_double_dash() {
 }
 
 #[test]
+fn test_tunnel_command_accepts_user_at_host() {
+    let argv = open_argv(&TunnelSpec {
+        ssh_host: "deploy@prod".to_string(),
+        local_port: 13306,
+        remote_host: "127.0.0.1".to_string(),
+        remote_port: 3306,
+    })
+    .expect("argv");
+
+    let dash_index = argv.iter().position(|arg| arg == "--").expect("--");
+    assert_eq!(
+        argv.get(dash_index + 1).map(String::as_str),
+        Some("deploy@prod")
+    );
+}
+
+#[test]
+fn test_tunnel_command_rejects_multiple_at() {
+    let err = open_argv(&TunnelSpec {
+        ssh_host: "deploy@prod@evil".to_string(),
+        local_port: 13306,
+        remote_host: "127.0.0.1".to_string(),
+        remote_port: 3306,
+    })
+    .expect_err("multiple @ must be rejected");
+
+    assert!(err.to_string().contains("at most one '@'"), "{err}");
+}
+
+#[test]
 fn test_command_includes_double_dash_on_close() {
     let argv = close_argv("prod", Path::new("/tmp/gaze.sock")).expect("argv");
 
