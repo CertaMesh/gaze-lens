@@ -33,9 +33,21 @@ impl std::fmt::Debug for MysqlSource {
 
 impl MysqlSource {
     pub async fn connect(profile: &Profile, limit_cap: u32) -> Result<Self, LensError> {
+        let SourceSpec::Mysql { host, port, .. } = &profile.source else {
+            return Err(LensError::Profile {
+                detail: format!("profile `{}` is not mysql", profile.name),
+            });
+        };
+        Self::connect_with_target(profile, limit_cap, host, *port).await
+    }
+
+    pub async fn connect_with_target(
+        profile: &Profile,
+        limit_cap: u32,
+        connect_host: &str,
+        connect_port: u16,
+    ) -> Result<Self, LensError> {
         let SourceSpec::Mysql {
-            host,
-            port,
             database,
             username,
             readonly_required,
@@ -56,8 +68,8 @@ impl MysqlSource {
         }
         let password = profile.resolve_password().await?;
         let options = MySqlConnectOptions::new()
-            .host(host)
-            .port(*port)
+            .host(connect_host)
+            .port(connect_port)
             .database(database)
             .username(username)
             .password(&password)

@@ -10,11 +10,8 @@ use clap::{Args, ValueEnum};
 use crate::errors::LensError;
 use crate::profile::{SourceSpec, load_profile};
 use crate::session::{Session, ToolCall, ToolResult};
-use crate::source::db::DbSource;
-use crate::source::db::mysql::MysqlSource;
-use crate::source::db::postgres::PostgresSource;
+use crate::source::db::connect_db_source;
 use crate::source::db::query::{CannedQuery, OrderBy, WhereClause, WhereCombinator};
-use crate::source::db::sqlite::SqliteSource;
 use crate::source::{DbSourceWrapper, SchemaPresentation, Source, ToolArgs};
 
 use super::serve::runtime_policy;
@@ -202,12 +199,10 @@ pub(crate) async fn build_db_session(
     let limit_cap = crate::session::OutputCaps::default()
         .rows
         .min(u32::MAX as usize) as u32;
-    let db_source: Arc<dyn DbSource> = match &profile.source {
-        SourceSpec::Mysql { .. } => Arc::new(MysqlSource::connect(&profile, limit_cap).await?),
-        SourceSpec::Postgres { .. } => {
-            Arc::new(PostgresSource::connect(&profile, limit_cap).await?)
+    let db_source = match &profile.source {
+        SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
+            connect_db_source(&profile, limit_cap).await?
         }
-        SourceSpec::Sqlite { .. } => Arc::new(SqliteSource::connect(&profile, limit_cap).await?),
         SourceSpec::SshLog { .. } => {
             return Err(LensError::Profile {
                 detail: format!("profile `{profile_name}` is not a database source"),

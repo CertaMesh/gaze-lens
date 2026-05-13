@@ -9,8 +9,11 @@ pub use query::{ColumnInfo, TableSchema};
 
 pub mod mysql;
 pub mod postgres;
+pub mod runtime;
 pub mod schema;
 pub mod sqlite;
+
+pub use runtime::{DbRuntimePlan, connect_db_source, runtime_plan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbKind {
