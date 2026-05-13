@@ -46,32 +46,40 @@ impl PostgresSource {
         connect_host: &str,
         connect_port: u16,
     ) -> Result<Self, LensError> {
+        Self::validate_readonly_profile(profile)?;
+        let password = profile.resolve_password().await?;
+        Self::connect_with_target_password(
+            profile,
+            limit_cap,
+            connect_host,
+            connect_port,
+            password.as_str(),
+        )
+        .await
+    }
+
+    pub(crate) async fn connect_with_target_password(
+        profile: &Profile,
+        limit_cap: u32,
+        connect_host: &str,
+        connect_port: u16,
+        password: &str,
+    ) -> Result<Self, LensError> {
+        Self::validate_readonly_profile(profile)?;
         let SourceSpec::Postgres {
-            database,
-            username,
-            readonly_required,
-            ..
+            database, username, ..
         } = &profile.source
         else {
             return Err(LensError::Profile {
                 detail: format!("profile `{}` is not postgres", profile.name),
             });
         };
-        if !readonly_required {
-            return Err(LensError::Profile {
-                detail: format!(
-                    "postgres profile `{}` must require read-only mode",
-                    profile.name
-                ),
-            });
-        }
-        let password = profile.resolve_password().await?;
         let options = PgConnectOptions::new()
             .host(connect_host)
             .port(connect_port)
             .database(database)
             .username(username)
-            .password(&password)
+            .password(password)
             .application_name("gaze-lens")
             .log_statements(LevelFilter::Off)
             .disable_statement_logging();
@@ -89,6 +97,27 @@ impl PostgresSource {
             profile_name: profile.name.clone(),
             limit_cap,
         })
+    }
+
+    fn validate_readonly_profile(profile: &Profile) -> Result<(), LensError> {
+        let SourceSpec::Postgres {
+            readonly_required, ..
+        } = &profile.source
+        else {
+            return Err(LensError::Profile {
+                detail: format!("profile `{}` is not postgres", profile.name),
+            });
+        };
+        if *readonly_required {
+            Ok(())
+        } else {
+            Err(LensError::Profile {
+                detail: format!(
+                    "postgres profile `{}` must require read-only mode",
+                    profile.name
+                ),
+            })
+        }
     }
 
     #[cfg(any(test, feature = "integration-postgres"))]

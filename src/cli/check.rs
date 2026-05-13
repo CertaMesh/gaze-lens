@@ -2,11 +2,12 @@ use std::io::Write;
 use std::path::Path;
 
 use clap::Args;
+use zeroize::Zeroizing;
 
 use crate::errors::LensError;
 use crate::policy::{PolicyFile, build_pipeline};
 use crate::profile::{SourceSpec, load_profile};
-use crate::source::db::connect_db_source;
+use crate::source::db::connect_db_source_with_password;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 
 use super::check_trust::{TrustFormat, build_report, render_text, validate_text_report};
@@ -107,17 +108,27 @@ async fn run_with_writer(
         return Ok(());
     }
 
-    match validate_secret(&profile).await {
+    let validated_secret = match validate_secret_for_check(&profile).await {
         Ok(meta) => {
-            writeln!(out, "secret: ok ({meta})").map_err(write_error)?;
+            let metadata = &meta.metadata;
+            writeln!(out, "secret: ok ({metadata})").map_err(write_error)?;
+            meta
         }
         Err(err) => {
             render_secret_error(out, &err)?;
             return Err(err);
         }
-    }
+    };
 
-    if let Err(err) = validate_source(&profile).await {
+    if let Err(err) = validate_source(
+        &profile,
+        validated_secret
+            .db_password
+            .as_ref()
+            .map(|password| password.as_str()),
+    )
+    .await
+    {
         render_source_error(stderr, &profile.name, &err)?;
         return Err(err);
     }
@@ -273,13 +284,16 @@ fn default_snapshot_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("~/.gaze-lens/snapshots")
 }
 
-async fn validate_source(profile: &crate::profile::Profile) -> Result<(), LensError> {
+async fn validate_source(
+    profile: &crate::profile::Profile,
+    db_password: Option<&str>,
+) -> Result<(), LensError> {
     let limit_cap = crate::session::OutputCaps::default()
         .rows
         .min(u32::MAX as usize) as u32;
     match &profile.source {
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
-            let source = connect_db_source(profile, limit_cap).await?;
+            let source = connect_db_source_with_password(profile, limit_cap, db_password).await?;
             let _ = source.list_tables().await?;
         }
         SourceSpec::SshLog { host, path } => {
@@ -306,6 +320,11 @@ pub struct SecretMetadata {
     pub identity: String,
 }
 
+struct ValidatedSecret {
+    metadata: SecretMetadata,
+    db_password: Option<Zeroizing<String>>,
+}
+
 impl std::fmt::Display for SecretMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.backend, self.identity)
@@ -316,6 +335,14 @@ impl std::fmt::Display for SecretMetadata {
 pub async fn validate_secret(
     profile: &crate::profile::Profile,
 ) -> Result<SecretMetadata, LensError> {
+    validate_secret_for_check(profile)
+        .await
+        .map(|validated| validated.metadata)
+}
+
+async fn validate_secret_for_check(
+    profile: &crate::profile::Profile,
+) -> Result<ValidatedSecret, LensError> {
     match &profile.source {
         SourceSpec::Mysql {
             password_env,
@@ -347,12 +374,18 @@ pub async fn validate_secret(
                     identity: "invalid".to_string(),
                 },
             };
-            let _ = profile.resolve_password().await?;
-            Ok(metadata)
+            let password = profile.resolve_password().await?;
+            Ok(ValidatedSecret {
+                metadata,
+                db_password: Some(password),
+            })
         }
-        SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } => Ok(SecretMetadata {
-            backend: "none",
-            identity: "not required".to_string(),
+        SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } => Ok(ValidatedSecret {
+            metadata: SecretMetadata {
+                backend: "none",
+                identity: "not required".to_string(),
+            },
+            db_password: None,
         }),
     }
 }

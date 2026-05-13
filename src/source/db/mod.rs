@@ -13,6 +13,7 @@ pub mod runtime;
 pub mod schema;
 pub mod sqlite;
 
+pub(crate) use runtime::connect_db_source_with_password;
 pub use runtime::{DbRuntimePlan, connect_db_source, runtime_plan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
