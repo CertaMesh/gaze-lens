@@ -50,6 +50,14 @@ pub async fn connect_db_source(
     profile: &Profile,
     limit_cap: u32,
 ) -> Result<Arc<dyn DbSource>, LensError> {
+    connect_db_source_with_password(profile, limit_cap, None).await
+}
+
+pub(crate) async fn connect_db_source_with_password(
+    profile: &Profile,
+    limit_cap: u32,
+    password: Option<&str>,
+) -> Result<Arc<dyn DbSource>, LensError> {
     let plan = runtime_plan(profile)?;
     let tunnel = match &plan.tunnel {
         Some(spec) => Some(SshTunnel::open(spec).map_err(|err| LensError::SourceError {
@@ -62,24 +70,54 @@ pub async fn connect_db_source(
     };
 
     let inner: Arc<dyn DbSource> = match &profile.source {
-        SourceSpec::Mysql { .. } => Arc::new(
-            MysqlSource::connect_with_target(
-                profile,
-                limit_cap,
-                &plan.connect_host,
-                plan.connect_port,
-            )
-            .await?,
-        ),
-        SourceSpec::Postgres { .. } => Arc::new(
-            PostgresSource::connect_with_target(
-                profile,
-                limit_cap,
-                &plan.connect_host,
-                plan.connect_port,
-            )
-            .await?,
-        ),
+        SourceSpec::Mysql { .. } => {
+            let source = match password {
+                Some(password) => {
+                    MysqlSource::connect_with_target_password(
+                        profile,
+                        limit_cap,
+                        &plan.connect_host,
+                        plan.connect_port,
+                        password,
+                    )
+                    .await?
+                }
+                None => {
+                    MysqlSource::connect_with_target(
+                        profile,
+                        limit_cap,
+                        &plan.connect_host,
+                        plan.connect_port,
+                    )
+                    .await?
+                }
+            };
+            Arc::new(source)
+        }
+        SourceSpec::Postgres { .. } => {
+            let source = match password {
+                Some(password) => {
+                    PostgresSource::connect_with_target_password(
+                        profile,
+                        limit_cap,
+                        &plan.connect_host,
+                        plan.connect_port,
+                        password,
+                    )
+                    .await?
+                }
+                None => {
+                    PostgresSource::connect_with_target(
+                        profile,
+                        limit_cap,
+                        &plan.connect_host,
+                        plan.connect_port,
+                    )
+                    .await?
+                }
+            };
+            Arc::new(source)
+        }
         SourceSpec::Sqlite { .. } => Arc::new(SqliteSource::connect(profile, limit_cap).await?),
         SourceSpec::SshLog { .. } => {
             return Err(LensError::Profile {
@@ -185,6 +223,52 @@ mod tests {
         }
     }
 
+    fn db_profile_with_missing_env_secret(kind: DbKind, env: &str) -> Profile {
+        let source = match kind {
+            DbKind::Mysql => SourceSpec::Mysql {
+                host: "127.0.0.1".to_string(),
+                port: 1,
+                database: "app".to_string(),
+                username: "readonly".to_string(),
+                password_env: None,
+                secret: Some(SecretSpec::Env {
+                    var: env.to_string(),
+                }),
+                ssh_host: None,
+                local_port: None,
+                readonly_required: true,
+            },
+            DbKind::Postgres => SourceSpec::Postgres {
+                host: "127.0.0.1".to_string(),
+                port: 1,
+                database: "app".to_string(),
+                username: "readonly".to_string(),
+                password_env: None,
+                secret: Some(SecretSpec::Env {
+                    var: env.to_string(),
+                }),
+                ssh_host: None,
+                local_port: None,
+                readonly_required: true,
+            },
+            DbKind::Sqlite => unreachable!("sqlite profiles do not use db passwords"),
+        };
+        Profile {
+            name: "prod".to_string(),
+            source,
+            discovered_from_ssh_host: None,
+            discovered_from_path: None,
+            discovered_at: None,
+            discovered_ssh_host_key_fingerprint: None,
+            credential_class: None,
+            policy: None,
+            schema_tokenize: None,
+            schema_allowlist: None,
+            snapshot_retention_days: None,
+            auto_purge: crate::session::maintenance::AutoPurge::Warn,
+        }
+    }
+
     #[test]
     fn tunneled_db_plan_uses_local_target_and_remote_tunnel_endpoint() {
         let profile = mysql_profile(Some("deploy@app01"), Some(13306));
@@ -225,6 +309,46 @@ mod tests {
             err.to_string()
                 .contains("requires both `ssh_host` and `local_port`"),
             "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mysql_uses_supplied_password_without_resolving_profile_secret() {
+        let env = "GAZE_LENS_RUNTIME_SUPPLIED_MYSQL_PASSWORD";
+        unsafe {
+            std::env::remove_var(env);
+        }
+        let profile = db_profile_with_missing_env_secret(DbKind::Mysql, env);
+
+        let err = match connect_db_source_with_password(&profile, 10, Some("cached-password")).await
+        {
+            Ok(_) => panic!("localhost connection should fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            matches!(err, LensError::SourceError { .. }),
+            "expected connection failure after using supplied password, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_uses_supplied_password_without_resolving_profile_secret() {
+        let env = "GAZE_LENS_RUNTIME_SUPPLIED_POSTGRES_PASSWORD";
+        unsafe {
+            std::env::remove_var(env);
+        }
+        let profile = db_profile_with_missing_env_secret(DbKind::Postgres, env);
+
+        let err = match connect_db_source_with_password(&profile, 10, Some("cached-password")).await
+        {
+            Ok(_) => panic!("localhost connection should fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            matches!(err, LensError::SourceError { .. }),
+            "expected connection failure after using supplied password, got {err:?}"
         );
     }
 }
