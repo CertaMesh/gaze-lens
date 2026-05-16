@@ -19,14 +19,13 @@ env:
 jobs:
   rust:
     name: fmt, clippy, test
-    runs-on: ubuntu-24.04
+    # Keep public PR CI on the supported release platform until Linux/Windows
+    # build proof lands; see docs/public-readiness.md.
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-
-      - name: Install Linux build dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev
 
       - name: Install Rust 1.89
         uses: dtolnay/rust-toolchain@1.89
