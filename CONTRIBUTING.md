@@ -28,6 +28,20 @@ SKIP_HOOK=1 git push origin my-feature
 
 Do not bypass for shared branches or tags; the hook exists to keep main and release tags green.
 
+## Pull request CI
+
+Public pull requests run the same default Rust gate in GitHub Actions:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --no-deps -- -D warnings
+cargo test --all-targets
+```
+
+This default CI path must stay self-contained: no Docker, no live database, no production credentials, and no feature-gated integration services. Keep MySQL and Postgres integration suites behind their explicit `integration-mysql` and `integration-postgres` features.
+
+See [docs/public-readiness.md](./docs/public-readiness.md) for the public-release checklist.
+
 ## Gaze dependency pin
 
 `Cargo.toml` pins `gaze` to crates.io `gaze-pii` through Cargo's `package = "gaze-pii"` alias, plus `gaze-recognizers` and `gaze-mcp-core` from crates.io. Do not silently float these dependencies. When adopting new Gaze features, bump the crates.io versions together in `Cargo.toml`, run `cargo update -p gaze-pii -p gaze-recognizers -p gaze-mcp-core`, and bump the gaze-lens version in the same PR.
