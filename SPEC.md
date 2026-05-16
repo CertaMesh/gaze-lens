@@ -86,29 +86,29 @@ The `demo` subcommand is a CLI-only inline-replay helper for adopters; it does n
 - Tool args (SQL `where` AST, grep patterns, table/column names) are tokenized via the same `Pipeline::redact` path as result data **before** manifest write. Manifest never stores raw args. Raw args are reconstructable on operator replay via the session snapshot. (D7)
 - Schema metadata (table/column names) is operational metadata shown raw by default in `schema` and `list_tables` response bodies for agent utility. Profiles may opt into presentation tokenization with `schema_tokenize = true`; then `schema_allowlist` leaves selected labels raw and other schema labels use session-stable tokens. This is presentation privacy only, not an access-control grant. Query access is governed by each column's `ColumnInfo.allowed` value during canned-query validation. Raw schema names can appear in manifest-protected response bodies and replay snapshots unless tokenized mode is enabled, so snapshot storage still assumes operator-managed disk encryption. (D2)
 
-## Pseudonymization observability (v0.9 amendment)
+## v0.9 observability amendment
 
-See [docs/v0.9-observability.md](./docs/v0.9-observability.md) for the operator-facing event model.
+v0.9 adds pseudonymization observability as an internal and manifest-visible contract, not as a new public retrieval surface. The locked MCP and CLI surfaces remain unchanged: the five MCP tools and six CLI subcommands stay the only public entry points. Observability must be additive to existing tool responses, manifest rows, stderr/tracing diagnostics, and future daemon event intake.
 
-v0.9 adds a documentation and manifest-design contract for explaining **why a value was or was not pseudonymized** without exposing raw values or expanding the public surface. It is not an agent-behavior policy layer and does not inspect or constrain agent intent.
+The observability goal is to explain why a tokenized result is safe enough to return, where the pipeline had to choose between competing interpretations, and which safety nets were used. It must never expose raw PII, raw rejected candidates, raw source snippets outside the already-redacted result path, or validator internals. The framing is deterministic runtime instrumentation for pseudonymization, not model-behavior policy.
 
-The v0.9 public surface remains the existing 5 MCP tools and 6 CLI subcommands. Operators observe pseudonymization behavior through:
+### Required observability signals
 
-- existing `query`, `schema`, and `list_tables` calls against operator-configured observability tables or views, where available;
-- existing `log_tail` and `log_grep` calls against operator-configured log profiles containing `gaze-lens` process logs or app-side pseudonymization telemetry;
-- existing `replay` for local raw-value verification by the operator.
+- **Ambiguity side-channel.** Redaction may record counts and policy labels for ambiguous recognizer matches, such as `ambiguous.email_or_username = 3`, but must not include raw spans, raw candidate text, or enough offset detail to reconstruct the source. Existing MCP responses may include a compact `observability` object when the caller already receives the redacted result; CLI commands may render the same metadata as human diagnostics. Manifest rows persist the tokenized and bounded form.
+- **Validator-veto.** When a validator rejects a recognizer candidate, the pipeline records the recognizer family, validator class, and veto count. It does not store the rejected raw value. Veto metadata is for operator trust and regression triage; it is not an access-control decision and must not cause raw output to bypass the envelope.
+- **Collision-family and anchor-resolution.** When two raw values map into a shared token family, observability records the family name, anchor strategy, and whether an existing anchor was reused or a new anchor was allocated. Collision diagnostics must be expressed in token ids or family counters only. They may help replay explain why `<EMAIL_001>` remained stable across profiles, but they must not reveal the underlying value.
+- **Locale-aware safety-net dispatch.** Profiles may carry locale hints for recognizers and validators. When locale hints are absent or weak, the pipeline may dispatch fallback recognizers and record that a locale safety net fired. The signal is the locale policy and recognizer family, not the matched raw text. Default behavior remains conservative: unknown locale increases safety-net coverage; it does not loosen redaction.
+- **Daemon relevance.** v0.9 observability must use the same session/manifest model as stdio MCP and CLI retrievals so v2 daemon ingest can attach the same metadata to pushed events. Daemon mode may batch or stream observability records later, but it must not introduce a separate redaction path or unredacted diagnostic channel.
 
-No v0.9 MCP tool or CLI subcommand is added for observability. A future dedicated observability view/subcommand would require a separate SPEC amendment and must prove that existing tool access to logs/tables is insufficient.
+### Public surface rule
 
-The observability record model is additive and token-safe:
+Use existing surfaces first:
 
-- **Ambiguity side-channel.** Recognizer ambiguity may be reported as tokenized metadata (`span_class`, `candidate_kinds`, `selected_kind`, confidence bucket, rule family, locale, and stable row/call identifiers). It MUST NOT store raw span text, raw surrounding context, or unreduced detector evidence. Ambiguity records explain classification uncertainty, not agent behavior.
-- **Validator-veto.** If a candidate match is rejected by a validator, the record may include the validator family, veto reason code, normalized non-sensitive shape metadata, and profile/policy version. It MUST NOT include the rejected raw candidate or enough reversible detail to reconstruct it.
-- **Collision-family and anchor-resolution.** When multiple raw values converge on the same token family or when an anchor resolver chooses a canonical entity token, observability may record token family, token id, anchor id, collision family, resolver strategy, and counts. It MUST NOT expose the raw values that collided. Collision observability is for replay diagnosis and policy tuning, not for deanonymization.
-- **Locale-aware safety-net dispatch.** Locale fallback decisions may be recorded as locale, requested detector set, fallback detector set, reason code, and coarse outcome counts. The safety net is conservative: unsupported or ambiguous locale routing must prefer redaction over pass-through.
-- **Daemon relevance.** The same event model must work for the v2 SDK-ingest daemon. Daemon mode may add transport/source identifiers and queue timing, but must reuse the same redaction path and token-safe event schema; it must not introduce a daemon-only bypass around `Session::dispatch_tool` / `PiiEnvelope`.
+- MCP: optional observability metadata may be attached to existing `query`, `schema`, `list_tables`, `log_tail`, and `log_grep` responses, bounded by profile policy and always produced after `Pipeline::redact`.
+- CLI: existing `query`, `replay`, `check`, and `demo` may display or validate observability metadata. `serve` may emit process diagnostics to stderr/tracing.
+- Manifest: observability metadata belongs beside tokenized call metadata and snapshot references, with nullable schema additions only.
 
-Observability events are operational metadata. If persisted in the manifest, they follow the same retention and snapshot-storage assumptions as existing manifest rows. Any schema addition must be nullable/backward-compatible and must preserve fail-closed retrieval behavior: an observability write failure must not cause raw output to be returned.
+A new MCP tool or CLI subcommand for observability is not approved by this amendment. If real adopter usage proves that a dedicated inspection surface is necessary, it requires a later SPEC amendment that names the exact tool/subcommand and proves why existing responses, manifest replay, and `check` are insufficient.
 
 ## Snapshot retention (v0.2 opt-in)
 

@@ -285,6 +285,29 @@ fn test_serve_without_restrict_list_exposes_all_profiles() {
 }
 
 #[tokio::test]
+async fn test_serve_without_profiles_starts_empty_mcp_server() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project_config = empty_user_config(&temp);
+    let user_config = temp.path().join("empty-user.toml");
+    std::fs::write(&user_config, "").expect("empty user profile config");
+
+    let prepared = prepare_session_for_test(
+        serve_args(&temp, &[]),
+        Some(&project_config),
+        Some(&user_config),
+    )
+    .expect("empty profile set should still start MCP");
+    assert!(prepared.loaded_profiles.is_empty());
+
+    let err = McpFrontend::with_session(prepared.session)
+        .call_tool_result_for_test("query", query_args("dev"))
+        .await
+        .expect_err("unknown profile");
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    assert!(err.message.contains("loaded: []"), "{}", err.message);
+}
+
+#[tokio::test]
 async fn test_serve_profile_reload_applies_schema_allowlist_presentation() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");

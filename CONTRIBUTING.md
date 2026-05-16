@@ -28,9 +28,9 @@ SKIP_HOOK=1 git push origin my-feature
 
 Do not bypass for shared branches or tags; the hook exists to keep main and release tags green.
 
-## Pull request CI
+## Public PR CI
 
-Public pull requests run the same default Rust gate in GitHub Actions:
+The public pull-request baseline is `.github/workflows/ci.yml`. It runs without repository secrets and checks:
 
 ```sh
 cargo fmt --check
@@ -75,6 +75,10 @@ Releases are tag-driven through [cargo-dist](https://opensource.axo.dev/cargo-di
 The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured archives, generates installers, and uploads everything to the GitHub release for that tag. The near-term binary target is Apple Silicon macOS (`aarch64-apple-darwin`) only. Intel macOS, Linux, and Windows remain future binary targets until the cross-platform proof in [docs/cross-platform-roadmap.md](./docs/cross-platform-roadmap.md) passes in CI.
 
 The release workflow uses public crates.io Gaze packages. When changing the required Gaze revision, bump the dependency versions in `Cargo.toml`, refresh `Cargo.lock`, bump the package version, and call out the crates.io versions in the release PR description.
+
+## Public release checklist
+
+Before making the repository public or announcing a public release, confirm [docs/public-readiness.md](./docs/public-readiness.md), [SECURITY.md](./SECURITY.md), [LICENSE](./LICENSE), README status wording, release notes, and the default public PR CI all match the intended release state. Do not bundle branch protection, visibility, tag, publish, or release actions into a docs-only readiness PR.
 
 ## sqlx macro policy (banned for production-source queries)
 

@@ -97,25 +97,6 @@ ALTER TABLE calls ADD COLUMN purged_at_ms INTEGER;
 
 SQLite's `ADD COLUMN` semantics give every existing v2 row a `NULL` value for the new column without rewriting page content; the migration is O(catalog), not O(rows). v0.1.x → v0.2 upgrades are automatic on first manifest open. Rollback is supported: a v0.1.x build opening a v0.2 manifest reads only the columns it knows about, ignoring `purged_at_ms`. New schema additions in v0.2.x must follow the same nullable-column pattern (or bump `user_version` again with an explicit migration step).
 
-### Pseudonymization observability (v0.9)
-
-v0.9 observability is a product/spec amendment, not a Rust implementation requirement in this branch. The architectural target is an additive token-safe event stream that explains Gaze pseudonymization decisions without changing the locked MCP/CLI surface.
-
-The implementation shape, when scheduled, should preserve these boundaries:
-
-- Events are emitted after recognizer/policy decisions and before/alongside manifest finish, but never before the raw adapter output enters the `PiiEnvelope` redaction path.
-- Event payloads contain token ids, detector families, rule ids, confidence buckets, locale/fallback reason codes, validator-veto reason codes, anchor ids, collision-family ids, counts, and call/profile ids. They do not contain raw span text, raw context windows, or rejected raw candidates.
-- Manifest persistence, if used, is additive: new nullable table/columns or a new side table keyed by call/session id. Older binaries must continue to open the manifest and ignore unknown observability payloads.
-- Operator access should first reuse existing source plumbing: a configured DB profile can query an observability table/view through `query`, and a configured log profile can read process/app telemetry through `log_tail`/`log_grep`. A dedicated observability frontend/tool is not justified until those paths fail a real adopter workflow and a follow-up SPEC amendment approves the surface expansion.
-- The v2 daemon must reuse the same event model. Daemon-only transport metadata is allowed, but daemon ingest must not create an alternate path around `Session::dispatch_tool`, `PiiEnvelope`, manifest fail-closed semantics, or replay snapshot boundaries.
-
-Implementation stop-gates for any future observability PR:
-
-- Stop if an observability record can reconstruct a raw value, rejected candidate, or raw context window without operator replay.
-- Stop if writing or exporting observability can return raw output after a manifest/write failure.
-- Stop if locale fallback can pass through unsupported text because a locale-specific recognizer is missing.
-- Stop if collision/anchor diagnostics make token correlation broader than the active `gaze::Session` scope.
-
 ### ManifestMaintenance
 
 Snapshot retention sweeping is implemented as a separate `ManifestMaintenance` type, distinct from `Session::new_with_pipeline`. The split is deliberate: session construction is a hot path on every CLI invocation and MCP frontend boot; the destructive sweep belongs on a different code path so it can be reasoned about and tested in isolation.
@@ -138,6 +119,21 @@ impl ManifestMaintenance {
 CLI builders (`src/cli/query.rs`, `src/cli/serve.rs`) invoke `ManifestMaintenance::open(...).sweep_expired_snapshots(...)` BEFORE constructing the `Session`. This ordering matters: a sweep failure must not silently take a session down, and a sweep that emits friction-warning stderr should appear before any tool dispatch output.
 
 When the active profile has `snapshot_retention_days = None`, CLI builders skip the maintenance call entirely — no manifest open, no sweep, zero IO. v0.1 default-unlimited semantics are preserved.
+
+### v0.9 observability spine
+
+v0.9 observability is a metadata extension to the existing redaction path. It does not add MCP tools, CLI subcommands, source traits, or a parallel diagnostic channel.
+
+Implementation-facing constraints:
+
+- Observability records are produced inside or immediately after `Pipeline::redact` and are returned only through `PiiEnvelope::dispatch` after manifest begin/finish succeeds.
+- `Session::dispatch_tool` remains the only Lens-layer retrieval entry point. CLI `query`, MCP `query`, and future daemon ingest must not construct an observability-only path around the envelope.
+- Manifest storage should use nullable additions, following the `purged_at_ms` migration precedent, and should persist only bounded tokenized metadata.
+- Allowed signal families are ambiguity counts, validator-veto counts, collision-family / anchor-resolution outcomes, and locale-aware safety-net dispatch counts.
+- Disallowed payload content includes raw PII, rejected raw candidates, exact raw-source snippets, reconstructable offsets, validator internals, connection secrets, or provider-specific model traces.
+- Existing public surfaces consume observability first: optional MCP response metadata, CLI diagnostics on existing subcommands, `check` validation, `replay` explanation, and stderr/tracing health logs from `serve`.
+
+New observability-specific MCP tools or CLI subcommands are explicitly not part of v0.9. They require a later SPEC amendment naming the new surface.
 
 ## File-by-file mining verdict (debug-proxy → gaze-lens)
 
