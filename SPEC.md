@@ -86,6 +86,30 @@ The `demo` subcommand is a CLI-only inline-replay helper for adopters; it does n
 - Tool args (SQL `where` AST, grep patterns, table/column names) are tokenized via the same `Pipeline::redact` path as result data **before** manifest write. Manifest never stores raw args. Raw args are reconstructable on operator replay via the session snapshot. (D7)
 - Schema metadata (table/column names) is operational metadata shown raw by default in `schema` and `list_tables` response bodies for agent utility. Profiles may opt into presentation tokenization with `schema_tokenize = true`; then `schema_allowlist` leaves selected labels raw and other schema labels use session-stable tokens. This is presentation privacy only, not an access-control grant. Query access is governed by each column's `ColumnInfo.allowed` value during canned-query validation. Raw schema names can appear in manifest-protected response bodies and replay snapshots unless tokenized mode is enabled, so snapshot storage still assumes operator-managed disk encryption. (D2)
 
+## Pseudonymization observability (v0.9 amendment)
+
+See [docs/v0.9-observability.md](./docs/v0.9-observability.md) for the operator-facing event model.
+
+v0.9 adds a documentation and manifest-design contract for explaining **why a value was or was not pseudonymized** without exposing raw values or expanding the public surface. It is not an agent-behavior policy layer and does not inspect or constrain agent intent.
+
+The v0.9 public surface remains the existing 5 MCP tools and 6 CLI subcommands. Operators observe pseudonymization behavior through:
+
+- existing `query`, `schema`, and `list_tables` calls against operator-configured observability tables or views, where available;
+- existing `log_tail` and `log_grep` calls against operator-configured log profiles containing `gaze-lens` process logs or app-side pseudonymization telemetry;
+- existing `replay` for local raw-value verification by the operator.
+
+No v0.9 MCP tool or CLI subcommand is added for observability. A future dedicated observability view/subcommand would require a separate SPEC amendment and must prove that existing tool access to logs/tables is insufficient.
+
+The observability record model is additive and token-safe:
+
+- **Ambiguity side-channel.** Recognizer ambiguity may be reported as tokenized metadata (`span_class`, `candidate_kinds`, `selected_kind`, confidence bucket, rule family, locale, and stable row/call identifiers). It MUST NOT store raw span text, raw surrounding context, or unreduced detector evidence. Ambiguity records explain classification uncertainty, not agent behavior.
+- **Validator-veto.** If a candidate match is rejected by a validator, the record may include the validator family, veto reason code, normalized non-sensitive shape metadata, and profile/policy version. It MUST NOT include the rejected raw candidate or enough reversible detail to reconstruct it.
+- **Collision-family and anchor-resolution.** When multiple raw values converge on the same token family or when an anchor resolver chooses a canonical entity token, observability may record token family, token id, anchor id, collision family, resolver strategy, and counts. It MUST NOT expose the raw values that collided. Collision observability is for replay diagnosis and policy tuning, not for deanonymization.
+- **Locale-aware safety-net dispatch.** Locale fallback decisions may be recorded as locale, requested detector set, fallback detector set, reason code, and coarse outcome counts. The safety net is conservative: unsupported or ambiguous locale routing must prefer redaction over pass-through.
+- **Daemon relevance.** The same event model must work for the v2 SDK-ingest daemon. Daemon mode may add transport/source identifiers and queue timing, but must reuse the same redaction path and token-safe event schema; it must not introduce a daemon-only bypass around `Session::dispatch_tool` / `PiiEnvelope`.
+
+Observability events are operational metadata. If persisted in the manifest, they follow the same retention and snapshot-storage assumptions as existing manifest rows. Any schema addition must be nullable/backward-compatible and must preserve fail-closed retrieval behavior: an observability write failure must not cause raw output to be returned.
+
 ## Snapshot retention (v0.2 opt-in)
 
 v0.2 introduces two profile fields governing snapshot lifecycle. Both are opt-in; v0.1 default-unlimited behavior is preserved when neither is set.
