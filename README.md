@@ -6,7 +6,7 @@
 
 PII-safe read-access for live production investigation by AI agents.
 
-`gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.com`. The engineer can later replay the agent's session locally to see the original values.
+`gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.invalid`. The engineer can later replay the agent's session locally to see the original values.
 
 Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine. Part of the [EmpireTwo](https://github.com/EmpireTwo) product family — every product in the family is named `gaze-X`.
 
