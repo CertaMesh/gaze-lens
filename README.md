@@ -1,12 +1,16 @@
 # gaze-lens
 
+[![CI](https://github.com/EmpireTwo/gaze-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/EmpireTwo/gaze-lens/actions/workflows/ci.yml)
+[![Release](https://github.com/EmpireTwo/gaze-lens/actions/workflows/release.yml/badge.svg)](https://github.com/EmpireTwo/gaze-lens/actions/workflows/release.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+
 PII-safe read-access for live production investigation by AI agents.
 
 `gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.com`. The engineer can later replay the agent's session locally to see the original values.
 
 Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine. Part of the [EmpireTwo](https://github.com/EmpireTwo) product family — every product in the family is named `gaze-X`.
 
-> **Status:** v0.3.0 is the latest tagged release. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. v0.3.0 moves the internal MCP chokepoint onto `gaze-mcp-core::PiiEnvelope` and switches the Gaze runtime to crates.io. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, and [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow.
+> **Status:** v0.3.0 is the latest tagged release. The repository may still be private while public-readiness work is in flight; badges and links are written for the intended public GitHub location and may require repository access until visibility changes. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. v0.3.0 moves the internal MCP chokepoint onto `gaze-mcp-core::PiiEnvelope` and switches the Gaze runtime to crates.io. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow, and [SECURITY.md](./SECURITY.md) for vulnerability reporting.
 
 ## Why
 
@@ -135,6 +139,10 @@ Full threat model + locked anti-features in [SPEC.md §Threat model](./SPEC.md#t
 
 `reference/debug-proxy/` is the predecessor crate (extracted from the Gaze monorepo). Used as a mining source during v1 implementation, not part of the active build.
 
+## Security
+
+Report suspected vulnerabilities privately; do not open public issues for security reports. See [SECURITY.md](./SECURITY.md).
+
 ## License
 
-Apache-2.0. See `Cargo.toml` for the package metadata.
+Apache-2.0. See [LICENSE](./LICENSE) and `Cargo.toml` package metadata.
