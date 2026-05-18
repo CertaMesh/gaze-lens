@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0] — 2026-05-18
+
+### Added
+- Cross-platform binary roadmap documentation captures Windows, Linux,
+  keyring, and recognizer-backend blockers, plus the CI proof gates required
+  before adding new dist targets. (#61)
+- v0.9 pseudonymization observability spec amendment in `SPEC.md` and
+  `docs/v0.9-observability.md`, with the locked MCP/CLI surface unchanged.
+  (#59)
+- Public-readiness documentation scaffold with `LICENSE`, `SECURITY.md`,
+  public CI workflow, README badges, and public release guidance. (#58)
+
+### Changed
+- Bumped Gaze runtime crates to `0.9.0-rc.1` (`gaze-pii`,
+  `gaze-recognizers`, and `gaze-mcp-core`). The bump is API-compatible with
+  `0.7.0`; `ort` remains in the default graph pending upstream optional-feature
+  work tracked by todo #8 and `docs/cross-platform-roadmap.md`. (#62)
+- Replaced real-looking example domains with non-resolving `.invalid` examples
+  across docs, fixtures, and goldens for public release hygiene. (#60)
+- Synchronized agent-facing docs with the v0.3.0 crates.io Gaze dependency
+  flow.
+
+### Fixed
+- Configured database SSH tunnels are now opened at runtime for `query`,
+  `serve`, and `check`, so tunneled MySQL/Postgres profiles can reach their
+  production sources through the same guarded source path. (#56)
+- `check` reuses the validated database password when opening MySQL/Postgres
+  connections, avoiding a second secret lookup or prompt during the same
+  profile check. (#57)
+- Dropped a stale `schema_allowlist` warning assertion from `tests/cli_check.rs`
+  that no longer matched the current warning text. (#63)
+
 ## [0.3.0] — 2026-05-11
 
 ### Changed
