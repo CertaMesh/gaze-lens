@@ -25,7 +25,7 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 
 ### Apple Silicon macOS quick install
 
-> Prebuilt binaries currently target Apple Silicon macOS (`aarch64-apple-darwin`). Other platforms should build from source until the native ONNX Runtime distribution blocker is resolved.
+> Prebuilt binaries currently target Apple Silicon macOS (`aarch64-apple-darwin`). Other platforms should build from source until Linux and Windows have CI-backed release proof.
 
 ```sh
 curl -L https://github.com/EmpireTwo/gaze-lens/releases/download/v0.3.0/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
@@ -38,7 +38,7 @@ The v0.3.0 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
 
 ### Prebuilt binaries
 
-Releases attach prebuilt tarballs to the [GitHub releases page](https://github.com/EmpireTwo/gaze-lens/releases). Near-term release automation intentionally builds only the Apple Silicon macOS archive. Intel macOS, Linux, and Windows remain source-build or future binary targets while the Gaze recognizer backend is made portable.
+Releases attach prebuilt tarballs to the [GitHub releases page](https://github.com/EmpireTwo/gaze-lens/releases). Near-term release automation intentionally builds only the Apple Silicon macOS archive. Intel macOS, Linux, and Windows remain source-build or future binary targets until the checks in [docs/cross-platform-roadmap.md](./docs/cross-platform-roadmap.md) pass in CI.
 
 ### Building from source
 
