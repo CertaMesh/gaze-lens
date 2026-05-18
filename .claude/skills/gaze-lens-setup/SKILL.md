@@ -16,7 +16,7 @@ command -v gaze-lens
 gaze-lens --version
 ```
 
-Compare the installed version with the latest release in the source repository's `CHANGELOG.md` or GitHub releases. Current latest in this repo at authoring time is `v0.2.5`.
+Compare the installed version with the latest release in the source repository's `CHANGELOG.md` or GitHub releases. Current latest in this repo at authoring time is `v0.4.0`.
 
 If the binary exists but is older than the latest release, tell the user before replacing it.
 
@@ -25,10 +25,9 @@ If the binary exists but is older than the latest release, tell the user before 
 Apple Silicon is the current binary distribution target.
 
 ```sh
-version="0.2.5"
-curl -L "https://github.com/EmpireTwo/gaze-lens/releases/download/v${version}/gaze-lens-aarch64-apple-darwin.tar.gz" | tar xz
-chmod +x gaze-lens
-sudo mv gaze-lens /usr/local/bin/gaze-lens
+version="0.4.0"
+curl -L "https://github.com/EmpireTwo/gaze-lens/releases/download/v${version}/gaze-lens-aarch64-apple-darwin.tar.xz" | tar -xJ
+sudo mv gaze-lens-aarch64-apple-darwin/gaze-lens /usr/local/bin/gaze-lens
 ```
 
 Other platforms do not have published first-class binary artifacts yet. Build from source only if the user accepts that path:
@@ -59,7 +58,7 @@ Always check help before writing commands, because old docs used stale flag name
 gaze-lens init --help
 ```
 
-Current `v0.2.5` init flags include:
+Current `v0.4.0` init flags include:
 
 ```text
 --profile <profile>
