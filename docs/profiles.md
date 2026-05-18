@@ -35,7 +35,7 @@ schema_allowlist = ["id", "created_at", "updated_at"]
 
 [profiles.source]
 kind = "mysql"
-host = "prod-db.internal"
+host = "db.example.invalid"
 port = 3306
 database = "app"
 username = "gaze_ro"
@@ -66,7 +66,7 @@ schema_allowlist = ["id", "created_at", "updated_at"]
 
 [profiles.source]
 kind = "postgres"
-host = "prod-db.internal"
+host = "db.example.invalid"
 port = 5432
 database = "app"
 username = "gaze_ro"
@@ -82,7 +82,7 @@ On macOS, Windows, and desktop Linux with an unlocked Secret Service provider, `
 
 ```sh
 gaze-lens init --profile prod \
-  --discover-ssh-host deploy@app01 \
+  --discover-ssh-host deploy@app01.example.invalid \
   --discover-env-path /var/www/app/.env
 ```
 
@@ -103,7 +103,7 @@ ssh-add ~/.ssh/id_ed25519
 Strict host-key checking is on by default (`StrictHostKeyChecking=yes`). First contact should pin the host before running discovery:
 
 ```sh
-ssh-keyscan -t ed25519 app01 >> ~/.ssh/known_hosts
+ssh-keyscan -t ed25519 app01.example.invalid >> ~/.ssh/known_hosts
 ```
 
 For ephemeral lab hosts only, `--allow-new-ssh-host` opts into `StrictHostKeyChecking=accept-new`.

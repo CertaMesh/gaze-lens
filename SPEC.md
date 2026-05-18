@@ -16,7 +16,7 @@ Developer mid-incident. AI agent (Claude Code, Cursor, Codex, custom) running on
 > *"Check the users table for accounts created in the last hour."*
 > *"Grep the auth log for 500s in the past 10 min and group by route."*
 
-…and get back tokenized results that say `<EMAIL_001>` instead of `alice@example.com`. Later wants to replay the agent's session with real values to verify what was found.
+…and get back tokenized results that say `<EMAIL_001>` instead of `alice@example.invalid`. Later wants to replay the agent's session with real values to verify what was found.
 
 ## Architecture
 
