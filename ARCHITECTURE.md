@@ -120,6 +120,21 @@ CLI builders (`src/cli/query.rs`, `src/cli/serve.rs`) invoke `ManifestMaintenanc
 
 When the active profile has `snapshot_retention_days = None`, CLI builders skip the maintenance call entirely — no manifest open, no sweep, zero IO. v0.1 default-unlimited semantics are preserved.
 
+### v0.9 observability spine
+
+v0.9 observability is a metadata extension to the existing redaction path. It does not add MCP tools, CLI subcommands, source traits, or a parallel diagnostic channel.
+
+Implementation-facing constraints:
+
+- Observability records are produced inside or immediately after `Pipeline::redact` and are returned only through `PiiEnvelope::dispatch` after manifest begin/finish succeeds.
+- `Session::dispatch_tool` remains the only Lens-layer retrieval entry point. CLI `query`, MCP `query`, and future daemon ingest must not construct an observability-only path around the envelope.
+- Manifest storage should use nullable additions, following the `purged_at_ms` migration precedent, and should persist only bounded tokenized metadata.
+- Allowed signal families are ambiguity counts, validator-veto counts, collision-family / anchor-resolution outcomes, and locale-aware safety-net dispatch counts.
+- Disallowed payload content includes raw PII, rejected raw candidates, exact raw-source snippets, reconstructable offsets, validator internals, connection secrets, or provider-specific model traces.
+- Existing public surfaces consume observability first: optional MCP response metadata, CLI diagnostics on existing subcommands, `check` validation, `replay` explanation, and stderr/tracing health logs from `serve`.
+
+New observability-specific MCP tools or CLI subcommands are explicitly not part of v0.9. They require a later SPEC amendment naming the new surface.
+
 ## File-by-file mining verdict (debug-proxy → gaze-lens)
 
 From scratchpad 442 mining audit + Codex r1 hardening notes.

@@ -69,15 +69,15 @@ fn prepare_session(
     for profile in &profiles {
         runtime.push((profile.clone(), runtime_policy(profile)?));
     }
-    let first_policy = &runtime
-        .first()
-        .ok_or_else(|| LensError::Profile {
-            detail: "no profiles configured".to_string(),
-        })?
-        .1
-        .0;
+    let first_policy = if let Some((_, (policy, _, _))) = runtime.first() {
+        policy.clone()
+    } else {
+        default_policy_file()?
+            .to_gaze_policy()
+            .map_err(policy_error)?
+    };
     let session = Arc::new(Session::new_for_multi_profile(
-        first_policy,
+        &first_policy,
         &manifest,
         &snapshot_dir,
     )?);
@@ -125,11 +125,6 @@ fn select_profiles(
         valid.push(profile);
     }
     if restrict_list.is_empty() {
-        if valid.is_empty() {
-            return Err(LensError::Profile {
-                detail: "no profiles configured".to_string(),
-            });
-        }
         return Ok(valid);
     }
     for name in restrict_list {

@@ -6,7 +6,7 @@
 - Internal MCP dispatch now routes through `gaze_mcp_core::PiiEnvelope::dispatch`
   while keeping the locked 5-tool MCP surface unchanged: `query`, `schema`,
   `list_tables`, `log_tail`, and `log_grep`.
-- Switched Gaze runtime dependencies from the private git tag to crates.io:
+- Switched Gaze runtime dependencies from git-tagged packages to crates.io:
   `gaze = { package = "gaze-pii", version = "0.7.0" }`,
   `gaze-recognizers = "0.7.0"`, and `gaze-mcp-core = "0.7.0"`.
   The package alias keeps existing `use gaze::*` imports stable.
@@ -20,7 +20,7 @@
   records the completed call row and snapshot reference.
 
 ### Removed
-- Private Gaze git dependency setup is no longer required. `cargo install
+- Gaze git dependency setup is no longer required. `cargo install
   gaze-lens` can resolve all Gaze crates from crates.io without a repository
   token.
 
@@ -148,10 +148,10 @@
   patches to an already-shipped release line, the version bump rides with
   the dependency change. (#503)
 - CONTRIBUTING.md documents how to regenerate `Cargo.lock` for committable
-  state when `~/.cargo/config.toml` has a local `[patch."https://github.com/EmpireTwo/gaze.git"]`
-  block — disable the patch before running `cargo update`, then verify
-  the lockfile records `source = "git+...?tag=vX.Y.Z#<sha>"` rather than a
-  path-based resolution. (#504)
+  state when `~/.cargo/config.toml` has a local `[patch.crates-io]` block for
+  Gaze crates — disable the patch before running `cargo update`, then verify
+  the lockfile records crates.io sources rather than a path-based resolution.
+  (#504)
 - `gaze_value_to_json` is annotated as the source-of-truth exhaustiveness
   pin for new `gaze::Value` variants. (#502)
 
