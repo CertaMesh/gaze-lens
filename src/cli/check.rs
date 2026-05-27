@@ -298,7 +298,7 @@ async fn validate_source(
         }
         SourceSpec::SshLog { host, path } => {
             let caps = crate::session::OutputCaps::default();
-            let _ = SshLogSource::new(
+            let source = SshLogSource::new(
                 profile.name.clone(),
                 host.clone(),
                 path.clone(),
@@ -308,6 +308,7 @@ async fn validate_source(
                     timeout: caps.timeout,
                 },
             )?;
+            let _ = source.tail(1).await?;
         }
     }
     Ok(())

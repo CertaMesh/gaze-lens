@@ -6,10 +6,11 @@ use tokio::process::Command;
 
 use crate::errors::LensError;
 use crate::session::TruncatedAt;
-use crate::source::ssh_tunnel::{remote_argv, validate_ssh_host, validate_ssh_path};
+use crate::source::ssh_tunnel::{validate_ssh_host, validate_ssh_login_host, validate_ssh_path};
 
 pub const HARD_CAP_LINES: usize = 10_000;
 pub const BOUNDED_TAIL_FOR_GREP: usize = 10_000;
+const SSH_CONNECT_TIMEOUT_SECS: u64 = 10;
 const STDERR_CAP_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Copy)]
@@ -68,6 +69,14 @@ impl SshLogSource {
     }
 
     pub async fn tail(&self, lines: usize) -> Result<SshLogOutput, LensError> {
+        self.tail_for_operation(lines, "log_tail").await
+    }
+
+    async fn tail_for_operation(
+        &self,
+        lines: usize,
+        operation: &str,
+    ) -> Result<SshLogOutput, LensError> {
         let argv = self.tail_argv(lines);
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..]);
@@ -101,11 +110,28 @@ impl SshLogSource {
             }
             Err(_) => {
                 let _ = child.kill().await;
-                return Err(LensError::Truncated(TruncatedAt::Timeout));
+                return Err(timeout_error(
+                    &self.profile_name,
+                    "ssh log command/read",
+                    operation,
+                    &self.host,
+                    &self.path,
+                    self.timeout,
+                ));
             }
         };
 
         if !status.success() {
+            if ssh_stderr_indicates_connect_timeout(&stderr) {
+                return Err(timeout_error(
+                    &self.profile_name,
+                    "ssh connect",
+                    operation,
+                    &self.host,
+                    &self.path,
+                    Duration::from_secs(SSH_CONNECT_TIMEOUT_SECS),
+                ));
+            }
             return Err(source_error(
                 &self.profile_name,
                 format!("ssh returned {:?}", status.code()),
@@ -150,7 +176,9 @@ impl SshLogSource {
                 sql: None,
                 stderr: None,
             })?;
-        let output = self.tail(BOUNDED_TAIL_FOR_GREP).await?;
+        let output = self
+            .tail_for_operation(BOUNDED_TAIL_FOR_GREP, "log_grep")
+            .await?;
         let lines = output
             .lines
             .into_iter()
@@ -167,9 +195,23 @@ impl SshLogSource {
 }
 
 pub fn tail_argv(host: &str, path: &str, lines: usize) -> Vec<String> {
+    let host = validate_ssh_login_host(host).expect("SshLogSource validates host before tail_argv");
+    let path = validate_ssh_path(path).expect("SshLogSource validates path before tail_argv");
     let capped_lines = lines.min(HARD_CAP_LINES).to_string();
-    remote_argv(host, &["tail", "-n", &capped_lines], path)
-        .expect("SshLogSource validates host/path before tail_argv")
+    vec![
+        "ssh".to_string(),
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        format!("ConnectTimeout={SSH_CONNECT_TIMEOUT_SECS}"),
+        "--".to_string(),
+        host.to_string(),
+        "tail".to_string(),
+        "-n".to_string(),
+        capped_lines,
+        "--".to_string(),
+        path.to_string(),
+    ]
 }
 
 pub fn split_and_cap_lines(raw: &[u8], max_line_bytes: usize) -> Vec<String> {
@@ -213,5 +255,65 @@ fn source_error(profile_name: &str, detail: String, stderr: Option<String>) -> L
         detail,
         sql: None,
         stderr,
+    }
+}
+
+fn timeout_error(
+    profile_name: &str,
+    phase: &str,
+    operation: &str,
+    host: &str,
+    path: &str,
+    timeout: Duration,
+) -> LensError {
+    LensError::OperationTimeout {
+        phase: phase.to_string(),
+        operation: operation.to_string(),
+        timeout_secs: timeout.as_secs(),
+        context: Some(format!("profile={profile_name} host={host} path={path}")),
+    }
+}
+
+fn ssh_stderr_indicates_connect_timeout(stderr: &[u8]) -> bool {
+    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    stderr.contains("connection timed out") || stderr.contains("operation timed out")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::sanitize_error;
+
+    #[test]
+    fn connect_timeout_stderr_is_classified() {
+        assert!(ssh_stderr_indicates_connect_timeout(
+            b"ssh: connect to host app.example port 22: Connection timed out"
+        ));
+    }
+
+    #[test]
+    fn refused_connect_stderr_is_not_classified_as_timeout() {
+        assert!(!ssh_stderr_indicates_connect_timeout(
+            b"ssh: connect to host app.example port 22: Connection refused"
+        ));
+    }
+
+    #[test]
+    fn timeout_error_reports_ssh_context() {
+        let err = timeout_error(
+            "prod-logs",
+            "ssh log command/read",
+            "log_tail",
+            "app.example",
+            "/var/log/app.log",
+            Duration::from_secs(30),
+        );
+
+        let msg = sanitize_error(&err);
+        assert!(msg.contains("phase=ssh log command/read"), "{msg}");
+        assert!(msg.contains("operation=log_tail"), "{msg}");
+        assert!(msg.contains("profile=prod-logs"), "{msg}");
+        assert!(msg.contains("host=app.example"), "{msg}");
+        assert!(msg.contains("path=/var/log/app.log"), "{msg}");
     }
 }

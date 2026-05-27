@@ -77,6 +77,10 @@ fn test_tail_argv_double_dash_present() {
         source.tail_argv(500),
         vec![
             "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
             "--",
             "app-prod",
             "tail",
@@ -115,7 +119,7 @@ fn test_tail_no_shell_string_interpolation() {
 fn test_grep_uses_local_regex() {
     let argv = tail_argv("app-prod", "/var/log/app.log", 10_000);
     assert_eq!(argv[0], "ssh");
-    assert_eq!(argv[3], "tail");
+    assert_eq!(argv[7], "tail");
     assert!(!argv.iter().any(|arg| arg == "grep"));
     assert!(!argv.iter().any(|arg| arg == "awk"));
     assert!(!argv.iter().any(|arg| arg == "sed"));
@@ -128,7 +132,7 @@ fn test_lines_capped_fits_u32() {
         SshLogSource::new("p1", "app-prod", "/var/log/app.log", caps()).expect("valid source");
     let argv = source.tail_argv(usize::MAX);
 
-    assert_eq!(argv[5], HARD_CAP_LINES.to_string());
-    let capped = argv[5].parse::<u32>().expect("u32 lines cap");
+    assert_eq!(argv[9], HARD_CAP_LINES.to_string());
+    let capped = argv[9].parse::<u32>().expect("u32 lines cap");
     assert_eq!(capped, HARD_CAP_LINES as u32);
 }

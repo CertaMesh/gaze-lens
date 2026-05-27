@@ -418,12 +418,14 @@ impl Session {
             self.invoke_source(&call, &profile_name),
         )
         .await
-        .map_err(|_| LensError::Truncated(TruncatedAt::Timeout))??;
+        .map_err(|_| {
+            operation_timeout("source dispatch", &call.tool_name, self.inner.caps.timeout)
+        })??;
         let clean = tokio::time::timeout(self.inner.caps.timeout, async {
             self.redact_result(raw_result, &pipeline, &column_actions)
         })
         .await
-        .map_err(|_| LensError::Truncated(TruncatedAt::Timeout))??;
+        .map_err(|_| operation_timeout("redaction", &call.tool_name, self.inner.caps.timeout))??;
         self.inner
             .core_summaries
             .lock()
@@ -1166,6 +1168,15 @@ fn boxed_error_to_lens_error(err: Box<dyn std::error::Error + Send + Sync>) -> L
 fn tool_registry_error(err: gaze_mcp_core::ToolRegistryError) -> LensError {
     LensError::Internal {
         detail: err.to_string(),
+    }
+}
+
+fn operation_timeout(phase: &str, operation: &str, timeout: Duration) -> LensError {
+    LensError::OperationTimeout {
+        phase: phase.to_string(),
+        operation: operation.to_string(),
+        timeout_secs: timeout.as_secs(),
+        context: None,
     }
 }
 

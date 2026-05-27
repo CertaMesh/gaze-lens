@@ -97,8 +97,11 @@ impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter<'_> {
 
 fn lens_error_from_failure(reason: FailureReason) -> LensError {
     match reason {
-        FailureReason::ToolError { class: _, message } if is_timeout_message(&message) => {
-            LensError::Truncated(TruncatedAt::Timeout)
+        FailureReason::ToolError { class: _, message }
+            if is_operation_timeout_message(&message) =>
+        {
+            operation_timeout_from_message(&message)
+                .unwrap_or(LensError::Truncated(TruncatedAt::Timeout))
         }
         FailureReason::ToolError { class, message } => lens_internal(format!("{class}: {message}")),
         FailureReason::AuthDenied { reason } => lens_internal(format!("auth denied: {reason}")),
@@ -112,6 +115,29 @@ fn lens_error_from_failure(reason: FailureReason) -> LensError {
 
 fn is_timeout_message(message: &str) -> bool {
     message.contains("output truncated at Timeout")
+}
+
+fn is_operation_timeout_message(message: &str) -> bool {
+    is_timeout_message(message) || message.contains("timeout during ")
+}
+
+fn operation_timeout_from_message(message: &str) -> Option<LensError> {
+    let start = message.find("timeout during ")?;
+    let timeout = &message[start + "timeout during ".len()..];
+    let (phase, rest) = timeout.split_once(" for ")?;
+    let (operation, rest) = rest.split_once(" after ")?;
+    let (timeout_secs, context) = rest.split_once('s')?;
+    let timeout_secs = timeout_secs.parse::<u64>().ok()?;
+    let context = context
+        .strip_prefix(" (")
+        .and_then(|context| context.strip_suffix(')'))
+        .map(ToString::to_string);
+    Some(LensError::OperationTimeout {
+        phase: phase.to_string(),
+        operation: operation.to_string(),
+        timeout_secs,
+        context,
+    })
 }
 
 fn lens_internal(detail: String) -> LensError {
@@ -197,6 +223,29 @@ mod tests {
         assert_eq!(response.payload["ok"], true);
         assert!(snapshot_ref.ends_with(&format!("{lens_session_id}.snap")));
         assert!(std::path::Path::new(&snapshot_ref).exists());
+    }
+
+    #[test]
+    fn operation_timeout_message_preserves_phase_context() {
+        let err = operation_timeout_from_message(
+            "timeout during ssh connect for log_tail after 10s (profile=prod host=app path=/var/log/app.log)",
+        )
+        .expect("operation timeout");
+
+        assert_eq!(
+            crate::errors::sanitize_error(&err),
+            "Timeout: phase=ssh connect operation=log_tail timeout_secs=10 context=profile=prod host=app path=/var/log/app.log"
+        );
+    }
+
+    #[test]
+    fn legacy_timeout_message_still_maps_to_truncated_timeout() {
+        let err = lens_error_from_failure(FailureReason::ToolError {
+            class: "internal".to_string(),
+            message: "output truncated at Timeout".to_string(),
+        });
+
+        assert!(matches!(err, LensError::Truncated(TruncatedAt::Timeout)));
     }
 
     struct EchoTool {

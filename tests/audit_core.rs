@@ -534,7 +534,7 @@ async fn output_caps_timeout_records_manifest_without_raw_values() {
         .await
         .expect_err("dispatch should timeout");
 
-    assert!(matches!(err, LensError::Truncated(TruncatedAt::Timeout)));
+    assert!(matches!(err, LensError::OperationTimeout { .. }));
     let (status, result_summary, snapshot_ref, stored): (
         String,
         String,
@@ -549,7 +549,10 @@ async fn output_caps_timeout_records_manifest_without_raw_values() {
     )
         .expect("stored");
     assert_eq!(status, "error");
-    assert_eq!(result_summary, "Truncated: Timeout");
+    assert_eq!(
+        result_summary,
+        "Timeout: phase=source dispatch operation=query timeout_secs=0"
+    );
     assert!(snapshot_ref.is_none());
     assert!(!stored.contains("arg@example.com"));
     assert!(!stored.contains("alice@example.com"));

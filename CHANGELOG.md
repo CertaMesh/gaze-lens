@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1] — 2026-05-27
+
+### Fixed
+- `check` now performs a one-line SSH read for `ssh_log` profiles, so
+  unreachable hosts and unreadable log paths fail before operators hand the
+  profile to an MCP agent.
+- SSH log reads now use a bounded SSH connect timeout and report sanitized
+  timeout phase context, distinguishing SSH connection failures, remote
+  command/read timeouts, source dispatch timeouts, and redaction timeouts.
+- `log_tail` and `log_grep` keep bounded remote tail behavior while preserving
+  profile, host, path, and operation context in timeout errors.
+
 ## [0.4.0] — 2026-05-18
 
 ### Added

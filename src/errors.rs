@@ -88,6 +88,19 @@ pub enum LensError {
     },
     #[error("feature deferred: {0}")]
     FeatureDeferred(String),
+    #[error(
+        "timeout during {phase} for {operation} after {timeout_secs}s{context}",
+        context = match context {
+            Some(context) => format!(" ({context})"),
+            None => String::new(),
+        },
+    )]
+    OperationTimeout {
+        phase: String,
+        operation: String,
+        timeout_secs: u64,
+        context: Option<String>,
+    },
     #[error("output truncated at {0:?}")]
     Truncated(TruncatedAt),
     #[error("internal error: {detail}")]
@@ -172,6 +185,20 @@ pub fn sanitize_error(err: &LensError) -> String {
             )
         }
         LensError::FeatureDeferred(feature) => format!("FeatureDeferred: {feature}"),
+        LensError::OperationTimeout {
+            phase,
+            operation,
+            timeout_secs,
+            context,
+        } => {
+            let context = context
+                .as_ref()
+                .map(|context| format!(" context={context}"))
+                .unwrap_or_default();
+            format!(
+                "Timeout: phase={phase} operation={operation} timeout_secs={timeout_secs}{context}"
+            )
+        }
         LensError::Truncated(reason) => format!("Truncated: {reason:?}"),
         LensError::Internal { .. } => "Internal: internal error".to_string(),
     }

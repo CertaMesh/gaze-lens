@@ -222,6 +222,36 @@ async fn source_failure_is_sanitized_internal_error() {
     );
 }
 
+#[tokio::test]
+async fn source_timeout_error_keeps_phase_context_for_mcp() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session = session(&temp);
+    session
+        .register_pipeline("dev", Arc::new(pipeline()))
+        .expect("pipeline");
+    session.register_fake_source_for_profile(SourceClass::Database, "dev", Box::new(TimeoutSource));
+    let frontend = McpFrontend::with_session(session);
+
+    let err = frontend
+        .call_tool_result_for_test("query", query_args("dev"))
+        .await
+        .expect_err("timeout failure");
+    assert_error_code(&err, ErrorCode::INTERNAL_ERROR);
+    assert!(err.message.contains("Timeout:"), "{}", err.message);
+    assert!(err.message.contains("phase=ssh connect"), "{}", err.message);
+    assert!(
+        err.message.contains("operation=log_tail"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("host=app.example"), "{}", err.message);
+    assert!(
+        err.message.contains("path=/var/log/app.log"),
+        "{}",
+        err.message
+    );
+}
+
 struct CountingRowsSource {
     touched: Arc<AtomicUsize>,
 }
@@ -251,6 +281,20 @@ impl FakeSource for FailingSource {
             detail: self.detail.clone(),
             sql: None,
             stderr: None,
+        })
+    }
+}
+
+struct TimeoutSource;
+
+#[async_trait]
+impl FakeSource for TimeoutSource {
+    async fn invoke(&self, _args: &ToolArgs) -> Result<SourceOutput, LensError> {
+        Err(LensError::OperationTimeout {
+            phase: "ssh connect".to_string(),
+            operation: "log_tail".to_string(),
+            timeout_secs: 10,
+            context: Some("profile=prod-logs host=app.example path=/var/log/app.log".to_string()),
         })
     }
 }
