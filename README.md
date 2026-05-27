@@ -10,7 +10,7 @@ PII-safe read-access for live production investigation by AI agents.
 
 Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine. Part of the [EmpireTwo](https://github.com/EmpireTwo) product family — every product in the family is named `gaze-X`.
 
-> **Status:** v0.3.0 is the latest tagged release. The repository may still be private while public-readiness work is in flight; badges and links are written for the intended public GitHub location and may require repository access until visibility changes. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. v0.3.0 moves the internal MCP chokepoint onto `gaze-mcp-core::PiiEnvelope` and switches the Gaze runtime to crates.io. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow, and [SECURITY.md](./SECURITY.md) for vulnerability reporting.
+> **Status:** v0.4.1 is the latest tagged release. The repository may still be private while public-readiness work is in flight; badges and links are written for the intended public GitHub location and may require repository access until visibility changes. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. v0.4.1 uses `gaze-mcp-core::PiiEnvelope` as the internal MCP chokepoint and resolves the Gaze runtime from crates.io. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow, and [SECURITY.md](./SECURITY.md) for vulnerability reporting.
 
 ## Why
 
@@ -28,13 +28,13 @@ Today, when an engineer wants their AI agent to investigate prod, they have two 
 > Prebuilt binaries currently target Apple Silicon macOS (`aarch64-apple-darwin`). Other platforms should build from source until Linux and Windows have CI-backed release proof.
 
 ```sh
-curl -L https://github.com/EmpireTwo/gaze-lens/releases/download/v0.3.0/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+curl -L https://github.com/EmpireTwo/gaze-lens/releases/download/v0.4.1/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
 ./gaze-lens demo
 ```
 
 `gaze-lens demo` tokenizes a small canned dataset (3 emails, 2 phones, 1 SSN-shaped string) and inline-restores it in a single process — both sections print side by side. The demo writes nothing to `~/.gaze-lens/`; everything lives in a tempdir that is wiped on exit. No follow-up `gaze-lens replay <id>` is required.
 
-The v0.3.0 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
+The v0.4.1 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
 
 ### Prebuilt binaries
 
@@ -137,7 +137,7 @@ Full threat model + locked anti-features in [SPEC.md §Threat model](./SPEC.md#t
 
 ## Reference
 
-`reference/debug-proxy/` is the predecessor crate (extracted from the Gaze monorepo). Used as a mining source during v1 implementation, not part of the active build.
+`reference/debug-proxy/` is the historical predecessor crate extracted from the Gaze monorepo. It is retained for archaeology only, excluded from the published package, and not part of the active public source or build.
 
 ## Security
 
