@@ -106,4 +106,4 @@ For full architectural detail, file-by-file mining verdicts, and the 16 locked d
 
 ## Status
 
-v0.3.0 shipped 2026-05-11 (see CHANGELOG.md). The Gaze runtime now resolves from crates.io (`gaze-pii`, `gaze-recognizers`, `gaze-mcp-core` at 0.7.0); the legacy `GAZE_REPO_TOKEN` PAT is no longer required. Crates.io publish of `gaze-lens` itself is tracked separately. The predecessor crate at `reference/debug-proxy/` is a mining source, not part of the active build.
+v0.4.1 shipped 2026-05-27 (see CHANGELOG.md). The Gaze runtime resolves from crates.io (`gaze-pii`, `gaze-recognizers`, `gaze-mcp-core` at 0.9.0-rc.1); the legacy `GAZE_REPO_TOKEN` PAT is no longer required. Crates.io publish of `gaze-lens` itself is tracked separately. The predecessor crate at `reference/debug-proxy/` is historical reference material, excluded from the published package, and not part of the active build.

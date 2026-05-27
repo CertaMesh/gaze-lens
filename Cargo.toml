@@ -7,6 +7,31 @@ license = "Apache-2.0"
 description = "PII-safe read-access for live production investigation by AI agents"
 repository = "https://github.com/EmpireTwo/gaze-lens"
 authors = ["EmpireTwo"]
+include = [
+    ".claude/rules/rust.md",
+    ".claude/skills/gaze-lens-setup/SKILL.md",
+    ".gitignore",
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "GEMINI.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "SPEC.md",
+    "dist-workspace.toml",
+    "docs/cross-platform-roadmap.md",
+    "docs/profiles.md",
+    "docs/public-readiness.md",
+    "docs/replay.md",
+    "docs/v0.9-observability.md",
+    "src/**",
+    "tests/**",
+]
 
 [features]
 integration-keyring = []

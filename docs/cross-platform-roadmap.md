@@ -17,7 +17,6 @@ That does not make Linux or Windows release binaries ready by itself. Lens still
 - Windows does not compile today. `src/cli/init/atomic.rs` has `#[cfg(not(unix))] compile_error!` and uses Unix-only permissions APIs for atomic config writes and directory-mode checks.
 - The keyring dependency is configured with macOS, Windows, and Linux Secret Service backends, but Linux keyring use requires a DBus/Secret Service provider. Headless Linux, containers, locked keyrings, and bare servers must keep using `password_env`.
 - Linux release binaries need an explicit packaging choice for the Secret Service dependency surface. Source builds can document `pkg-config` and `libdbus-1-dev`; prebuilt binaries need CI proof on the chosen runner image and archive format.
-- The current checked-in dependency set still pins Gaze crates at `0.7.0`, where `gaze-recognizers` pulls `ort` transitively. Adopting the `0.9.0-rc.1` behavior requires a normal Gaze dependency bump PR with `Cargo.toml`, `Cargo.lock`, and version/release notes updated together.
 
 ## CI Proof Required Before Adding Dist Targets
 
