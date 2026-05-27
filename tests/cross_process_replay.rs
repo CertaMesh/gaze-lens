@@ -10,7 +10,7 @@ fn cross_process_replay_restores_seeded_canary() {
         .args([
             "run",
             "--quiet",
-            "--bin",
+            "--example",
             "replay-fixture",
             "--",
             "seed",
@@ -39,7 +39,7 @@ fn cross_process_replay_restores_seeded_canary() {
         .args([
             "run",
             "--quiet",
-            "--bin",
+            "--example",
             "replay-fixture",
             "--",
             "restore",

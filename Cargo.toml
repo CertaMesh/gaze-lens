@@ -29,6 +29,7 @@ include = [
     "docs/public-readiness.md",
     "docs/replay.md",
     "docs/v0.9-observability.md",
+    "examples/**",
     "src/**",
     "tests/**",
 ]
