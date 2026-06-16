@@ -28,13 +28,7 @@ impl Source for SshLogSourceWrapper {
                 let args: LogTailArgs = serde_json::from_value(call.args.0.clone())
                     .map_err(|err| source_error(self.inner.profile_name(), err.to_string()))?;
                 let lines = args.lines.unwrap_or(100);
-                self.inner
-                    .tail(lines)
-                    .await
-                    .map(|output| SourceOutput::TextWithTruncation {
-                        text: output.lines.join("\n"),
-                        truncated_at: output.truncated_at,
-                    })
+                self.inner.tail(lines).await.map(text_output_from_log)
             }
             "log_grep" => {
                 let args: LogGrepArgs =
@@ -51,10 +45,7 @@ impl Source for SshLogSourceWrapper {
                         args.limit.unwrap_or(100),
                     )
                     .await
-                    .map(|output| SourceOutput::TextWithTruncation {
-                        text: output.lines.join("\n"),
-                        truncated_at: output.truncated_at,
-                    })
+                    .map(text_output_from_log)
             }
             other => Err(source_error(
                 self.inner.profile_name(),
@@ -82,5 +73,13 @@ fn source_error(profile_name: &str, detail: String) -> LensError {
         detail,
         sql: None,
         stderr: None,
+    }
+}
+
+fn text_output_from_log(output: ssh_log::SshLogOutput) -> SourceOutput {
+    let truncated_at = output.truncated_at.clone();
+    SourceOutput::TextWithTruncation {
+        text: output.into_text(),
+        truncated_at,
     }
 }

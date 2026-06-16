@@ -34,6 +34,42 @@ pub struct SshLogSource {
 pub struct SshLogOutput {
     pub lines: Vec<String>,
     pub truncated_at: Vec<TruncatedAt>,
+    pub bytes: usize,
+    pub metadata: Option<SshLogMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SshLogMetadata {
+    pub operation: &'static str,
+    pub status: &'static str,
+    pub profile: String,
+    pub source_kind: &'static str,
+    pub host: String,
+    pub path: String,
+    pub pattern: String,
+    pub level: Option<String>,
+    pub requested_limit: usize,
+    pub tail_window_lines: usize,
+    pub searched_lines: usize,
+    pub matched_lines: usize,
+    pub returned_lines: usize,
+    pub searched_bytes: usize,
+    pub truncated_at: Vec<TruncatedAt>,
+}
+
+impl SshLogOutput {
+    pub fn into_text(self) -> String {
+        let lines = self.lines.join("\n");
+        let Some(metadata) = self.metadata else {
+            return lines;
+        };
+        let metadata = serde_json::to_string(&metadata).expect("ssh log metadata should serialize");
+        if lines.is_empty() {
+            metadata
+        } else {
+            format!("{metadata}\n{lines}")
+        }
+    }
 }
 
 impl SshLogSource {
@@ -149,9 +185,12 @@ impl SshLogSource {
         if line_truncated {
             truncated_at.push(TruncatedAt::LineBytes);
         }
+        let bytes = stdout.len();
         Ok(SshLogOutput {
             lines,
             truncated_at,
+            bytes,
+            metadata: None,
         })
     }
 
@@ -179,18 +218,60 @@ impl SshLogSource {
         let output = self
             .tail_for_operation(BOUNDED_TAIL_FOR_GREP, "log_grep")
             .await?;
-        let lines = output
-            .lines
-            .into_iter()
-            .filter(|line| {
-                re.is_match(line) && level_re.as_ref().is_none_or(|level| level.is_match(line))
-            })
-            .take(limit)
-            .collect();
-        Ok(SshLogOutput {
+        Ok(self.filter_grep_output(pattern, level, limit, output, &re, level_re.as_ref()))
+    }
+
+    fn filter_grep_output(
+        &self,
+        pattern: &str,
+        level: Option<&str>,
+        limit: usize,
+        output: SshLogOutput,
+        re: &regex::Regex,
+        level_re: Option<&regex::Regex>,
+    ) -> SshLogOutput {
+        let searched_lines = output.lines.len();
+        let searched_bytes = output.bytes;
+        let mut truncated_at = output.truncated_at;
+        let mut matched_lines = 0usize;
+        let mut lines = Vec::new();
+        for line in output.lines {
+            if re.is_match(&line) && level_re.is_none_or(|level| level.is_match(&line)) {
+                matched_lines += 1;
+                if lines.len() < limit {
+                    lines.push(line);
+                }
+            }
+        }
+        if matched_lines > lines.len() {
+            push_truncation(&mut truncated_at, TruncatedAt::Rows);
+        }
+        let metadata = grep_metadata_required(matched_lines, &truncated_at).then(|| {
+            let status = grep_status(matched_lines, &truncated_at);
+            SshLogMetadata {
+                operation: "log_grep",
+                status,
+                profile: self.profile_name.clone(),
+                source_kind: "ssh_log",
+                host: self.host.clone(),
+                path: self.path.clone(),
+                pattern: pattern.to_string(),
+                level: level.map(ToOwned::to_owned),
+                requested_limit: limit,
+                tail_window_lines: BOUNDED_TAIL_FOR_GREP,
+                searched_lines,
+                matched_lines,
+                returned_lines: lines.len(),
+                searched_bytes,
+                truncated_at: truncated_at.clone(),
+            }
+        });
+        SshLogOutput {
             lines,
-            truncated_at: output.truncated_at,
-        })
+            truncated_at,
+            bytes: searched_bytes,
+            metadata,
+        }
     }
 }
 
@@ -279,6 +360,25 @@ fn ssh_stderr_indicates_connect_timeout(stderr: &[u8]) -> bool {
     stderr.contains("connection timed out") || stderr.contains("operation timed out")
 }
 
+fn grep_metadata_required(matched_lines: usize, truncated_at: &[TruncatedAt]) -> bool {
+    matched_lines == 0 || !truncated_at.is_empty()
+}
+
+fn grep_status(matched_lines: usize, truncated_at: &[TruncatedAt]) -> &'static str {
+    match (matched_lines, truncated_at.is_empty()) {
+        (0, true) => "no_matches",
+        (0, false) => "no_matches_truncated",
+        (_, false) => "truncated",
+        (_, true) => "matches",
+    }
+}
+
+fn push_truncation(truncated_at: &mut Vec<TruncatedAt>, reason: TruncatedAt) {
+    if !truncated_at.contains(&reason) {
+        truncated_at.push(reason);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +415,96 @@ mod tests {
         assert!(msg.contains("profile=prod-logs"), "{msg}");
         assert!(msg.contains("host=app.example"), "{msg}");
         assert!(msg.contains("path=/var/log/app.log"), "{msg}");
+    }
+
+    #[test]
+    fn empty_grep_renders_actionable_metadata() {
+        let source = test_source();
+        let re = regex::Regex::new("43301").expect("regex");
+        let level_re = regex::Regex::new("ERROR").expect("level regex");
+
+        let output = source.filter_grep_output(
+            "43301",
+            Some("ERROR"),
+            100,
+            SshLogOutput {
+                lines: vec!["INFO worker booted".to_string()],
+                truncated_at: Vec::new(),
+                bytes: 18,
+                metadata: None,
+            },
+            &re,
+            Some(&level_re),
+        );
+
+        assert!(output.lines.is_empty());
+        assert_eq!(
+            output.metadata.as_ref().expect("metadata").status,
+            "no_matches"
+        );
+        let text = output.into_text();
+        assert!(text.contains("\"operation\":\"log_grep\""), "{text}");
+        assert!(text.contains("\"status\":\"no_matches\""), "{text}");
+        assert!(text.contains("\"profile\":\"prod-logs\""), "{text}");
+        assert!(text.contains("\"host\":\"app.example\""), "{text}");
+        assert!(text.contains("\"path\":\"/var/log/app.log\""), "{text}");
+        assert!(text.contains("\"pattern\":\"43301\""), "{text}");
+        assert!(text.contains("\"level\":\"ERROR\""), "{text}");
+        assert!(text.contains("\"tail_window_lines\":10000"), "{text}");
+        assert!(text.contains("\"searched_lines\":1"), "{text}");
+        assert!(text.contains("\"matched_lines\":0"), "{text}");
+        assert!(text.contains("\"searched_bytes\":18"), "{text}");
+    }
+
+    #[test]
+    fn limit_truncated_grep_renders_metadata_before_matches() {
+        let source = test_source();
+        let re = regex::Regex::new("43301").expect("regex");
+
+        let output = source.filter_grep_output(
+            "43301",
+            None,
+            1,
+            SshLogOutput {
+                lines: vec![
+                    "ERROR release_id=43301 first".to_string(),
+                    "ERROR release_id=43301 second".to_string(),
+                ],
+                truncated_at: Vec::new(),
+                bytes: 58,
+                metadata: None,
+            },
+            &re,
+            None,
+        );
+
+        assert_eq!(output.lines, vec!["ERROR release_id=43301 first"]);
+        assert_eq!(output.truncated_at, vec![TruncatedAt::Rows]);
+        let text = output.into_text();
+        let mut lines = text.lines();
+        let metadata = lines.next().expect("metadata line");
+        assert!(metadata.contains("\"status\":\"truncated\""), "{metadata}");
+        assert!(metadata.contains("\"matched_lines\":2"), "{metadata}");
+        assert!(metadata.contains("\"returned_lines\":1"), "{metadata}");
+        assert!(
+            metadata.contains("\"truncated_at\":[\"Rows\"]"),
+            "{metadata}"
+        );
+        assert_eq!(lines.next(), Some("ERROR release_id=43301 first"));
+        assert_eq!(lines.next(), None);
+    }
+
+    fn test_source() -> SshLogSource {
+        SshLogSource::new(
+            "prod-logs",
+            "app.example",
+            "/var/log/app.log",
+            SshLogCaps {
+                line_bytes: 1024,
+                bytes: 4096,
+                timeout: Duration::from_secs(1),
+            },
+        )
+        .expect("source")
     }
 }
