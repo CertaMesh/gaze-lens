@@ -1,6 +1,27 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.0] — 2026-06-21
+
+First release on the Gaze `0.11` runtime. Supersedes the never-tagged `0.4.1`
+SSH-log work, which is folded into this entry.
+
+### Added
+- `log_grep` gains an opt-in `mode: "keyword"` (plus optional `refresh`) for
+  fast keyword/term search over an in-memory inverted index. The index is built
+  **only** from chokepoint-redacted output (never raw log text), is scoped per
+  session+profile with a TTL, and keeps whole Gaze tokens searchable as single
+  terms. Default `mode` stays `regex` (byte-identical to prior behavior);
+  unknown modes fail closed. In keyword mode the manifest audits the full
+  redacted window searched (a superset of the matched response — intentional,
+  the audit reflects data accessed) and the snapshot covers that window; see
+  [SPEC.md](./SPEC.md). No new MCP tool. (#1625)
+- `schema` and `list_tables` responses carry optional discovery metadata
+  (profile name, source class, allowed columns, and a stable profile/schema
+  hash), with discovery output also available on `check`/`serve`, so agents can
+  distinguish database vs log profiles and their scope without triggering
+  `ProfileUnknown` errors. SPEC-safe — no new MCP tool or subcommand. (#1490)
+- `replay` surfaces structured restore telemetry (success/partial/failed plus
+  restored-token counts). See [docs/replay.md](./docs/replay.md).
 
 ### Changed
 - Bumped the Gaze runtime crates `0.9.0-rc.1` → `0.11` (`gaze-pii`,
@@ -11,6 +32,12 @@
   error now aborts redaction instead of silently passing text through),
   bounded-window NER chunking for long inputs, and the recognizer
   span-precision and byte-exact restore fixes.
+- `log_grep` serves repeated searches from an in-memory TTL cache of the
+  redacted bounded tail window, skipping repeated SSH round-trips. Regex results
+  are byte-identical to before; the cache holds only redacted text.
+- Consolidated the token-restore path onto Gaze 0.11 whole-text restore
+  (`restore_strict_text` / restore telemetry), replacing three hand-rolled
+  per-token loops; byte-exact replay preserved.
 
 ### Fixed
 - `init` now accepts `user@host` for `--source-ssh-host` (database tunnel jump
@@ -18,7 +45,15 @@
   runtime ssh argv builder. Previously the init-time gate was stricter than the
   runtime, rejecting valid `deploy@host` profiles that would otherwise work
   end-to-end. Dash-prefixed hosts and shell metacharacters are still rejected.
-  (todo #504)
+  (#504)
+- `check` performs a one-line SSH read for `ssh_log` profiles, so unreachable
+  hosts and unreadable log paths fail before operators hand the profile to an
+  MCP agent.
+- SSH log reads use a bounded SSH connect timeout and report sanitized timeout
+  phase context, distinguishing SSH connection failures, remote command/read
+  timeouts, source dispatch timeouts, and redaction timeouts.
+- `log_tail` and `log_grep` keep bounded remote tail behavior while preserving
+  profile, host, path, and operation context in timeout errors.
 
 ### Security
 - Profiles can now be marked `production = true`, which requires an NER model
@@ -27,19 +62,10 @@
   of passing arbitrary person names — including names nested in JSON column
   values — through unredacted. Builds on the fail-closed NER behavior above. The
   flag is escalate-only across the project/user merge and opt-in (non-production
-  profiles are unchanged). See [docs/profiles.md](./docs/profiles.md). (todo #988)
-
-## [0.4.1] — 2026-05-27
-
-### Fixed
-- `check` now performs a one-line SSH read for `ssh_log` profiles, so
-  unreachable hosts and unreadable log paths fail before operators hand the
-  profile to an MCP agent.
-- SSH log reads now use a bounded SSH connect timeout and report sanitized
-  timeout phase context, distinguishing SSH connection failures, remote
-  command/read timeouts, source dispatch timeouts, and redaction timeouts.
-- `log_tail` and `log_grep` keep bounded remote tail behavior while preserving
-  profile, host, path, and operation context in timeout errors.
+  profiles are unchanged). See [docs/profiles.md](./docs/profiles.md). (#988)
+- Bumped `astral-tokio-tar` `0.6.1` → `0.6.2` (GHSA-3cv2-h65g-fgmm; dev/
+  docker-test dependency path, no runtime exposure). (#70)
+- Pinned third-party GitHub Actions to verified commit SHAs in CI. (#66)
 
 ## [0.4.0] — 2026-05-18
 
