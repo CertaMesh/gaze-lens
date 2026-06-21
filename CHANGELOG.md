@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Bumped the Gaze runtime crates `0.9.0-rc.1` → `0.11` (`gaze-pii`,
+  `gaze-recognizers`, `gaze-mcp-core`; `gaze-assembly`/`gaze-types` follow
+  transitively). The `gaze-mcp-core` chokepoint surface is unchanged, so this
+  is a version-only bump with no source edits and the locked 5-tool MCP / 6-CLI
+  surface intact. It adopts upstream **fail-closed NER** (a recognizer-backend
+  error now aborts redaction instead of silently passing text through),
+  bounded-window NER chunking for long inputs, and the recognizer
+  span-precision and byte-exact restore fixes.
+
 ## [0.4.1] — 2026-05-27
 
 ### Fixed

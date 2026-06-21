@@ -1439,9 +1439,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-assembly"
-version = "0.9.0-rc.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "429c02fdf5eaedd7f8caf9c71aac9d29af05c1ab808fe67de849f09889833abc"
+checksum = "78e364a4b117918f39d3ee9083bdf93cd8043f7df61036c4d9427b9dd0270161"
 dependencies = [
  "gaze-pii",
  "gaze-recognizers",
@@ -1490,9 +1490,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-mcp-core"
-version = "0.9.0-rc.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90c6af0335186c394730f1852b2ec46277a5992cda4f6646a097ca13ee21cb40"
+checksum = "fc03b1882059263b2468eb3eec050e0d78e278b303f6bf9bd1253f0a240297f8"
 dependencies = [
  "async-trait",
  "gaze-assembly",
@@ -1510,9 +1510,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-pii"
-version = "0.9.0-rc.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1be8f32f60945cffb3e12569aa0f2773e724e9b9ee6fe69f9317a1646879ebee"
+checksum = "2802392ebfc14bc2cf4fe64acbdfbd643a4d2f03d828a090460117a71e8bd6b1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1537,9 +1537,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-recognizers"
-version = "0.9.0-rc.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec9331ece5d287098da4f2265a66ead57df4184204e30de1af5b2e059a78f107"
+checksum = "bbcf4a04bff75ea55dc1640579c41a65bd074eb49e1f77bb39358b77da9104b0"
 dependencies = [
  "aho-corasick",
  "gaze-types",
@@ -1560,9 +1560,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-types"
-version = "0.9.0-rc.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc2bd969de80da4bb120371dec8376b9d5694cadb17922406a9fe66414f8e64e"
+checksum = "45582fd918472bce7c13a3ba2a2a3d839493c9318241c3179f61ed92e5840a3f"
 dependencies = [
  "phonenumber",
  "serde",

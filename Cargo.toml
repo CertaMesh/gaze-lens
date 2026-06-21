@@ -43,9 +43,9 @@ integration-postgres = []
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive", "env"] }
 dialoguer = { version = "0.11", default-features = false, features = ["password"] }
-gaze = { package = "gaze-pii", version = "0.9.0-rc.1" }
-gaze-recognizers = "0.9.0-rc.1"
-gaze-mcp-core = "0.9.0-rc.1"
+gaze = { package = "gaze-pii", version = "0.11" }
+gaze-recognizers = "0.11"
+gaze-mcp-core = "0.11"
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 log = "0.4"
 rmcp = { version = "0.2", features = ["client", "transport-io"] }
