@@ -656,6 +656,52 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    #[tokio::test]
+    async fn cached_grep_preserves_tail_truncation_metadata() {
+        let source = test_source();
+        source.grep_window_cache.store(
+            source.grep_window_cache_key(BOUNDED_TAIL_FOR_GREP),
+            SshLogOutput {
+                lines: vec![
+                    "ERROR release_id=43301 first".to_string(),
+                    "ERROR release_id=43301 second".to_string(),
+                ],
+                truncated_at: vec![TruncatedAt::Bytes, TruncatedAt::LineBytes],
+                bytes: 4096,
+                metadata: None,
+            },
+            Instant::now(),
+        );
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        let output = source
+            .grep_with_tail_fetcher("43301", None, 1, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR fetched unexpectedly", 26))
+                }
+            })
+            .await
+            .expect("cached grep");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            output.truncated_at,
+            vec![
+                TruncatedAt::Bytes,
+                TruncatedAt::LineBytes,
+                TruncatedAt::Rows
+            ]
+        );
+        let metadata = output.metadata.as_ref().expect("metadata");
+        assert_eq!(metadata.searched_bytes, 4096);
+        assert_eq!(metadata.tail_window_lines, BOUNDED_TAIL_FOR_GREP);
+        assert_eq!(metadata.matched_lines, 2);
+        assert_eq!(metadata.returned_lines, 1);
+        assert_eq!(metadata.truncated_at, output.truncated_at);
+    }
+
     #[test]
     fn connect_timeout_stderr_is_classified() {
         assert!(ssh_stderr_indicates_connect_timeout(
