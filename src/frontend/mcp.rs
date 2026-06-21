@@ -69,6 +69,10 @@ pub struct LogGrepArgs {
     pub level: Option<String>,
     #[serde(default)]
     pub limit: Option<u32>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub refresh: Option<bool>,
 }
 
 #[tool_router(router = tool_router)]

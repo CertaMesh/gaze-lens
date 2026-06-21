@@ -38,14 +38,22 @@ impl Source for SshLogSourceWrapper {
                             "invalid log_grep args".to_string(),
                         )
                     })?;
-                self.inner
-                    .grep(
-                        &args.pattern,
-                        args.level.as_deref(),
-                        args.limit.unwrap_or(100),
-                    )
-                    .await
-                    .map(text_output_from_log)
+                let _refresh = args.refresh.unwrap_or(false);
+                match args.mode.as_deref().unwrap_or("regex") {
+                    "regex" | "keyword" => self
+                        .inner
+                        .grep(
+                            &args.pattern,
+                            args.level.as_deref(),
+                            args.limit.unwrap_or(100),
+                        )
+                        .await
+                        .map(text_output_from_log),
+                    other => Err(source_error(
+                        self.inner.profile_name(),
+                        format!("invalid log_grep mode `{other}`; expected `regex` or `keyword`"),
+                    )),
+                }
             }
             other => Err(source_error(
                 self.inner.profile_name(),
@@ -65,6 +73,8 @@ struct LogGrepArgs {
     pattern: String,
     level: Option<String>,
     limit: Option<usize>,
+    mode: Option<String>,
+    refresh: Option<bool>,
 }
 
 fn source_error(profile_name: &str, detail: String) -> LensError {
