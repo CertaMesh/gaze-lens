@@ -256,7 +256,9 @@ fn keyword_request_from_args(args: &serde_json::Value) -> Result<KeywordRequest,
             "keyword log_grep pattern must contain at least one term".to_string(),
         ));
     }
-    let level = optional_string_arg(args, "level")?.map(ToOwned::to_owned);
+    let level = optional_string_arg(args, "level")?
+        .filter(|level| !level.is_empty())
+        .map(ToOwned::to_owned);
     let limit = optional_usize_arg(args, "limit")?.unwrap_or(100);
     let refresh = optional_bool_arg(args, "refresh")?.unwrap_or(false);
     let profile_key = args
@@ -360,16 +362,54 @@ fn split_redacted_window_text(text: &str) -> (Option<serde_json::Value>, Vec<Str
         return (None, Vec::new());
     };
     if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(first)
-        && metadata
-            .get("operation")
-            .and_then(serde_json::Value::as_str)
-            == Some("log_grep")
+        && is_log_grep_metadata_header(&metadata)
     {
         return (Some(metadata), lines.map(ToOwned::to_owned).collect());
     }
     let mut out = vec![first.to_string()];
     out.extend(lines.map(ToOwned::to_owned));
     (None, out)
+}
+
+fn is_log_grep_metadata_header(metadata: &serde_json::Value) -> bool {
+    metadata.as_object().is_some()
+        && metadata
+            .get("operation")
+            .and_then(serde_json::Value::as_str)
+            == Some("log_grep")
+        && metadata
+            .get("source_kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("ssh_log")
+        && has_string(metadata, "status")
+        && has_string(metadata, "profile")
+        && has_string(metadata, "host")
+        && has_string(metadata, "path")
+        && has_string(metadata, "pattern")
+        && has_u64(metadata, "requested_limit")
+        && has_u64(metadata, "tail_window_lines")
+        && has_u64(metadata, "searched_lines")
+        && has_u64(metadata, "matched_lines")
+        && has_u64(metadata, "returned_lines")
+        && has_u64(metadata, "searched_bytes")
+        && metadata
+            .get("truncated_at")
+            .and_then(serde_json::Value::as_array)
+            .is_some()
+}
+
+fn has_string(metadata: &serde_json::Value, key: &str) -> bool {
+    metadata
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .is_some()
+}
+
+fn has_u64(metadata: &serde_json::Value, key: &str) -> bool {
+    metadata
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .is_some()
 }
 
 fn render_keyword_output(
@@ -683,6 +723,30 @@ mod tests {
     }
 
     #[test]
+    fn keyword_request_normalizes_empty_level_to_absent() {
+        let request = keyword_request_from_args(&json!({
+            "profile": "prod-logs",
+            "pattern": "43301",
+            "level": "",
+            "mode": "keyword"
+        }))
+        .expect("keyword request");
+
+        assert_eq!(request.level, None);
+
+        let window = redacted_window([
+            "INFO release_id=43301 booted",
+            "ERROR release_id=43301 failed",
+        ]);
+        let clean = filter_keyword_window(&window, &request).expect("keyword search");
+
+        assert_eq!(
+            clean_text(clean),
+            "INFO release_id=43301 booted\nERROR release_id=43301 failed"
+        );
+    }
+
+    #[test]
     fn keyword_search_honors_limit_with_rows_truncation() {
         let window = redacted_window([
             "ERROR release_id=43301 first",
@@ -741,6 +805,47 @@ mod tests {
         assert_eq!(metadata["requested_limit"], 1);
         assert_eq!(metadata["matched_lines"], 2);
         assert_eq!(metadata["returned_lines"], 1);
+    }
+
+    #[test]
+    fn split_redacted_window_text_strips_log_grep_metadata_header() {
+        let header = json!({
+            "operation": "log_grep",
+            "status": "matches",
+            "profile": "prod-logs",
+            "source_kind": "ssh_log",
+            "host": "app.example",
+            "path": "/var/log/app.log",
+            "pattern": "43301",
+            "level": null,
+            "requested_limit": 100,
+            "tail_window_lines": 10000,
+            "searched_lines": 2,
+            "matched_lines": 2,
+            "returned_lines": 2,
+            "searched_bytes": 42,
+            "truncated_at": []
+        });
+        let text = format!("{header}\nERROR release_id=43301");
+
+        let (metadata, lines) = split_redacted_window_text(&text);
+
+        assert_eq!(metadata, Some(header));
+        assert_eq!(lines, vec!["ERROR release_id=43301"]);
+    }
+
+    #[test]
+    fn split_redacted_window_text_keeps_operation_json_log_line() {
+        let first_line = r#"{"operation":"log_grep","message":"real log line"}"#;
+        let text = format!("{first_line}\nERROR release_id=43301");
+
+        let (metadata, lines) = split_redacted_window_text(&text);
+
+        assert_eq!(metadata, None);
+        assert_eq!(
+            lines,
+            vec![first_line.to_string(), "ERROR release_id=43301".to_string()]
+        );
     }
 
     #[tokio::test]

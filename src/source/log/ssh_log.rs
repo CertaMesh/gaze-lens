@@ -351,6 +351,7 @@ impl SshLogSource {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<SshLogOutput, LensError>>,
     {
+        let level = non_empty_level(level);
         let output = self
             .grep_window_cache
             .get_or_fetch_refresh(
@@ -373,6 +374,7 @@ impl SshLogSource {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<SshLogOutput, LensError>>,
     {
+        let level = non_empty_level(level);
         let re = regex::Regex::new(pattern).map_err(|_| LensError::SourceError {
             source_name: self.profile_name.clone(),
             detail: "invalid log grep regex".to_string(),
@@ -408,6 +410,7 @@ impl SshLogSource {
         re: &regex::Regex,
         level_re: Option<&regex::Regex>,
     ) -> SshLogOutput {
+        let level = non_empty_level(level);
         let searched_lines = output.lines.len();
         let searched_bytes = output.bytes;
         let mut truncated_at = output.truncated_at;
@@ -459,6 +462,7 @@ impl SshLogSource {
         limit: usize,
         output: SshLogOutput,
     ) -> SshLogOutput {
+        let level = non_empty_level(level);
         let searched_lines = output.lines.len();
         let searched_bytes = output.bytes;
         let truncated_at = output.truncated_at;
@@ -571,6 +575,10 @@ fn timeout_error(
 fn ssh_stderr_indicates_connect_timeout(stderr: &[u8]) -> bool {
     let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
     stderr.contains("connection timed out") || stderr.contains("operation timed out")
+}
+
+fn non_empty_level(level: Option<&str>) -> Option<&str> {
+    level.filter(|value| !value.is_empty())
 }
 
 fn grep_metadata_required(matched_lines: usize, truncated_at: &[TruncatedAt]) -> bool {
@@ -744,6 +752,33 @@ mod tests {
 
         assert_eq!(fetches.load(Ordering::SeqCst), 0);
         assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn grep_normalizes_empty_level_to_absent() {
+        let source = test_source();
+
+        let output = source
+            .grep_with_tail_fetcher("43301", Some(""), 1, || async {
+                Ok::<_, LensError>(SshLogOutput {
+                    lines: vec![
+                        "INFO release_id=43301 booted".to_string(),
+                        "ERROR release_id=43301 failed".to_string(),
+                    ],
+                    truncated_at: Vec::new(),
+                    bytes: 58,
+                    metadata: None,
+                })
+            })
+            .await
+            .expect("grep");
+
+        assert_eq!(output.lines, vec!["INFO release_id=43301 booted"]);
+        let metadata = output.metadata.as_ref().expect("metadata");
+        assert_eq!(metadata.level, None);
+        assert_eq!(metadata.matched_lines, 2);
+        assert_eq!(metadata.returned_lines, 1);
+        assert_eq!(metadata.truncated_at, vec![TruncatedAt::Rows]);
     }
 
     #[tokio::test]
