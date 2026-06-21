@@ -15,6 +15,9 @@ pub const HARD_CAP_LINES: usize = 10_000;
 pub const BOUNDED_TAIL_FOR_GREP: usize = 10_000;
 const SSH_CONNECT_TIMEOUT_SECS: u64 = 10;
 const STDERR_CAP_BYTES: usize = 8 * 1024;
+// Short-lived only: amortizes repeated log_grep SSH tails during live triage
+// without creating a raw log store beyond the running process.
+const GREP_WINDOW_CACHE_TTL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy)]
 pub struct SshLogCaps {
@@ -31,6 +34,7 @@ pub struct SshLogSource {
     max_line_bytes: usize,
     max_total_bytes: usize,
     timeout: Duration,
+    grep_window_cache: WindowCache,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -189,6 +193,7 @@ impl SshLogSource {
             max_line_bytes: caps.line_bytes,
             max_total_bytes: caps.bytes,
             timeout: caps.timeout,
+            grep_window_cache: WindowCache::new(GREP_WINDOW_CACHE_TTL),
         })
     }
 
@@ -296,6 +301,23 @@ impl SshLogSource {
         level: Option<&str>,
         limit: usize,
     ) -> Result<SshLogOutput, LensError> {
+        self.grep_with_tail_fetcher(pattern, level, limit, || {
+            self.tail_for_operation(BOUNDED_TAIL_FOR_GREP, "log_grep")
+        })
+        .await
+    }
+
+    async fn grep_with_tail_fetcher<F, Fut>(
+        &self,
+        pattern: &str,
+        level: Option<&str>,
+        limit: usize,
+        fetch: F,
+    ) -> Result<SshLogOutput, LensError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<SshLogOutput, LensError>>,
+    {
         let re = regex::Regex::new(pattern).map_err(|_| LensError::SourceError {
             source_name: self.profile_name.clone(),
             detail: "invalid log grep regex".to_string(),
@@ -312,9 +334,14 @@ impl SshLogSource {
                 stderr: None,
             })?;
         let output = self
-            .tail_for_operation(BOUNDED_TAIL_FOR_GREP, "log_grep")
+            .grep_window_cache
+            .get_or_fetch(self.grep_window_cache_key(BOUNDED_TAIL_FOR_GREP), fetch)
             .await?;
         Ok(self.filter_grep_output(pattern, level, limit, output, &re, level_re.as_ref()))
+    }
+
+    fn grep_window_cache_key(&self, window_lines: usize) -> WindowCacheKey {
+        WindowCacheKey::new(self.host.as_str(), self.path.as_str(), window_lines)
     }
 
     fn filter_grep_output(
@@ -582,6 +609,51 @@ mod tests {
 
         assert_eq!(fetches.load(Ordering::SeqCst), 2);
         assert_ne!(second, first);
+    }
+
+    #[tokio::test]
+    async fn grep_uses_prewarmed_window_cache_without_fetch() {
+        let source = test_source();
+        let window = SshLogOutput {
+            lines: vec![
+                "ERROR release_id=43301 first".to_string(),
+                "INFO release_id=43301 ignored".to_string(),
+                "ERROR release_id=43301 second".to_string(),
+            ],
+            truncated_at: vec![TruncatedAt::Bytes],
+            bytes: 91,
+            metadata: None,
+        };
+        let re = regex::Regex::new("43301").expect("regex");
+        let level_re = regex::Regex::new(r"(?i)\bERROR\b").expect("level regex");
+        let expected = source.filter_grep_output(
+            "43301",
+            Some("ERROR"),
+            1,
+            window.clone(),
+            &re,
+            Some(&level_re),
+        );
+        source.grep_window_cache.store(
+            source.grep_window_cache_key(BOUNDED_TAIL_FOR_GREP),
+            window,
+            Instant::now(),
+        );
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        let actual = source
+            .grep_with_tail_fetcher("43301", Some("ERROR"), 1, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR fetched unexpectedly", 26))
+                }
+            })
+            .await
+            .expect("cached grep");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 0);
+        assert_eq!(actual, expected);
     }
 
     #[test]
