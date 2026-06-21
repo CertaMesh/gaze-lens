@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+use std::fmt;
+use std::future::Future;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -55,6 +58,96 @@ pub struct SshLogMetadata {
     pub returned_lines: usize,
     pub searched_bytes: usize,
     pub truncated_at: Vec<TruncatedAt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct WindowCacheKey {
+    host: String,
+    path: String,
+    window_lines: usize,
+}
+
+impl WindowCacheKey {
+    fn new(
+        host: impl Into<String>,
+        path: impl Into<String>,
+        window_lines: usize,
+    ) -> WindowCacheKey {
+        WindowCacheKey {
+            host: host.into(),
+            path: path.into(),
+            window_lines,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CachedWindow {
+    minted_at: Instant,
+    output: SshLogOutput,
+}
+
+struct WindowCache {
+    ttl: Duration,
+    now: Box<dyn Fn() -> Instant + Send + Sync>,
+    entries: std::sync::Mutex<HashMap<WindowCacheKey, CachedWindow>>,
+}
+
+impl fmt::Debug for WindowCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowCache")
+            .field("ttl", &self.ttl)
+            .finish_non_exhaustive()
+    }
+}
+
+impl WindowCache {
+    fn new(ttl: Duration) -> WindowCache {
+        Self::with_clock(ttl, Instant::now)
+    }
+
+    fn with_clock(ttl: Duration, now: impl Fn() -> Instant + Send + Sync + 'static) -> WindowCache {
+        WindowCache {
+            ttl,
+            now: Box::new(now),
+            entries: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn get_or_fetch<F, Fut>(
+        &self,
+        key: WindowCacheKey,
+        fetch: F,
+    ) -> Result<SshLogOutput, LensError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<SshLogOutput, LensError>>,
+    {
+        let now = (self.now)();
+        if let Some(output) = self.fresh(&key, now) {
+            return Ok(output);
+        }
+
+        let output = fetch().await?;
+        self.store(key, output.clone(), (self.now)());
+        Ok(output)
+    }
+
+    fn fresh(&self, key: &WindowCacheKey, now: Instant) -> Option<SshLogOutput> {
+        self.entries
+            .lock()
+            .expect("window cache")
+            .get(key)
+            .filter(|entry| now.saturating_duration_since(entry.minted_at) <= self.ttl)
+            .map(|entry| entry.output.clone())
+    }
+
+    fn store(&self, key: WindowCacheKey, output: SshLogOutput, minted_at: Instant) {
+        self.entries
+            .lock()
+            .expect("window cache")
+            .insert(key, CachedWindow { minted_at, output });
+    }
 }
 
 impl SshLogOutput {
@@ -386,6 +479,110 @@ fn push_truncation(truncated_at: &mut Vec<TruncatedAt>, reason: TruncatedAt) {
 mod tests {
     use super::*;
     use crate::errors::sanitize_error;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::Instant;
+
+    #[tokio::test]
+    async fn window_cache_reuses_fresh_window_for_same_key() {
+        let clock = test_clock();
+        let cache = WindowCache::with_clock(Duration::from_secs(5), clock.now_fn());
+        let key = WindowCacheKey::new("app.example", "/var/log/app.log", 10);
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        let first = cache
+            .get_or_fetch(key.clone(), {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 first", 33))
+                }
+            })
+            .await
+            .expect("first fetch");
+        clock.advance(Duration::from_secs(1));
+        let second = cache
+            .get_or_fetch(key, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 second", 34))
+                }
+            })
+            .await
+            .expect("cached fetch");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+        assert_eq!(second, first);
+    }
+
+    #[tokio::test]
+    async fn window_cache_refetches_stale_window() {
+        let clock = test_clock();
+        let cache = WindowCache::with_clock(Duration::from_secs(5), clock.now_fn());
+        let key = WindowCacheKey::new("app.example", "/var/log/app.log", 10);
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        cache
+            .get_or_fetch(key.clone(), {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 first", 33))
+                }
+            })
+            .await
+            .expect("first fetch");
+        clock.advance(Duration::from_secs(6));
+        let second = cache
+            .get_or_fetch(key, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 second", 34))
+                }
+            })
+            .await
+            .expect("stale fetch");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+        assert_eq!(second.lines, vec!["ERROR release_id=43301 second"]);
+    }
+
+    #[tokio::test]
+    async fn window_cache_isolates_distinct_keys() {
+        let clock = test_clock();
+        let cache = WindowCache::with_clock(Duration::from_secs(5), clock.now_fn());
+        let first_key = WindowCacheKey::new("app.example", "/var/log/app.log", 10);
+        let second_key = WindowCacheKey::new("app.example", "/var/log/audit.log", 10);
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        let first = cache
+            .get_or_fetch(first_key, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 app", 30))
+                }
+            })
+            .await
+            .expect("first key fetch");
+        let second = cache
+            .get_or_fetch(second_key, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 audit", 32))
+                }
+            })
+            .await
+            .expect("second key fetch");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+        assert_ne!(second, first);
+    }
 
     #[test]
     fn connect_timeout_stderr_is_classified() {
@@ -509,5 +706,37 @@ mod tests {
             },
         )
         .expect("source")
+    }
+
+    fn sample_window(line: &str, bytes: usize) -> SshLogOutput {
+        SshLogOutput {
+            lines: vec![line.to_string()],
+            truncated_at: Vec::new(),
+            bytes,
+            metadata: None,
+        }
+    }
+
+    fn test_clock() -> TestClock {
+        TestClock {
+            now: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestClock {
+        now: Arc<Mutex<Instant>>,
+    }
+
+    impl TestClock {
+        fn now_fn(&self) -> impl Fn() -> Instant + Send + Sync + 'static {
+            let now = Arc::clone(&self.now);
+            move || *now.lock().expect("test clock")
+        }
+
+        fn advance(&self, duration: Duration) {
+            let mut now = self.now.lock().expect("test clock");
+            *now += duration;
+        }
     }
 }
