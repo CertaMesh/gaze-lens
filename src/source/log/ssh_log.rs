@@ -137,6 +137,25 @@ impl WindowCache {
         Ok(output)
     }
 
+    async fn get_or_fetch_refresh<F, Fut>(
+        &self,
+        key: WindowCacheKey,
+        refresh: bool,
+        fetch: F,
+    ) -> Result<SshLogOutput, LensError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<SshLogOutput, LensError>>,
+    {
+        if !refresh {
+            return self.get_or_fetch(key, fetch).await;
+        }
+
+        let output = fetch().await?;
+        self.store(key, output.clone(), (self.now)());
+        Ok(output)
+    }
+
     fn fresh(&self, key: &WindowCacheKey, now: Instant) -> Option<SshLogOutput> {
         self.entries
             .lock()
@@ -312,8 +331,9 @@ impl SshLogSource {
         pattern: &str,
         level: Option<&str>,
         limit: usize,
+        refresh: bool,
     ) -> Result<SshLogOutput, LensError> {
-        self.grep_window_with_tail_fetcher(pattern, level, limit, || {
+        self.grep_window_with_tail_fetcher(pattern, level, limit, refresh, || {
             self.tail_for_operation(BOUNDED_TAIL_FOR_GREP, "log_grep")
         })
         .await
@@ -324,6 +344,7 @@ impl SshLogSource {
         pattern: &str,
         level: Option<&str>,
         limit: usize,
+        refresh: bool,
         fetch: F,
     ) -> Result<SshLogOutput, LensError>
     where
@@ -332,7 +353,11 @@ impl SshLogSource {
     {
         let output = self
             .grep_window_cache
-            .get_or_fetch(self.grep_window_cache_key(BOUNDED_TAIL_FOR_GREP), fetch)
+            .get_or_fetch_refresh(
+                self.grep_window_cache_key(BOUNDED_TAIL_FOR_GREP),
+                refresh,
+                fetch,
+            )
             .await?;
         Ok(self.full_grep_window_output(pattern, level, limit, output))
     }
@@ -765,6 +790,66 @@ mod tests {
         assert_eq!(metadata.matched_lines, 2);
         assert_eq!(metadata.returned_lines, 1);
         assert_eq!(metadata.truncated_at, output.truncated_at);
+    }
+
+    #[tokio::test]
+    async fn grep_window_uses_fresh_window_cache_without_fetch() {
+        let source = test_source();
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        let first = source
+            .grep_window_with_tail_fetcher("43301", None, 100, false, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 first", 30))
+                }
+            })
+            .await
+            .expect("first window");
+        let second = source
+            .grep_window_with_tail_fetcher("43301", None, 100, false, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 second", 31))
+                }
+            })
+            .await
+            .expect("cached window");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+        assert_eq!(second.lines, first.lines);
+    }
+
+    #[tokio::test]
+    async fn grep_window_refresh_refetches_fresh_window_cache() {
+        let source = test_source();
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        source
+            .grep_window_with_tail_fetcher("43301", None, 100, false, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 first", 30))
+                }
+            })
+            .await
+            .expect("first window");
+        let refreshed = source
+            .grep_window_with_tail_fetcher("43301", None, 100, true, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, LensError>(sample_window("ERROR release_id=43301 refreshed", 34))
+                }
+            })
+            .await
+            .expect("refreshed window");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+        assert_eq!(refreshed.lines, vec!["ERROR release_id=43301 refreshed"]);
     }
 
     #[test]

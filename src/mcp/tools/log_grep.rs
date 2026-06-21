@@ -1,5 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::future::Future;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use gaze_mcp_core::{Tool, ToolCtx, ToolDescriptor, ToolError, ToolResponse};
@@ -10,6 +12,10 @@ use crate::errors::LensError;
 use crate::session::{CleanOutput, Session, TruncatedAt};
 
 use super::{clean_output_response, invoke_session_tool, lens_error_to_tool_error, schema_for};
+
+const KEYWORD_INDEX_CACHE_TTL: Duration = Duration::from_secs(3);
+
+static KEYWORD_INDEX_CACHE: OnceLock<KeywordIndexCache> = OnceLock::new();
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct LogGrepArgs {
@@ -61,14 +67,24 @@ impl Tool for LogGrepTool {
 impl LogGrepTool {
     async fn invoke_keyword(&self, ctx: &ToolCtx<'_>) -> Result<ToolResponse, ToolError> {
         let request = keyword_request_from_args(ctx.redacted_args())?;
-        let clean = self
-            .session
-            .invoke_core_tool("log_grep", ctx.call_id(), ctx.redacted_args().clone())
-            .await
-            .map_err(lens_error_to_tool_error)?;
-        let window = redacted_keyword_window_from_clean(clean)?;
-        filter_keyword_window(&window, &request).and_then(clean_output_response)
+        let key = keyword_cache_key(ctx, &request);
+        let indexed = keyword_index_cache()
+            .get_or_fetch(key, request.refresh, || async {
+                let clean = self
+                    .session
+                    .invoke_core_tool("log_grep", ctx.call_id(), ctx.redacted_args().clone())
+                    .await
+                    .map_err(lens_error_to_tool_error)?;
+                redacted_keyword_window_from_clean(clean)
+            })
+            .await?;
+        filter_keyword_indexed_window(&indexed.window, &indexed.index, &request)
+            .and_then(clean_output_response)
     }
+}
+
+fn keyword_index_cache() -> &'static KeywordIndexCache {
+    KEYWORD_INDEX_CACHE.get_or_init(|| KeywordIndexCache::new(KEYWORD_INDEX_CACHE_TTL))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +112,8 @@ struct KeywordRequest {
     pattern: String,
     level: Option<String>,
     limit: usize,
+    refresh: bool,
+    profile_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +155,100 @@ impl KeywordIndex {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct KeywordCacheKey {
+    session_id: String,
+    profile_key: String,
+}
+
+impl KeywordCacheKey {
+    fn new(session_id: impl Into<String>, profile_key: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            profile_key: profile_key.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct IndexedKeywordWindow {
+    window: RedactedKeywordWindow,
+    index: KeywordIndex,
+}
+
+impl IndexedKeywordWindow {
+    fn new(window: RedactedKeywordWindow) -> Self {
+        let index = KeywordIndex::build(&window.lines);
+        Self { window, index }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CachedKeywordWindow {
+    minted_at: Instant,
+    indexed: IndexedKeywordWindow,
+}
+
+struct KeywordIndexCache {
+    ttl: Duration,
+    now: Box<dyn Fn() -> Instant + Send + Sync>,
+    entries: Mutex<HashMap<KeywordCacheKey, CachedKeywordWindow>>,
+}
+
+impl KeywordIndexCache {
+    fn new(ttl: Duration) -> Self {
+        Self::with_clock(ttl, Instant::now)
+    }
+
+    fn with_clock(
+        ttl: Duration,
+        now: impl Fn() -> Instant + Send + Sync + 'static,
+    ) -> KeywordIndexCache {
+        KeywordIndexCache {
+            ttl,
+            now: Box::new(now),
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn get_or_fetch<F, Fut>(
+        &self,
+        key: KeywordCacheKey,
+        refresh: bool,
+        fetch: F,
+    ) -> Result<IndexedKeywordWindow, ToolError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<RedactedKeywordWindow, ToolError>>,
+    {
+        let now = (self.now)();
+        if !refresh && let Some(indexed) = self.fresh(&key, now) {
+            return Ok(indexed);
+        }
+
+        let window = fetch().await?;
+        let indexed = IndexedKeywordWindow::new(window);
+        self.store(key, indexed.clone(), (self.now)());
+        Ok(indexed)
+    }
+
+    fn fresh(&self, key: &KeywordCacheKey, now: Instant) -> Option<IndexedKeywordWindow> {
+        self.entries
+            .lock()
+            .expect("keyword index cache")
+            .get(key)
+            .filter(|entry| now.saturating_duration_since(entry.minted_at) <= self.ttl)
+            .map(|entry| entry.indexed.clone())
+    }
+
+    fn store(&self, key: KeywordCacheKey, indexed: IndexedKeywordWindow, minted_at: Instant) {
+        self.entries
+            .lock()
+            .expect("keyword index cache")
+            .insert(key, CachedKeywordWindow { minted_at, indexed });
+    }
+}
+
 fn keyword_request_from_args(args: &serde_json::Value) -> Result<KeywordRequest, ToolError> {
     let pattern = string_arg(args, "pattern")?.to_string();
     if keyword_query_terms(&pattern).is_empty() {
@@ -146,13 +258,22 @@ fn keyword_request_from_args(args: &serde_json::Value) -> Result<KeywordRequest,
     }
     let level = optional_string_arg(args, "level")?.map(ToOwned::to_owned);
     let limit = optional_usize_arg(args, "limit")?.unwrap_or(100);
+    let refresh = optional_bool_arg(args, "refresh")?.unwrap_or(false);
+    let profile_key = args
+        .get("profile")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
     Ok(KeywordRequest {
         pattern,
         level,
         limit,
+        refresh,
+        profile_key,
     })
 }
 
+#[cfg(test)]
 fn filter_keyword_window(
     window: &RedactedKeywordWindow,
     request: &KeywordRequest,
@@ -208,6 +329,13 @@ fn filter_keyword_indexed_window(
         &truncated_at,
     )?;
     Ok(CleanOutput::Text { text, truncated_at })
+}
+
+fn keyword_cache_key(ctx: &ToolCtx<'_>, request: &KeywordRequest) -> KeywordCacheKey {
+    KeywordCacheKey::new(
+        ctx.resources().session().audit_session_id().to_string(),
+        request.profile_key.clone(),
+    )
 }
 
 fn redacted_keyword_window_from_clean(
@@ -466,10 +594,25 @@ fn optional_usize_arg(args: &serde_json::Value, key: &str) -> Result<Option<usiz
     }
 }
 
+fn optional_bool_arg(args: &serde_json::Value, key: &str) -> Result<Option<bool>, ToolError> {
+    match args.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(ToolError::InvalidArgs(format!(
+            "log_grep `{key}` must be a bool"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use gaze_mcp_core::ToolError;
     use serde_json::json;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::{Duration, Instant};
 
     use super::*;
 
@@ -600,6 +743,107 @@ mod tests {
         assert_eq!(metadata["returned_lines"], 1);
     }
 
+    #[tokio::test]
+    async fn keyword_index_cache_reuses_fresh_redacted_window() {
+        let clock = test_clock();
+        let cache = KeywordIndexCache::with_clock(Duration::from_secs(3), clock.now_fn());
+        let key = KeywordCacheKey::new("session-a", "prod-logs");
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        let first = cache
+            .get_or_fetch(key.clone(), false, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok(redacted_window(["ERROR release_id=43301 first"]))
+                }
+            })
+            .await
+            .expect("first fetch");
+        clock.advance(Duration::from_secs(1));
+        let second = cache
+            .get_or_fetch(key, false, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok(redacted_window(["ERROR release_id=43301 second"]))
+                }
+            })
+            .await
+            .expect("cached fetch");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+        assert_eq!(second, first);
+    }
+
+    #[tokio::test]
+    async fn keyword_index_cache_refresh_busts_fresh_redacted_window() {
+        let clock = test_clock();
+        let cache = KeywordIndexCache::with_clock(Duration::from_secs(3), clock.now_fn());
+        let key = KeywordCacheKey::new("session-a", "prod-logs");
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        cache
+            .get_or_fetch(key.clone(), false, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok(redacted_window(["ERROR release_id=43301 first"]))
+                }
+            })
+            .await
+            .expect("first fetch");
+        let refreshed = cache
+            .get_or_fetch(key, true, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok(redacted_window(["ERROR release_id=43301 refreshed"]))
+                }
+            })
+            .await
+            .expect("refresh fetch");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            refreshed.window.lines,
+            vec!["ERROR release_id=43301 refreshed"]
+        );
+    }
+
+    #[tokio::test]
+    async fn keyword_index_cache_refetches_stale_redacted_window() {
+        let clock = test_clock();
+        let cache = KeywordIndexCache::with_clock(Duration::from_secs(3), clock.now_fn());
+        let key = KeywordCacheKey::new("session-a", "prod-logs");
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        cache
+            .get_or_fetch(key.clone(), false, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok(redacted_window(["ERROR release_id=43301 first"]))
+                }
+            })
+            .await
+            .expect("first fetch");
+        clock.advance(Duration::from_secs(4));
+        let stale = cache
+            .get_or_fetch(key, false, {
+                let fetches = Arc::clone(&fetches);
+                || async move {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    Ok(redacted_window(["ERROR release_id=43301 stale"]))
+                }
+            })
+            .await
+            .expect("stale fetch");
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+        assert_eq!(stale.window.lines, vec!["ERROR release_id=43301 stale"]);
+    }
+
     fn redacted_window(lines: impl IntoIterator<Item = &'static str>) -> RedactedKeywordWindow {
         RedactedKeywordWindow {
             lines: lines.into_iter().map(ToString::to_string).collect(),
@@ -613,6 +857,8 @@ mod tests {
             pattern: pattern.to_string(),
             level: None,
             limit,
+            refresh: false,
+            profile_key: "test".to_string(),
         }
     }
 
@@ -627,6 +873,29 @@ mod tests {
         match clean {
             crate::session::CleanOutput::Text { truncated_at, .. } => truncated_at,
             other => panic!("expected text output, got {other:?}"),
+        }
+    }
+
+    fn test_clock() -> TestClock {
+        TestClock {
+            now: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestClock {
+        now: Arc<Mutex<Instant>>,
+    }
+
+    impl TestClock {
+        fn now_fn(&self) -> impl Fn() -> Instant + Send + Sync + 'static {
+            let now = Arc::clone(&self.now);
+            move || *now.lock().expect("test clock")
+        }
+
+        fn advance(&self, duration: Duration) {
+            let mut now = self.now.lock().expect("test clock");
+            *now += duration;
         }
     }
 }

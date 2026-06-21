@@ -38,7 +38,6 @@ impl Source for SshLogSourceWrapper {
                             "invalid log_grep args".to_string(),
                         )
                     })?;
-                let _refresh = args.refresh.unwrap_or(false);
                 match args.mode.as_deref().unwrap_or("regex") {
                     "regex" => self
                         .inner
@@ -55,6 +54,7 @@ impl Source for SshLogSourceWrapper {
                             &args.pattern,
                             args.level.as_deref(),
                             args.limit.unwrap_or(100),
+                            args.refresh.unwrap_or(false),
                         )
                         .await
                         .map(text_output_from_log),
