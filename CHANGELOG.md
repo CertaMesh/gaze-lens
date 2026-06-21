@@ -12,6 +12,14 @@
   bounded-window NER chunking for long inputs, and the recognizer
   span-precision and byte-exact restore fixes.
 
+### Fixed
+- `init` now accepts `user@host` for `--source-ssh-host` (database tunnel jump
+  host) and for ssh-log `--source-host`, matching `--discover-ssh-host` and the
+  runtime ssh argv builder. Previously the init-time gate was stricter than the
+  runtime, rejecting valid `deploy@host` profiles that would otherwise work
+  end-to-end. Dash-prefixed hosts and shell metacharacters are still rejected.
+  (todo #504)
+
 ## [0.4.1] — 2026-05-27
 
 ### Fixed

@@ -6,7 +6,7 @@ use tokio::process::Command;
 
 use crate::errors::LensError;
 use crate::session::TruncatedAt;
-use crate::source::ssh_tunnel::{validate_ssh_host, validate_ssh_login_host, validate_ssh_path};
+use crate::source::ssh_tunnel::{validate_ssh_login_host, validate_ssh_path};
 
 pub const HARD_CAP_LINES: usize = 10_000;
 pub const BOUNDED_TAIL_FOR_GREP: usize = 10_000;
@@ -82,7 +82,10 @@ impl SshLogSource {
         let profile_name = profile_name.into();
         let host = host.into();
         let path = path.into();
-        validate_ssh_host(&host)
+        // #504: accept `user@host` so the log host can carry an explicit login
+        // user, consistent with the runtime argv builder (`tail_argv` →
+        // `validate_ssh_login_host`) and `--discover-ssh-host`.
+        validate_ssh_login_host(&host)
             .map_err(|err| source_error(&profile_name, err.to_string(), None))?;
         validate_ssh_path(&path)
             .map_err(|err| source_error(&profile_name, err.to_string(), None))?;

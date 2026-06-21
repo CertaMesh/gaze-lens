@@ -80,6 +80,56 @@ fn assert_init_rejects(args: Vec<String>, label: &str, cwd: &std::path::Path) {
     );
 }
 
+fn assert_init_accepts(mut args: Vec<String>, label: &str, cwd: &std::path::Path) {
+    // Todo #504: a valid `user@host` must pass init host validation. Use
+    // `--print-only` so the validation gate (flow.rs `validate_section_hosts`,
+    // which runs BEFORE any commit) is exercised without touching the FS. The
+    // acceptance criterion is "no host-validation rejection": exit 0 and no
+    // `invalid ssh host` error (the print-only preview does not render the
+    // `ssh_host` field, so we assert on the gate, not the rendered TOML).
+    args.push("--print-only".into());
+    let home = cwd.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let out = bin()
+        .current_dir(cwd)
+        .env("HOME", &home)
+        .args(&args)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("invalid ssh host"),
+        "{label}: `user@host` must not be rejected by the host gate: {stderr}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{label} must accept the host: {stderr}"
+    );
+}
+
+#[test]
+fn ssh_log_accepts_user_at_host_via_source_host() {
+    // `user@host` mirrors `--discover-ssh-host` and the runtime argv builder.
+    let temp = tempfile::tempdir().unwrap();
+    assert_init_accepts(
+        args_for_ssh_log("deploy@app01"),
+        "ssh-log via --source-host",
+        temp.path(),
+    );
+}
+
+#[test]
+fn mysql_tunnel_accepts_user_at_host_via_source_ssh_host() {
+    // Exact repro from todo #504: Ploi deploy user on a tunnel jump host.
+    let temp = tempfile::tempdir().unwrap();
+    assert_init_accepts(
+        args_for_db_tunnel("mysql", "ploi@94.237.89.225"),
+        "mysql tunnel via --source-ssh-host",
+        temp.path(),
+    );
+}
+
 #[test]
 fn ssh_log_rejects_dash_prefixed_host_via_source_host() {
     // CB-r2-3: ssh-log `host` flows through `--source-host` (TOML `host` per

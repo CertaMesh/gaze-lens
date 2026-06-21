@@ -25,6 +25,23 @@ fn test_new_validates_path() {
 }
 
 #[test]
+fn test_new_accepts_user_at_host() {
+    // Todo #504: the SSH log host may carry an explicit login user (`user@host`),
+    // mirroring `--discover-ssh-host` and the runtime `validate_ssh_login_host`
+    // path that actually builds the ssh argv. Construction must not reject it.
+    let source = SshLogSource::new("p1", "ploi@94.237.89.225", "/var/log/x", caps())
+        .expect("user@host should be accepted");
+    assert!(
+        source
+            .tail_argv(1)
+            .iter()
+            .any(|a| a == "ploi@94.237.89.225"),
+        "host must reach the ssh argv verbatim: {:?}",
+        source.tail_argv(1)
+    );
+}
+
+#[test]
 fn test_split_and_cap_lines() {
     let lines = split_and_cap_lines(b"abcdef\nxy\n\nlast", 3);
 
