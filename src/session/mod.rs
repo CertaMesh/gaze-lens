@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use gaze::{Action, ClassRule, CleanDocument, DefaultRule, RawDocument};
 use gaze_recognizers::RegexDetector;
+use sha2::{Digest, Sha256};
 
 use crate::errors::LensError;
 use crate::manifest::gaze_mcp_adapter::GazeMcpManifestAdapter;
@@ -77,7 +78,7 @@ pub enum SourceClass {
 }
 
 impl SourceClass {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             SourceClass::Database => "database",
             SourceClass::Log => "log",
@@ -149,10 +150,71 @@ pub struct RedactedToolArgs {
     pub json: String,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolResult {
     pub clean: CleanOutput,
     pub snapshot_ref: SnapshotRef,
+    pub observability: Option<ToolObservability>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ToolObservability {
+    pub discovery: DiscoveryMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DiscoveryMetadata {
+    pub profile: String,
+    pub source_class: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_columns: Option<Vec<String>>,
+    pub schema_hash: String,
+}
+
+impl serde::Serialize for ToolResult {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("ToolResult", 2)?;
+        state.serialize_field(
+            "clean",
+            &SerializableCleanOutput {
+                clean: &self.clean,
+                observability: self.observability.as_ref(),
+            },
+        )?;
+        state.serialize_field("snapshot_ref", &self.snapshot_ref)?;
+        state.end()
+    }
+}
+
+struct SerializableCleanOutput<'a> {
+    clean: &'a CleanOutput,
+    observability: Option<&'a ToolObservability>,
+}
+
+impl serde::Serialize for SerializableCleanOutput<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut value = serde_json::to_value(self.clean).map_err(serde::ser::Error::custom)?;
+        if let Some(observability) = self.observability {
+            let serde_json::Value::Object(fields) = &mut value else {
+                return Err(serde::ser::Error::custom(
+                    "clean output did not serialize to an object",
+                ));
+            };
+            fields.insert(
+                "observability".to_string(),
+                serde_json::to_value(observability).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        value.serialize(serializer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -367,6 +429,8 @@ impl Session {
         if matches!(call.tool_name.as_str(), "schema" | "list_tables") {
             clean.restore_gaze_tokens(&self.inner.gaze_session, &pipeline)?;
         }
+        let observability =
+            self.discovery_observability_for_clean(&call.tool_name, &profile_name, &clean)?;
         Ok(ToolResult {
             clean,
             snapshot_ref: SnapshotRef {
@@ -375,6 +439,7 @@ impl Session {
                     .snapshot_dir
                     .join(format!("{}.snap", self.inner.lens_session_id)),
             },
+            observability,
         })
     }
 
@@ -876,6 +941,23 @@ impl Session {
         Ok(CleanOutput::Text { text, truncated_at })
     }
 
+    fn discovery_observability_for_clean(
+        &self,
+        tool_name: &str,
+        profile_name: &str,
+        clean: &CleanOutput,
+    ) -> Result<Option<ToolObservability>, LensError> {
+        let Some(source_class) = tool_kind(tool_name) else {
+            return Ok(None);
+        };
+        let discovery = match tool_name {
+            "schema" => schema_discovery_metadata(profile_name, source_class, clean)?,
+            "list_tables" => list_tables_discovery_metadata(profile_name, source_class, clean)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(ToolObservability { discovery }))
+    }
+
     #[doc(hidden)]
     pub fn new_with_manifest_for_tests(
         policy: &gaze::Policy,
@@ -900,6 +982,131 @@ impl Session {
             snapshot_dir.to_path_buf(),
             caps,
         ))
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PresentedSchema {
+    table_token: String,
+    #[serde(default)]
+    columns: Vec<PresentedColumn>,
+}
+
+#[derive(serde::Deserialize)]
+struct PresentedColumn {
+    name_token: String,
+    #[serde(default)]
+    allowed: bool,
+}
+
+#[derive(serde::Serialize)]
+struct SchemaDiscoveryDescriptor<'a> {
+    profile: &'a str,
+    source_class: &'static str,
+    tool: &'static str,
+    table: String,
+    columns: Vec<ColumnDiscoveryDescriptor>,
+}
+
+#[derive(serde::Serialize)]
+struct ColumnDiscoveryDescriptor {
+    column: String,
+    allowed: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ListTablesDiscoveryDescriptor<'a> {
+    profile: &'a str,
+    source_class: &'static str,
+    tool: &'static str,
+    tables: Vec<String>,
+}
+
+fn schema_discovery_metadata(
+    profile_name: &str,
+    source_class: SourceClass,
+    clean: &CleanOutput,
+) -> Result<DiscoveryMetadata, LensError> {
+    let schema: PresentedSchema =
+        serde_json::from_str(clean_text(clean, "schema")?).map_err(|err| LensError::Internal {
+            detail: format!("failed to parse schema discovery metadata: {err}"),
+        })?;
+    let mut columns = schema
+        .columns
+        .into_iter()
+        .map(|column| ColumnDiscoveryDescriptor {
+            column: column.name_token,
+            allowed: column.allowed,
+        })
+        .collect::<Vec<_>>();
+    columns.sort_by(|left, right| {
+        left.column
+            .cmp(&right.column)
+            .then_with(|| left.allowed.cmp(&right.allowed))
+    });
+    let allowed_columns = columns
+        .iter()
+        .filter(|column| column.allowed)
+        .map(|column| column.column.clone())
+        .collect::<Vec<_>>();
+    let descriptor = SchemaDiscoveryDescriptor {
+        profile: profile_name,
+        source_class: source_class.as_str(),
+        tool: "schema",
+        table: schema.table_token,
+        columns,
+    };
+    Ok(DiscoveryMetadata {
+        profile: profile_name.to_string(),
+        source_class: source_class.as_str(),
+        allowed_columns: Some(allowed_columns),
+        schema_hash: schema_hash(&descriptor)?,
+    })
+}
+
+fn list_tables_discovery_metadata(
+    profile_name: &str,
+    source_class: SourceClass,
+    clean: &CleanOutput,
+) -> Result<DiscoveryMetadata, LensError> {
+    let mut tables: Vec<String> =
+        serde_json::from_str(clean_text(clean, "list_tables")?).map_err(|err| {
+            LensError::Internal {
+                detail: format!("failed to parse list_tables discovery metadata: {err}"),
+            }
+        })?;
+    tables.sort();
+    let descriptor = ListTablesDiscoveryDescriptor {
+        profile: profile_name,
+        source_class: source_class.as_str(),
+        tool: "list_tables",
+        tables,
+    };
+    Ok(DiscoveryMetadata {
+        profile: profile_name.to_string(),
+        source_class: source_class.as_str(),
+        allowed_columns: None,
+        schema_hash: schema_hash(&descriptor)?,
+    })
+}
+
+pub(crate) fn schema_hash<T: serde::Serialize>(descriptor: &T) -> Result<String, LensError> {
+    let bytes = serde_json::to_vec(descriptor).map_err(|err| LensError::Internal {
+        detail: format!("failed to serialize discovery descriptor: {err}"),
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn clean_text<'a>(clean: &'a CleanOutput, tool_name: &str) -> Result<&'a str, LensError> {
+    match clean {
+        CleanOutput::Text { text, .. } => Ok(text),
+        CleanOutput::Rows { .. } => Err(LensError::Internal {
+            detail: format!("{tool_name} discovery metadata expected text output"),
+        }),
     }
 }
 
