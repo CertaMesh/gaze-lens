@@ -40,9 +40,18 @@ impl Source for SshLogSourceWrapper {
                     })?;
                 let _refresh = args.refresh.unwrap_or(false);
                 match args.mode.as_deref().unwrap_or("regex") {
-                    "regex" | "keyword" => self
+                    "regex" => self
                         .inner
                         .grep(
+                            &args.pattern,
+                            args.level.as_deref(),
+                            args.limit.unwrap_or(100),
+                        )
+                        .await
+                        .map(text_output_from_log),
+                    "keyword" => self
+                        .inner
+                        .grep_window(
                             &args.pattern,
                             args.level.as_deref(),
                             args.limit.unwrap_or(100),

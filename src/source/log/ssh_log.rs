@@ -307,6 +307,36 @@ impl SshLogSource {
         .await
     }
 
+    pub async fn grep_window(
+        &self,
+        pattern: &str,
+        level: Option<&str>,
+        limit: usize,
+    ) -> Result<SshLogOutput, LensError> {
+        self.grep_window_with_tail_fetcher(pattern, level, limit, || {
+            self.tail_for_operation(BOUNDED_TAIL_FOR_GREP, "log_grep")
+        })
+        .await
+    }
+
+    async fn grep_window_with_tail_fetcher<F, Fut>(
+        &self,
+        pattern: &str,
+        level: Option<&str>,
+        limit: usize,
+        fetch: F,
+    ) -> Result<SshLogOutput, LensError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<SshLogOutput, LensError>>,
+    {
+        let output = self
+            .grep_window_cache
+            .get_or_fetch(self.grep_window_cache_key(BOUNDED_TAIL_FOR_GREP), fetch)
+            .await?;
+        Ok(self.full_grep_window_output(pattern, level, limit, output))
+    }
+
     async fn grep_with_tail_fetcher<F, Fut>(
         &self,
         pattern: &str,
@@ -391,6 +421,41 @@ impl SshLogSource {
         });
         SshLogOutput {
             lines,
+            truncated_at,
+            bytes: searched_bytes,
+            metadata,
+        }
+    }
+
+    fn full_grep_window_output(
+        &self,
+        pattern: &str,
+        level: Option<&str>,
+        limit: usize,
+        output: SshLogOutput,
+    ) -> SshLogOutput {
+        let searched_lines = output.lines.len();
+        let searched_bytes = output.bytes;
+        let truncated_at = output.truncated_at;
+        let metadata = Some(SshLogMetadata {
+            operation: "log_grep",
+            status: grep_status(searched_lines, &truncated_at),
+            profile: self.profile_name.clone(),
+            source_kind: "ssh_log",
+            host: self.host.clone(),
+            path: self.path.clone(),
+            pattern: pattern.to_string(),
+            level: level.map(ToOwned::to_owned),
+            requested_limit: limit,
+            tail_window_lines: BOUNDED_TAIL_FOR_GREP,
+            searched_lines,
+            matched_lines: searched_lines,
+            returned_lines: searched_lines,
+            searched_bytes,
+            truncated_at: truncated_at.clone(),
+        });
+        SshLogOutput {
+            lines: output.lines,
             truncated_at,
             bytes: searched_bytes,
             metadata,
