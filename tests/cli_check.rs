@@ -420,6 +420,69 @@ fn check_validates_profile_policy_connection_and_pipeline_without_writes() {
 }
 
 #[test]
+fn check_validates_ssh_log_by_reading_configured_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    let bin_dir = temp.path().join("bin");
+    let ssh_log = temp.path().join("ssh-args.txt");
+    let fake_ssh = bin_dir.join("ssh");
+    std::fs::create_dir(&bin_dir).expect("bin dir");
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "test-ssh-log-read"
+            policy = "{}"
+            source = {{ kind = "ssh_log", host = "app-prod", path = "/var/log/app.log" }}
+            "#,
+            policy.display()
+        ),
+    )
+    .expect("profile");
+    std::fs::write(
+        &fake_ssh,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FAKE_SSH_ARGS\"\nprintf 'one log line\\n'\n",
+    )
+    .expect("fake ssh");
+    let mut perms = std::fs::metadata(&fake_ssh)
+        .expect("fake ssh metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_ssh, perms).expect("chmod fake ssh");
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .env("PATH", path)
+        .env("FAKE_SSH_ARGS", &ssh_log)
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "test-ssh-log-read",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("source: ok"));
+    let ssh_args = std::fs::read_to_string(&ssh_log).expect("ssh args");
+    assert!(ssh_args.contains("app-prod"), "{ssh_args}");
+    assert!(
+        ssh_args.contains("tail -n 1 -- /var/log/app.log"),
+        "{ssh_args}"
+    );
+}
+
+#[test]
 fn check_without_explain_risk_unchanged_backward_compat() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
@@ -941,6 +1004,7 @@ fn keyring_profile(name: &str, service: &str, account: &str) -> Profile {
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     }
@@ -962,6 +1026,7 @@ fn sqlite_profile(name: &str, path: std::path::PathBuf) -> Profile {
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     }
@@ -989,6 +1054,7 @@ fn postgres_env_profile(name: &str, env: &str) -> Profile {
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     }

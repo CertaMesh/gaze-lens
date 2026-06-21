@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use gaze::{Action, ClassRule, CleanDocument, DefaultRule, RawDocument};
 use gaze_recognizers::RegexDetector;
+use sha2::{Digest, Sha256};
 
 use crate::errors::LensError;
 use crate::manifest::gaze_mcp_adapter::GazeMcpManifestAdapter;
@@ -77,7 +78,7 @@ pub enum SourceClass {
 }
 
 impl SourceClass {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             SourceClass::Database => "database",
             SourceClass::Log => "log",
@@ -149,10 +150,71 @@ pub struct RedactedToolArgs {
     pub json: String,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolResult {
     pub clean: CleanOutput,
     pub snapshot_ref: SnapshotRef,
+    pub observability: Option<ToolObservability>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ToolObservability {
+    pub discovery: DiscoveryMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DiscoveryMetadata {
+    pub profile: String,
+    pub source_class: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_columns: Option<Vec<String>>,
+    pub schema_hash: String,
+}
+
+impl serde::Serialize for ToolResult {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("ToolResult", 2)?;
+        state.serialize_field(
+            "clean",
+            &SerializableCleanOutput {
+                clean: &self.clean,
+                observability: self.observability.as_ref(),
+            },
+        )?;
+        state.serialize_field("snapshot_ref", &self.snapshot_ref)?;
+        state.end()
+    }
+}
+
+struct SerializableCleanOutput<'a> {
+    clean: &'a CleanOutput,
+    observability: Option<&'a ToolObservability>,
+}
+
+impl serde::Serialize for SerializableCleanOutput<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut value = serde_json::to_value(self.clean).map_err(serde::ser::Error::custom)?;
+        if let Some(observability) = self.observability {
+            let serde_json::Value::Object(fields) = &mut value else {
+                return Err(serde::ser::Error::custom(
+                    "clean output did not serialize to an object",
+                ));
+            };
+            fields.insert(
+                "observability".to_string(),
+                serde_json::to_value(observability).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        value.serialize(serializer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -365,8 +427,10 @@ impl Session {
                 detail: err.to_string(),
             })?;
         if matches!(call.tool_name.as_str(), "schema" | "list_tables") {
-            clean.restore_gaze_tokens(&self.inner.gaze_session)?;
+            clean.restore_gaze_tokens(&self.inner.gaze_session, &pipeline)?;
         }
+        let observability =
+            self.discovery_observability_for_clean(&call.tool_name, &profile_name, &clean)?;
         Ok(ToolResult {
             clean,
             snapshot_ref: SnapshotRef {
@@ -375,6 +439,7 @@ impl Session {
                     .snapshot_dir
                     .join(format!("{}.snap", self.inner.lens_session_id)),
             },
+            observability,
         })
     }
 
@@ -418,12 +483,14 @@ impl Session {
             self.invoke_source(&call, &profile_name),
         )
         .await
-        .map_err(|_| LensError::Truncated(TruncatedAt::Timeout))??;
+        .map_err(|_| {
+            operation_timeout("source dispatch", &call.tool_name, self.inner.caps.timeout)
+        })??;
         let clean = tokio::time::timeout(self.inner.caps.timeout, async {
             self.redact_result(raw_result, &pipeline, &column_actions)
         })
         .await
-        .map_err(|_| LensError::Truncated(TruncatedAt::Timeout))??;
+        .map_err(|_| operation_timeout("redaction", &call.tool_name, self.inner.caps.timeout))??;
         self.inner
             .core_summaries
             .lock()
@@ -874,6 +941,23 @@ impl Session {
         Ok(CleanOutput::Text { text, truncated_at })
     }
 
+    fn discovery_observability_for_clean(
+        &self,
+        tool_name: &str,
+        profile_name: &str,
+        clean: &CleanOutput,
+    ) -> Result<Option<ToolObservability>, LensError> {
+        let Some(source_class) = tool_kind(tool_name) else {
+            return Ok(None);
+        };
+        let discovery = match tool_name {
+            "schema" => schema_discovery_metadata(profile_name, source_class, clean)?,
+            "list_tables" => list_tables_discovery_metadata(profile_name, source_class, clean)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(ToolObservability { discovery }))
+    }
+
     #[doc(hidden)]
     pub fn new_with_manifest_for_tests(
         policy: &gaze::Policy,
@@ -901,18 +985,147 @@ impl Session {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct PresentedSchema {
+    table_token: String,
+    #[serde(default)]
+    columns: Vec<PresentedColumn>,
+}
+
+#[derive(serde::Deserialize)]
+struct PresentedColumn {
+    name_token: String,
+    #[serde(default)]
+    allowed: bool,
+}
+
+#[derive(serde::Serialize)]
+struct SchemaDiscoveryDescriptor<'a> {
+    profile: &'a str,
+    source_class: &'static str,
+    tool: &'static str,
+    table: String,
+    columns: Vec<ColumnDiscoveryDescriptor>,
+}
+
+#[derive(serde::Serialize)]
+struct ColumnDiscoveryDescriptor {
+    column: String,
+    allowed: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ListTablesDiscoveryDescriptor<'a> {
+    profile: &'a str,
+    source_class: &'static str,
+    tool: &'static str,
+    tables: Vec<String>,
+}
+
+fn schema_discovery_metadata(
+    profile_name: &str,
+    source_class: SourceClass,
+    clean: &CleanOutput,
+) -> Result<DiscoveryMetadata, LensError> {
+    let schema: PresentedSchema =
+        serde_json::from_str(clean_text(clean, "schema")?).map_err(|err| LensError::Internal {
+            detail: format!("failed to parse schema discovery metadata: {err}"),
+        })?;
+    let mut columns = schema
+        .columns
+        .into_iter()
+        .map(|column| ColumnDiscoveryDescriptor {
+            column: column.name_token,
+            allowed: column.allowed,
+        })
+        .collect::<Vec<_>>();
+    columns.sort_by(|left, right| {
+        left.column
+            .cmp(&right.column)
+            .then_with(|| left.allowed.cmp(&right.allowed))
+    });
+    let allowed_columns = columns
+        .iter()
+        .filter(|column| column.allowed)
+        .map(|column| column.column.clone())
+        .collect::<Vec<_>>();
+    let descriptor = SchemaDiscoveryDescriptor {
+        profile: profile_name,
+        source_class: source_class.as_str(),
+        tool: "schema",
+        table: schema.table_token,
+        columns,
+    };
+    Ok(DiscoveryMetadata {
+        profile: profile_name.to_string(),
+        source_class: source_class.as_str(),
+        allowed_columns: Some(allowed_columns),
+        schema_hash: schema_hash(&descriptor)?,
+    })
+}
+
+fn list_tables_discovery_metadata(
+    profile_name: &str,
+    source_class: SourceClass,
+    clean: &CleanOutput,
+) -> Result<DiscoveryMetadata, LensError> {
+    let mut tables: Vec<String> =
+        serde_json::from_str(clean_text(clean, "list_tables")?).map_err(|err| {
+            LensError::Internal {
+                detail: format!("failed to parse list_tables discovery metadata: {err}"),
+            }
+        })?;
+    tables.sort();
+    let descriptor = ListTablesDiscoveryDescriptor {
+        profile: profile_name,
+        source_class: source_class.as_str(),
+        tool: "list_tables",
+        tables,
+    };
+    Ok(DiscoveryMetadata {
+        profile: profile_name.to_string(),
+        source_class: source_class.as_str(),
+        allowed_columns: None,
+        schema_hash: schema_hash(&descriptor)?,
+    })
+}
+
+pub(crate) fn schema_hash<T: serde::Serialize>(descriptor: &T) -> Result<String, LensError> {
+    let bytes = serde_json::to_vec(descriptor).map_err(|err| LensError::Internal {
+        detail: format!("failed to serialize discovery descriptor: {err}"),
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn clean_text<'a>(clean: &'a CleanOutput, tool_name: &str) -> Result<&'a str, LensError> {
+    match clean {
+        CleanOutput::Text { text, .. } => Ok(text),
+        CleanOutput::Rows { .. } => Err(LensError::Internal {
+            detail: format!("{tool_name} discovery metadata expected text output"),
+        }),
+    }
+}
+
 impl CleanOutput {
-    fn restore_gaze_tokens(&mut self, session: &gaze::Session) -> Result<(), LensError> {
+    fn restore_gaze_tokens(
+        &mut self,
+        session: &gaze::Session,
+        pipeline: &gaze::Pipeline,
+    ) -> Result<(), LensError> {
         match self {
             CleanOutput::Rows { rows, .. } => {
                 for row in rows {
                     for value in row.values_mut() {
-                        restore_gaze_tokens_in_value(session, value)?;
+                        restore_gaze_tokens_in_value(session, pipeline, value)?;
                     }
                 }
             }
             CleanOutput::Text { text, .. } => {
-                *text = restore_gaze_tokens_in_string(session, text)?;
+                *text = restore_gaze_tokens_in_string(session, pipeline, text)?;
             }
         }
         Ok(())
@@ -939,20 +1152,21 @@ impl CleanOutput {
 
 fn restore_gaze_tokens_in_value(
     session: &gaze::Session,
+    pipeline: &gaze::Pipeline,
     value: &mut serde_json::Value,
 ) -> Result<(), LensError> {
     match value {
         serde_json::Value::String(text) => {
-            *text = restore_gaze_tokens_in_string(session, text)?;
+            *text = restore_gaze_tokens_in_string(session, pipeline, text)?;
         }
         serde_json::Value::Array(values) => {
             for value in values {
-                restore_gaze_tokens_in_value(session, value)?;
+                restore_gaze_tokens_in_value(session, pipeline, value)?;
             }
         }
         serde_json::Value::Object(values) => {
             for value in values.values_mut() {
-                restore_gaze_tokens_in_value(session, value)?;
+                restore_gaze_tokens_in_value(session, pipeline, value)?;
             }
         }
         _ => {}
@@ -960,23 +1174,17 @@ fn restore_gaze_tokens_in_value(
     Ok(())
 }
 
-fn restore_gaze_tokens_in_string(session: &gaze::Session, text: &str) -> Result<String, LensError> {
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0usize;
-    for token in gaze::token_shape::pattern().find_iter(text) {
-        if !session.contains_token(token.as_str()) {
-            continue;
-        }
-        out.push_str(&text[cursor..token.start()]);
-        out.push_str(&session.restore_strict(token.as_str()).map_err(|err| {
-            LensError::RedactionFailed {
-                detail: err.to_string(),
-            }
-        })?);
-        cursor = token.end();
-    }
-    out.push_str(&text[cursor..]);
-    Ok(out)
+fn restore_gaze_tokens_in_string(
+    session: &gaze::Session,
+    pipeline: &gaze::Pipeline,
+    text: &str,
+) -> Result<String, LensError> {
+    pipeline
+        .restore_with_policy_telemetry(session, text, gaze::RestorePolicy::Strict)
+        .map(|(restored, _telemetry)| restored.text)
+        .map_err(|err| LensError::RedactionFailed {
+            detail: err.to_string(),
+        })
 }
 
 fn insert_capped_cell(
@@ -1169,6 +1377,15 @@ fn tool_registry_error(err: gaze_mcp_core::ToolRegistryError) -> LensError {
     }
 }
 
+fn operation_timeout(phase: &str, operation: &str, timeout: Duration) -> LensError {
+    LensError::OperationTimeout {
+        phase: phase.to_string(),
+        operation: operation.to_string(),
+        timeout_secs: timeout.as_secs(),
+        context: None,
+    }
+}
+
 fn default_pipeline() -> Result<gaze::Pipeline, LensError> {
     gaze::Pipeline::builder()
         .detector(
@@ -1252,4 +1469,31 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), LensError> {
             detail: err.to_string(),
             path: Some(path.to_path_buf()),
         })
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::{default_pipeline, restore_gaze_tokens_in_string};
+
+    #[test]
+    fn schema_response_restore_splices_original_matches_once() {
+        let session = gaze::Session::new(gaze::Scope::Conversation(
+            "schema-response-restore".to_string(),
+        ))
+        .expect("gaze session");
+        let email_token = session
+            .tokenize(&gaze::PiiClass::Email, "alice@example.com")
+            .expect("email token");
+        let path_raw = format!("/schema/{email_token}/columns");
+        let path_token = session
+            .tokenize(&gaze::PiiClass::custom("path"), &path_raw)
+            .expect("path token");
+        let input = format!("{path_token}{email_token}");
+        let expected = format!("{path_raw}alice@example.com");
+        let pipeline = default_pipeline().expect("pipeline");
+
+        let restored = restore_gaze_tokens_in_string(&session, &pipeline, &input).expect("restore");
+
+        assert_eq!(restored, expected);
+    }
 }

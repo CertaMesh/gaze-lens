@@ -12,6 +12,8 @@ gaze-lens replay --manifest ~/.gaze-lens/manifest.sqlite <session_ulid>
 
 The command reads the gaze-lens-local manifest, walks successful calls for the session, imports each referenced snapshot with `gaze::Session::import(snapshot)`, and prints restored call-history JSON.
 
+Each call includes `restore_telemetry` from Gaze whole-text restore. The session also includes `restore_telemetry_summary` with success/partial/failed call counts plus unknown-token, manifest-bypass, and fresh-PII counts. Replay uses strict restore policy: known tokens are restored byte-exactly, while token-shaped strings that are not in the snapshot are left in place and reported with a failed restore decision.
+
 ## Snapshot Handling
 
 Snapshots are local PII vault material. They contain the raw token mappings required to turn values like `Email_1` back into original production values.

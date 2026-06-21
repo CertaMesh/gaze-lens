@@ -37,6 +37,7 @@ async fn serve_runtime_policy_column_rules_reach_session_pipeline() {
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     };
@@ -113,6 +114,7 @@ async fn configured_column_actions_apply_without_detector_match() {
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     };
@@ -160,4 +162,41 @@ async fn configured_column_actions_apply_without_detector_match() {
     assert!(encoded.contains("Name_1"));
     assert!(!encoded.contains("argon2id-secret"));
     assert!(encoded.contains("[REDACTED]"));
+}
+
+/// #988: a `production = true` profile whose policy configures no NER model must
+/// fail closed at the serve/query session-build seam (`runtime_policy`), never
+/// silently serve a profile that would pass arbitrary person names through
+/// unredacted. The default policy has no `[ner].model_dir`, so this profile is
+/// rejected before any source is touched.
+#[test]
+fn production_profile_without_ner_fails_closed_in_runtime_policy() {
+    let profile = Profile {
+        name: "prod".to_string(),
+        source: SourceSpec::SshLog {
+            host: "example.test".to_string(),
+            path: "/var/log/app.log".to_string(),
+        },
+        // No `policy` → default policy (emails only, no NER model).
+        policy: None,
+        discovered_from_ssh_host: None,
+        discovered_from_path: None,
+        discovered_at: None,
+        discovered_ssh_host_key_fingerprint: None,
+        credential_class: None,
+        schema_tokenize: None,
+        schema_allowlist: None,
+        production: true,
+        snapshot_retention_days: None,
+        auto_purge: AutoPurge::Off,
+    };
+
+    let err = runtime_policy(&profile)
+        .expect_err("production profile without an NER model must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("prod"), "{msg}");
+    assert!(
+        msg.contains("ner.model_dir") || msg.contains("production"),
+        "{msg}"
+    );
 }

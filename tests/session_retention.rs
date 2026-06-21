@@ -139,6 +139,7 @@ fn profile_with_retention(retention_days: Option<u32>, auto_purge: AutoPurge) ->
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: retention_days,
         auto_purge,
     }
@@ -164,6 +165,7 @@ fn named_profile_with_retention(
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: retention_days,
         auto_purge,
     }

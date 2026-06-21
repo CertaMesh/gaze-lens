@@ -1,37 +1,99 @@
 use std::future::Future;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use clap::Args;
+use clap::{Arg, ArgAction, ArgMatches, Command, Error, FromArgMatches};
+use serde::Serialize;
 
 use crate::errors::LensError;
 use crate::frontend::mcp::McpFrontend;
 use crate::frontend::{Frontend, ShutdownToken};
-use crate::policy::{ColumnActionPolicy, PolicyError, PolicyFile, build_pipeline};
+use crate::policy::{
+    ColumnActionPolicy, PolicyError, PolicyFile, build_pipeline, enforce_production_ner,
+};
 use crate::profile::Profile;
 use crate::profile::{SourceSpec, load_profiles, validate_profile_name};
-use crate::session::{OutputCaps, Session, SourceClass};
+use crate::session::{OutputCaps, Session, SourceClass, schema_hash};
+use crate::source::db::TableSchema;
 use crate::source::db::connect_db_source;
+use crate::source::db::schema::SchemaTokenizer;
 use crate::source::log::SshLogSourceWrapper;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 use crate::source::{DbSourceWrapper, SchemaPresentation, Source};
 
-#[derive(Debug, Args)]
+const PRINT_DISCOVERY_SENTINEL: &str = "\0gaze-lens-print-discovery";
+
+#[derive(Debug)]
 pub struct ServeArgs {
-    #[arg(long)]
     pub profile: Vec<String>,
-    #[arg(
-        long,
-        env = "GAZE_LENS_MANIFEST",
-        default_value = "~/.gaze-lens/manifest.sqlite"
-    )]
     pub manifest: PathBuf,
-    #[arg(
-        long,
-        env = "GAZE_LENS_SNAPSHOT_DIR",
-        default_value = "~/.gaze-lens/snapshots"
-    )]
     pub snapshot_dir: PathBuf,
+}
+
+impl FromArgMatches for ServeArgs {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
+        let mut profile = matches
+            .get_many::<String>("profile")
+            .map(|values| values.cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if matches.get_flag("print_discovery") {
+            profile.push(PRINT_DISCOVERY_SENTINEL.to_string());
+        }
+        let manifest = matches
+            .get_one::<PathBuf>("manifest")
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("~/.gaze-lens/manifest.sqlite"));
+        let snapshot_dir = matches
+            .get_one::<PathBuf>("snapshot_dir")
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("~/.gaze-lens/snapshots"));
+        Ok(Self {
+            profile,
+            manifest,
+            snapshot_dir,
+        })
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
+    }
+}
+
+impl clap::Args for ServeArgs {
+    fn augment_args(cmd: Command) -> Command {
+        cmd.arg(
+            Arg::new("profile")
+                .long("profile")
+                .value_name("PROFILE")
+                .action(ArgAction::Append),
+        )
+        .arg(
+            Arg::new("manifest")
+                .long("manifest")
+                .env("GAZE_LENS_MANIFEST")
+                .default_value("~/.gaze-lens/manifest.sqlite")
+                .value_parser(clap::value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("snapshot_dir")
+                .long("snapshot-dir")
+                .env("GAZE_LENS_SNAPSHOT_DIR")
+                .default_value("~/.gaze-lens/snapshots")
+                .value_parser(clap::value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("print_discovery")
+                .long("print-discovery")
+                .help("Print configured profile discovery inventory as JSON and exit without starting MCP")
+                .action(ArgAction::SetTrue),
+        )
+    }
+
+    fn augment_args_for_update(cmd: Command) -> Command {
+        Self::augment_args(cmd)
+    }
 }
 
 #[doc(hidden)]
@@ -45,6 +107,9 @@ pub async fn run(
     project_config: Option<&Path>,
     user_config: Option<&Path>,
 ) -> Result<(), LensError> {
+    if print_discovery_requested(&args) {
+        return print_discovery_inventory(&args, project_config, user_config).await;
+    }
     let prepared = prepare_session(args, project_config, user_config)?;
     eprintln!("{}", loaded_profiles_banner(&prepared.loaded_profiles));
     run_frontend_until_shutdown(
@@ -170,6 +235,235 @@ fn register_lazy_source(session: &Arc<Session>, profile: Profile) {
     }
 }
 
+#[derive(Serialize)]
+struct DiscoveryInventory {
+    profiles: Vec<ProfileDiscovery>,
+}
+
+#[derive(Serialize)]
+struct ProfileDiscovery {
+    name: String,
+    source_class: &'static str,
+    supported_tools: Vec<&'static str>,
+    scope: DiscoveryScope,
+    schema_hash: String,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum DiscoveryScope {
+    Database { tables: Vec<TableDiscovery> },
+    Log { host: String, path: String },
+}
+
+#[derive(Serialize)]
+struct TableDiscovery {
+    name: String,
+    allowed_columns: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DatabaseInventoryDescriptor<'a> {
+    profile: &'a str,
+    source_class: &'static str,
+    supported_tools: Vec<&'static str>,
+    tables: Vec<TableHashDescriptor>,
+}
+
+#[derive(Serialize)]
+struct TableHashDescriptor {
+    name: String,
+    columns: Vec<ColumnHashDescriptor>,
+}
+
+#[derive(Serialize)]
+struct ColumnHashDescriptor {
+    column: String,
+    allowed: bool,
+}
+
+#[derive(Serialize)]
+struct LogInventoryDescriptor<'a> {
+    profile: &'a str,
+    source_class: &'static str,
+    supported_tools: Vec<&'static str>,
+    host: &'a str,
+    path: &'a str,
+}
+
+async fn print_discovery_inventory(
+    args: &ServeArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+) -> Result<(), LensError> {
+    let inventory = build_discovery_inventory(args, project_config, user_config).await?;
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    serde_json::to_writer_pretty(&mut stdout, &inventory).map_err(|err| LensError::Internal {
+        detail: format!("failed to serialize discovery inventory: {err}"),
+    })?;
+    writeln!(stdout).map_err(|err| LensError::Internal {
+        detail: format!("failed to write discovery inventory: {err}"),
+    })?;
+    Ok(())
+}
+
+async fn build_discovery_inventory(
+    args: &ServeArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+) -> Result<DiscoveryInventory, LensError> {
+    let profile_filter = selected_profile_names(args);
+    let mut profiles =
+        select_profiles(load_profiles(project_config, user_config)?, &profile_filter)?;
+    profiles.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let mut discovered = Vec::with_capacity(profiles.len());
+    for profile in profiles {
+        let _ = runtime_policy(&profile)?;
+        discovered.push(discover_profile(&profile).await?);
+    }
+    Ok(DiscoveryInventory {
+        profiles: discovered,
+    })
+}
+
+async fn discover_profile(profile: &Profile) -> Result<ProfileDiscovery, LensError> {
+    match &profile.source {
+        SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
+            discover_database_profile(profile).await
+        }
+        SourceSpec::SshLog { host, path } => discover_log_profile(profile, host, path),
+    }
+}
+
+async fn discover_database_profile(profile: &Profile) -> Result<ProfileDiscovery, LensError> {
+    let source_class = SourceClass::Database;
+    let supported_tools = supported_tools(source_class);
+    let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
+    let source = connect_db_source(profile, limit_cap).await?;
+    let mut raw_tables = source.list_tables().await?;
+    raw_tables.sort();
+
+    let tokenizer = SchemaTokenizer::default();
+    let mut tables = Vec::with_capacity(raw_tables.len());
+    let mut hash_tables = Vec::with_capacity(raw_tables.len());
+    for raw_table in raw_tables {
+        let schema = source.schema(&raw_table).await?;
+        let presented = present_schema_for_discovery(&tokenizer, schema, profile);
+        let table_name = presented_table_name(&presented);
+        let mut columns = presented
+            .columns
+            .into_iter()
+            .map(|column| ColumnHashDescriptor {
+                column: column.name_token,
+                allowed: column.allowed,
+            })
+            .collect::<Vec<_>>();
+        columns.sort_by(|left, right| {
+            left.column
+                .cmp(&right.column)
+                .then_with(|| left.allowed.cmp(&right.allowed))
+        });
+        let allowed_columns = columns
+            .iter()
+            .filter(|column| column.allowed)
+            .map(|column| column.column.clone())
+            .collect::<Vec<_>>();
+        tables.push(TableDiscovery {
+            name: table_name.clone(),
+            allowed_columns,
+        });
+        hash_tables.push(TableHashDescriptor {
+            name: table_name,
+            columns,
+        });
+    }
+
+    tables.sort_by(|left, right| left.name.cmp(&right.name));
+    hash_tables.sort_by(|left, right| left.name.cmp(&right.name));
+    let descriptor = DatabaseInventoryDescriptor {
+        profile: &profile.name,
+        source_class: source_class.as_str(),
+        supported_tools: supported_tools.clone(),
+        tables: hash_tables,
+    };
+    Ok(ProfileDiscovery {
+        name: profile.name.clone(),
+        source_class: source_class.as_str(),
+        supported_tools,
+        scope: DiscoveryScope::Database { tables },
+        schema_hash: schema_hash(&descriptor)?,
+    })
+}
+
+fn discover_log_profile(
+    profile: &Profile,
+    host: &str,
+    path: &str,
+) -> Result<ProfileDiscovery, LensError> {
+    let source_class = SourceClass::Log;
+    let supported_tools = supported_tools(source_class);
+    let descriptor = LogInventoryDescriptor {
+        profile: &profile.name,
+        source_class: source_class.as_str(),
+        supported_tools: supported_tools.clone(),
+        host,
+        path,
+    };
+    Ok(ProfileDiscovery {
+        name: profile.name.clone(),
+        source_class: source_class.as_str(),
+        supported_tools,
+        scope: DiscoveryScope::Log {
+            host: host.to_string(),
+            path: path.to_string(),
+        },
+        schema_hash: schema_hash(&descriptor)?,
+    })
+}
+
+fn supported_tools(source_class: SourceClass) -> Vec<&'static str> {
+    match source_class {
+        SourceClass::Database => vec!["query", "schema", "list_tables"],
+        SourceClass::Log => vec!["log_tail", "log_grep"],
+    }
+}
+
+fn present_schema_for_discovery(
+    tokenizer: &SchemaTokenizer,
+    schema: TableSchema,
+    profile: &Profile,
+) -> TableSchema {
+    if profile.schema_tokenize() {
+        tokenizer.tokenize_table_schema(&schema, profile.schema_allowlist.as_deref())
+    } else {
+        schema
+    }
+}
+
+fn presented_table_name(schema: &TableSchema) -> String {
+    if schema.table_token.is_empty() {
+        schema.table.clone()
+    } else {
+        schema.table_token.clone()
+    }
+}
+
+fn print_discovery_requested(args: &ServeArgs) -> bool {
+    args.profile
+        .iter()
+        .any(|profile| profile == PRINT_DISCOVERY_SENTINEL)
+}
+
+fn selected_profile_names(args: &ServeArgs) -> Vec<String> {
+    args.profile
+        .iter()
+        .filter(|profile| profile.as_str() != PRINT_DISCOVERY_SENTINEL)
+        .cloned()
+        .collect()
+}
+
 async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
     let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
     let db_source = match &profile.source {
@@ -291,6 +585,11 @@ pub fn runtime_policy(
         }
         None => default_policy_file()?,
     };
+    // #988: a production profile must configure an NER model. Enforced before
+    // the pipeline is built so a misconfigured prod profile fails closed at
+    // session build (serve/query) rather than leaking names at retrieval time.
+    enforce_production_ner(&profile.name, profile.production, &policy_file)
+        .map_err(policy_error)?;
     let policy = policy_file.to_gaze_policy().map_err(policy_error)?;
     let pipeline = build_pipeline(&policy_file).map_err(policy_error)?;
     let column_actions =

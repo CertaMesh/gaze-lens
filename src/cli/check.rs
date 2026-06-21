@@ -5,7 +5,7 @@ use clap::Args;
 use zeroize::Zeroizing;
 
 use crate::errors::LensError;
-use crate::policy::{PolicyFile, build_pipeline};
+use crate::policy::{PolicyFile, build_pipeline, enforce_production_ner};
 use crate::profile::{SourceSpec, load_profile};
 use crate::source::db::connect_db_source_with_password;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
@@ -235,6 +235,11 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
         let _ = policy.to_gaze_policy().map_err(|err| LensError::Profile {
             detail: err.to_string(),
         })?;
+        enforce_production_ner(&profile.name, profile.production, &policy).map_err(|err| {
+            LensError::Profile {
+                detail: err.to_string(),
+            }
+        })?;
         let pipeline = build_pipeline(&policy).map_err(|err| LensError::Profile {
             detail: format!("failed to build policy pipeline: {err}"),
         })?;
@@ -262,6 +267,11 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
     })?;
     let _ = policy.to_gaze_policy().map_err(|err| LensError::Profile {
         detail: err.to_string(),
+    })?;
+    enforce_production_ner(&profile.name, profile.production, &policy).map_err(|err| {
+        LensError::Profile {
+            detail: err.to_string(),
+        }
     })?;
     let pipeline = build_pipeline(&policy).map_err(|err| LensError::Profile {
         detail: format!("failed to build policy pipeline: {err}"),
@@ -298,7 +308,7 @@ async fn validate_source(
         }
         SourceSpec::SshLog { host, path } => {
             let caps = crate::session::OutputCaps::default();
-            let _ = SshLogSource::new(
+            let source = SshLogSource::new(
                 profile.name.clone(),
                 host.clone(),
                 path.clone(),
@@ -308,6 +318,7 @@ async fn validate_source(
                     timeout: caps.timeout,
                 },
             )?;
+            let _ = source.tail(1).await?;
         }
     }
     Ok(())

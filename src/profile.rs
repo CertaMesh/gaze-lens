@@ -30,6 +30,15 @@ pub struct Profile {
     pub schema_tokenize: Option<bool>,
     #[serde(default)]
     pub schema_allowlist: Option<Vec<String>>,
+    /// #988: when `true`, this profile points at production data and MUST
+    /// configure `[ner].model_dir` in its policy. Enforced at session build via
+    /// [`crate::policy::enforce_production_ner`] so a missing model fails closed
+    /// (refuses to serve) instead of letting unredacted person names — including
+    /// names nested in JSON values — reach an agent. Escalate-only across the
+    /// project/user merge: if either file marks the profile production, it is
+    /// production (a user file cannot silently downgrade a project's mandate).
+    #[serde(default)]
+    pub production: bool,
     /// Snapshot retention TTL in days. `None` (default) = unlimited (D3 default).
     /// When `Some(n)`, snapshots older than `n` days are eligible for sweep
     /// at session start. Sweep is gated on `auto_purge` for destructive vs warn.
@@ -618,6 +627,9 @@ fn merge_one(user: &Profile, project: &Profile) -> Profile {
             .schema_allowlist
             .clone()
             .or_else(|| user.schema_allowlist.clone()),
+        // #988: escalate-only — a user file cannot downgrade a project's
+        // production mandate, and a user-marked production profile still applies.
+        production: project.production || user.production,
         snapshot_retention_days,
         auto_purge,
     }
