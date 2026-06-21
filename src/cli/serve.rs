@@ -7,7 +7,9 @@ use clap::Args;
 use crate::errors::LensError;
 use crate::frontend::mcp::McpFrontend;
 use crate::frontend::{Frontend, ShutdownToken};
-use crate::policy::{ColumnActionPolicy, PolicyError, PolicyFile, build_pipeline};
+use crate::policy::{
+    ColumnActionPolicy, PolicyError, PolicyFile, build_pipeline, enforce_production_ner,
+};
 use crate::profile::Profile;
 use crate::profile::{SourceSpec, load_profiles, validate_profile_name};
 use crate::session::{OutputCaps, Session, SourceClass};
@@ -291,6 +293,11 @@ pub fn runtime_policy(
         }
         None => default_policy_file()?,
     };
+    // #988: a production profile must configure an NER model. Enforced before
+    // the pipeline is built so a misconfigured prod profile fails closed at
+    // session build (serve/query) rather than leaking names at retrieval time.
+    enforce_production_ner(&profile.name, profile.production, &policy_file)
+        .map_err(policy_error)?;
     let policy = policy_file.to_gaze_policy().map_err(policy_error)?;
     let pipeline = build_pipeline(&policy_file).map_err(policy_error)?;
     let column_actions =

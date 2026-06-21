@@ -81,6 +81,7 @@ fn profile(service: &str, account: &str) -> Profile {
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     }

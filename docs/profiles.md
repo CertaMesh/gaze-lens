@@ -16,6 +16,52 @@ This lets teams commit the PII policy while each operator keeps laptop-specific 
 
 Only `conversation` scope is supported in v0.1. `persistent` is reserved for v1.x.
 
+## Production profiles (NER mandate)
+
+Set `production = true` on a profile that points at production data. A production
+profile **must** configure an NER model (`[ner].model_dir` in its policy file);
+otherwise `serve`, `query`, and `check` refuse to build the session with a clear
+error, before any data is read.
+
+This closes the nested-JSON person-name leak class: without an NER model the
+redaction pipeline only catches regex-detectable PII (emails), so arbitrary
+person names — including names nested in JSON column values — would pass through
+unredacted. Since the Gaze runtime makes NER **fail-closed** (a model load or
+backend error aborts redaction rather than silently passing raw text), requiring
+a model means a misconfiguration fails closed at startup instead of leaking at
+query time.
+
+`production` is **escalate-only** across the project/user merge: if either the
+project or the user file marks a profile `production = true`, it is production. A
+user-file profile cannot silently downgrade a project's production mandate.
+
+Non-production profiles are unaffected — the mandate is opt-in. Mark prod-data
+profiles `production = true` to enforce it.
+
+```toml
+[[profiles]]
+name = "prod"
+production = true
+policy = "./gaze-policy.toml"   # this policy file must set [ner].model_dir
+
+[profiles.source]
+kind = "mysql"
+host = "db.example.invalid"
+port = 3306
+database = "app"
+username = "gaze_ro"
+password_env = "GAZE_LENS_DB_PASSWORD"
+readonly_required = true
+```
+
+```toml
+# ./gaze-policy.toml
+[ner]
+model_dir = "/opt/gaze/models/ner"
+
+[policy.database]
+```
+
 ## Schema Policy
 
 Schema names are operational metadata. `schema` and `list_tables` show raw table and column labels by default so agents can write useful canned queries.

@@ -218,6 +218,7 @@ mod tests {
             policy: None,
             schema_tokenize: None,
             schema_allowlist: None,
+            production: false,
             snapshot_retention_days: None,
             auto_purge: crate::session::maintenance::AutoPurge::Warn,
         }
@@ -264,6 +265,7 @@ mod tests {
             policy: None,
             schema_tokenize: None,
             schema_allowlist: None,
+            production: false,
             snapshot_retention_days: None,
             auto_purge: crate::session::maintenance::AutoPurge::Warn,
         }

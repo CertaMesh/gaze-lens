@@ -143,6 +143,10 @@ pub enum PolicyError {
     Pipeline(#[from] gaze::Error),
     #[error("recognizer build failed: {0}")]
     Recognizer(String),
+    #[error(
+        "profile `{profile}` is marked `production = true` but its policy has no `[ner].model_dir`; production profiles require a configured NER model so person names cannot leak unredacted. Configure `[ner].model_dir` in the profile's policy file, or remove `production = true`."
+    )]
+    ProductionNerRequired { profile: String },
 }
 
 impl PolicyFile {
@@ -210,6 +214,31 @@ pub fn build_pipeline(policy: &PolicyFile) -> Result<Pipeline, PolicyError> {
     Ok(builder.rule(DefaultRule::new(Action::Preserve)).build()?)
 }
 
+/// Enforce the production-profile NER mandate (#988).
+///
+/// A profile marked `production = true` MUST configure `[ner].model_dir` in its
+/// policy. Without an NER model the pipeline only catches regex-detectable PII
+/// (emails), so arbitrary person names — including names nested in JSON values —
+/// would pass through unredacted. Since the gaze 0.11 bump makes NER fail-closed
+/// (a model load/backend error aborts redaction rather than silently passing raw
+/// text), it is now safe to *require* a model for production sources: a
+/// misconfiguration fails closed at session build, never leaks at query time.
+///
+/// Non-production profiles are unaffected (the leak is opt-out-by-default; mark a
+/// profile `production = true` to opt into the mandate).
+pub fn enforce_production_ner(
+    profile_name: &str,
+    production: bool,
+    policy: &PolicyFile,
+) -> Result<(), PolicyError> {
+    if production && policy.ner.model_dir.is_none() {
+        return Err(PolicyError::ProductionNerRequired {
+            profile: profile_name.to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn parse_action(raw: &str, column: &str) -> Result<Action, PolicyError> {
     match raw {
         "tokenize" => Ok(Action::Tokenize),
@@ -242,4 +271,42 @@ fn parse_class(raw: &str, column: &str) -> Result<PiiClass, PolicyError> {
 
 fn default_session_scope() -> String {
     "conversation".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn policy_with_ner(model_dir: Option<&str>) -> PolicyFile {
+        let mut policy = PolicyFile::from_toml("[policy.database]\n").expect("policy");
+        policy.ner.model_dir = model_dir.map(std::path::PathBuf::from);
+        policy
+    }
+
+    #[test]
+    fn production_profile_without_ner_is_rejected() {
+        let policy = policy_with_ner(None);
+        let err = enforce_production_ner("prod", true, &policy)
+            .expect_err("production profile without ner.model_dir must fail closed");
+        match err {
+            PolicyError::ProductionNerRequired { profile } => assert_eq!(profile, "prod"),
+            other => panic!("wrong error: {other}"),
+        }
+    }
+
+    #[test]
+    fn production_profile_with_ner_is_accepted() {
+        let policy = policy_with_ner(Some("/models/ner"));
+        enforce_production_ner("prod", true, &policy)
+            .expect("production profile with a configured model passes the gate");
+    }
+
+    #[test]
+    fn non_production_profile_without_ner_is_allowed() {
+        // The leak is opt-out-by-default: only `production = true` profiles are
+        // forced to configure NER. Non-production profiles keep the v1 behavior.
+        let policy = policy_with_ner(None);
+        enforce_production_ner("dev", false, &policy)
+            .expect("non-production profile is not subject to the NER mandate");
+    }
 }

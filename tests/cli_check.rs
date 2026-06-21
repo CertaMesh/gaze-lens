@@ -1004,6 +1004,7 @@ fn keyring_profile(name: &str, service: &str, account: &str) -> Profile {
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     }
@@ -1025,6 +1026,7 @@ fn sqlite_profile(name: &str, path: std::path::PathBuf) -> Profile {
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     }
@@ -1052,6 +1054,7 @@ fn postgres_env_profile(name: &str, env: &str) -> Profile {
         credential_class: None,
         schema_tokenize: None,
         schema_allowlist: None,
+        production: false,
         snapshot_retention_days: None,
         auto_purge: AutoPurge::Off,
     }

@@ -20,6 +20,15 @@
   end-to-end. Dash-prefixed hosts and shell metacharacters are still rejected.
   (todo #504)
 
+### Security
+- Profiles can now be marked `production = true`, which requires an NER model
+  (`[ner].model_dir`) in the profile's policy. `serve`, `query`, and `check`
+  fail closed with a clear error when a production profile has no model, instead
+  of passing arbitrary person names — including names nested in JSON column
+  values — through unredacted. Builds on the fail-closed NER behavior above. The
+  flag is escalate-only across the project/user merge and opt-in (non-production
+  profiles are unchanged). See [docs/profiles.md](./docs/profiles.md). (todo #988)
+
 ## [0.4.1] — 2026-05-27
 
 ### Fixed
