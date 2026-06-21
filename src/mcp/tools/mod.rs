@@ -16,8 +16,12 @@ async fn invoke_session_tool(
     tool_name: &str,
     ctx: &gaze_mcp_core::ToolCtx<'_>,
 ) -> Result<ToolResponse, ToolError> {
-    let args = restore_tokens_in_json(ctx.resources().session(), ctx.redacted_args())
-        .map_err(ToolError::internal)?;
+    let args = restore_tokens_in_json(
+        ctx.resources().session(),
+        ctx.resources().pipeline(),
+        ctx.redacted_args(),
+    )
+    .map_err(ToolError::internal)?;
     let clean = session
         .invoke_core_tool(tool_name, ctx.call_id(), args)
         .await
@@ -49,21 +53,25 @@ fn schema_for<T: schemars::JsonSchema>() -> serde_json::Value {
 
 fn restore_tokens_in_json(
     session: &gaze::Session,
+    pipeline: &gaze::Pipeline,
     value: &serde_json::Value,
 ) -> Result<serde_json::Value, LensError> {
     match value {
         serde_json::Value::String(text) => Ok(serde_json::Value::String(restore_tokens_in_string(
-            session, text,
+            session, pipeline, text,
         )?)),
         serde_json::Value::Array(values) => values
             .iter()
-            .map(|value| restore_tokens_in_json(session, value))
+            .map(|value| restore_tokens_in_json(session, pipeline, value))
             .collect::<Result<Vec<_>, _>>()
             .map(serde_json::Value::Array),
         serde_json::Value::Object(values) => {
             let mut out = serde_json::Map::new();
             for (key, value) in values {
-                out.insert(key.clone(), restore_tokens_in_json(session, value)?);
+                out.insert(
+                    key.clone(),
+                    restore_tokens_in_json(session, pipeline, value)?,
+                );
             }
             Ok(serde_json::Value::Object(out))
         }
@@ -71,21 +79,15 @@ fn restore_tokens_in_json(
     }
 }
 
-fn restore_tokens_in_string(session: &gaze::Session, text: &str) -> Result<String, LensError> {
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0usize;
-    for token in gaze::token_shape::pattern().find_iter(text) {
-        if !session.contains_token(token.as_str()) {
-            continue;
-        }
-        out.push_str(&text[cursor..token.start()]);
-        out.push_str(&session.restore_strict(token.as_str()).map_err(|err| {
-            LensError::RedactionFailed {
-                detail: err.to_string(),
-            }
-        })?);
-        cursor = token.end();
-    }
-    out.push_str(&text[cursor..]);
-    Ok(out)
+fn restore_tokens_in_string(
+    session: &gaze::Session,
+    pipeline: &gaze::Pipeline,
+    text: &str,
+) -> Result<String, LensError> {
+    pipeline
+        .restore_with_policy_telemetry(session, text, gaze::RestorePolicy::Lenient)
+        .map(|(restored, _telemetry)| restored.text)
+        .map_err(|err| LensError::RedactionFailed {
+            detail: err.to_string(),
+        })
 }

@@ -12,6 +12,7 @@ use super::RedactedToolArgs;
 pub struct RestoredSession {
     pub lens_session_id: String,
     pub calls: Vec<RestoredCall>,
+    pub restore_telemetry_summary: RestoreTelemetrySummary,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -21,6 +22,31 @@ pub struct RestoredCall {
     pub redacted_args_json: String,
     pub restored_args_json: String,
     pub snapshot_ref: PathBuf,
+    pub restore_telemetry: gaze::RestoreTelemetry,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RestoreTelemetrySummary {
+    pub success_calls: u64,
+    pub partial_calls: u64,
+    pub failed_calls: u64,
+    pub unknown_token_count: u64,
+    pub manifest_bypass_count: u64,
+    pub fresh_pii_detected_count: u64,
+}
+
+impl RestoreTelemetrySummary {
+    fn record(&mut self, telemetry: &gaze::RestoreTelemetry) {
+        match telemetry.restore_decision {
+            gaze::RestoreDecision::Success => self.success_calls += 1,
+            gaze::RestoreDecision::Partial => self.partial_calls += 1,
+            gaze::RestoreDecision::Failed => self.failed_calls += 1,
+            _ => self.failed_calls += 1,
+        }
+        self.unknown_token_count += telemetry.unknown_token_count;
+        self.manifest_bypass_count += telemetry.manifest_bypass_count;
+        self.fresh_pii_detected_count += telemetry.fresh_pii_detected_count;
+    }
 }
 
 /// Replay every successful tool call in a session.
@@ -66,6 +92,7 @@ pub fn restore_whole_session(
         })?;
 
     let mut calls = Vec::new();
+    let mut restore_telemetry_summary = RestoreTelemetrySummary::default();
     for row in rows {
         let (call_id, tool_name, redacted_args_json, snapshot_ref, purged_at_ms) =
             row.map_err(|err| LensError::ReplayUnavailable {
@@ -113,19 +140,23 @@ pub fn restore_whole_session(
                     detail: err.to_string(),
                 }
             })?;
-        let restored_args_json = restore_tokens(&gaze_session, &redacted_args.json)?;
+        let (restored_args_json, restore_telemetry) =
+            restore_tokens(lens_session_id, &gaze_session, &redacted_args.json)?;
+        restore_telemetry_summary.record(&restore_telemetry);
         calls.push(RestoredCall {
             call_id,
             tool_name,
             redacted_args_json,
             restored_args_json,
             snapshot_ref,
+            restore_telemetry,
         });
     }
 
     Ok(RestoredSession {
         lens_session_id: lens_session_id.to_string(),
         calls,
+        restore_telemetry_summary,
     })
 }
 
@@ -139,19 +170,17 @@ fn format_iso8601_ms(ms: i64) -> String {
         .unwrap_or_else(|| format!("epoch_ms={ms}"))
 }
 
-fn restore_tokens(gaze_session: &gaze::Session, input: &str) -> Result<String, LensError> {
-    let mut restored = input.to_string();
-    let mut tokens = gaze_session.tokens();
-    tokens.sort_by_key(|token| std::cmp::Reverse(token.len()));
-    for token in tokens {
-        let raw =
-            gaze_session
-                .restore_strict(&token)
-                .map_err(|err| LensError::ReplayUnavailable {
-                    lens_session_id: "unknown".to_string(),
-                    detail: err.to_string(),
-                })?;
-        restored = restored.replace(&token, &raw);
-    }
-    Ok(restored)
+fn restore_tokens(
+    lens_session_id: &str,
+    gaze_session: &gaze::Session,
+    input: &str,
+) -> Result<(String, gaze::RestoreTelemetry), LensError> {
+    let pipeline = super::default_pipeline()?;
+    let (restored, telemetry) = pipeline
+        .restore_with_policy_telemetry(gaze_session, input, gaze::RestorePolicy::Strict)
+        .map_err(|err| LensError::ReplayUnavailable {
+            lens_session_id: lens_session_id.to_string(),
+            detail: err.to_string(),
+        })?;
+    Ok((restored.text, telemetry))
 }

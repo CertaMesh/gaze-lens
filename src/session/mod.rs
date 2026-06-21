@@ -365,7 +365,7 @@ impl Session {
                 detail: err.to_string(),
             })?;
         if matches!(call.tool_name.as_str(), "schema" | "list_tables") {
-            clean.restore_gaze_tokens(&self.inner.gaze_session)?;
+            clean.restore_gaze_tokens(&self.inner.gaze_session, &pipeline)?;
         }
         Ok(ToolResult {
             clean,
@@ -904,17 +904,21 @@ impl Session {
 }
 
 impl CleanOutput {
-    fn restore_gaze_tokens(&mut self, session: &gaze::Session) -> Result<(), LensError> {
+    fn restore_gaze_tokens(
+        &mut self,
+        session: &gaze::Session,
+        pipeline: &gaze::Pipeline,
+    ) -> Result<(), LensError> {
         match self {
             CleanOutput::Rows { rows, .. } => {
                 for row in rows {
                     for value in row.values_mut() {
-                        restore_gaze_tokens_in_value(session, value)?;
+                        restore_gaze_tokens_in_value(session, pipeline, value)?;
                     }
                 }
             }
             CleanOutput::Text { text, .. } => {
-                *text = restore_gaze_tokens_in_string(session, text)?;
+                *text = restore_gaze_tokens_in_string(session, pipeline, text)?;
             }
         }
         Ok(())
@@ -941,20 +945,21 @@ impl CleanOutput {
 
 fn restore_gaze_tokens_in_value(
     session: &gaze::Session,
+    pipeline: &gaze::Pipeline,
     value: &mut serde_json::Value,
 ) -> Result<(), LensError> {
     match value {
         serde_json::Value::String(text) => {
-            *text = restore_gaze_tokens_in_string(session, text)?;
+            *text = restore_gaze_tokens_in_string(session, pipeline, text)?;
         }
         serde_json::Value::Array(values) => {
             for value in values {
-                restore_gaze_tokens_in_value(session, value)?;
+                restore_gaze_tokens_in_value(session, pipeline, value)?;
             }
         }
         serde_json::Value::Object(values) => {
             for value in values.values_mut() {
-                restore_gaze_tokens_in_value(session, value)?;
+                restore_gaze_tokens_in_value(session, pipeline, value)?;
             }
         }
         _ => {}
@@ -962,23 +967,17 @@ fn restore_gaze_tokens_in_value(
     Ok(())
 }
 
-fn restore_gaze_tokens_in_string(session: &gaze::Session, text: &str) -> Result<String, LensError> {
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0usize;
-    for token in gaze::token_shape::pattern().find_iter(text) {
-        if !session.contains_token(token.as_str()) {
-            continue;
-        }
-        out.push_str(&text[cursor..token.start()]);
-        out.push_str(&session.restore_strict(token.as_str()).map_err(|err| {
-            LensError::RedactionFailed {
-                detail: err.to_string(),
-            }
-        })?);
-        cursor = token.end();
-    }
-    out.push_str(&text[cursor..]);
-    Ok(out)
+fn restore_gaze_tokens_in_string(
+    session: &gaze::Session,
+    pipeline: &gaze::Pipeline,
+    text: &str,
+) -> Result<String, LensError> {
+    pipeline
+        .restore_with_policy_telemetry(session, text, gaze::RestorePolicy::Strict)
+        .map(|(restored, _telemetry)| restored.text)
+        .map_err(|err| LensError::RedactionFailed {
+            detail: err.to_string(),
+        })
 }
 
 fn insert_capped_cell(
@@ -1263,4 +1262,31 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), LensError> {
             detail: err.to_string(),
             path: Some(path.to_path_buf()),
         })
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::{default_pipeline, restore_gaze_tokens_in_string};
+
+    #[test]
+    fn schema_response_restore_splices_original_matches_once() {
+        let session = gaze::Session::new(gaze::Scope::Conversation(
+            "schema-response-restore".to_string(),
+        ))
+        .expect("gaze session");
+        let email_token = session
+            .tokenize(&gaze::PiiClass::Email, "alice@example.com")
+            .expect("email token");
+        let path_raw = format!("/schema/{email_token}/columns");
+        let path_token = session
+            .tokenize(&gaze::PiiClass::custom("path"), &path_raw)
+            .expect("path token");
+        let input = format!("{path_token}{email_token}");
+        let expected = format!("{path_raw}alice@example.com");
+        let pipeline = default_pipeline().expect("pipeline");
+
+        let restored = restore_gaze_tokens_in_string(&session, &pipeline, &input).expect("restore");
+
+        assert_eq!(restored, expected);
+    }
 }

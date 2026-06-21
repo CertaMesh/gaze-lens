@@ -129,18 +129,11 @@ fn build_demo_pipeline() -> Result<Pipeline, LensError> {
 }
 
 fn restore_tokens(gaze_session: &gaze::Session, input: &str) -> Result<String, LensError> {
-    let mut restored = input.to_string();
-    let mut tokens = gaze_session.tokens();
-    tokens.sort_by_key(|token| std::cmp::Reverse(token.len()));
-    for token in tokens {
-        let raw = gaze_session
-            .restore_strict(&token)
-            .map_err(|err| LensError::Internal {
-                detail: format!("restore token: {err}"),
-            })?;
-        restored = restored.replace(&token, &raw);
-    }
-    Ok(restored)
+    gaze_session
+        .restore_strict_text(input)
+        .map_err(|err| LensError::Internal {
+            detail: format!("restore tokens: {err}"),
+        })
 }
 
 fn redaction_err<E: std::fmt::Display>(err: E) -> LensError {
@@ -208,4 +201,28 @@ fn seed_rows() -> Vec<LensRow> {
     );
 
     vec![row1, row2, row3]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restore_tokens;
+
+    #[test]
+    fn demo_restore_tokens_splices_whole_text_without_replacing_inserted_raw_text() {
+        let session = gaze::Session::new(gaze::Scope::Conversation("demo-restore".to_string()))
+            .expect("gaze session");
+        let email_token = session
+            .tokenize(&gaze::PiiClass::Email, "bob@example.com")
+            .expect("email token");
+        let path_raw = format!("/var/log/{email_token}/audit.log");
+        let path_token = session
+            .tokenize(&gaze::PiiClass::custom("path"), &path_raw)
+            .expect("path token");
+        let input = format!("{path_token}{email_token}");
+        let expected = format!("{path_raw}bob@example.com");
+
+        let restored = restore_tokens(&session, &input).expect("restore");
+
+        assert_eq!(restored, expected);
+    }
 }
