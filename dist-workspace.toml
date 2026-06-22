@@ -14,7 +14,7 @@ pr-run-mode = "skip"
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax).
-# Keep this Apple Silicon-only until docs/cross-platform-roadmap.md CI proof passes.
+# Keep this Apple Silicon-only until docs/explanation/cross-platform-roadmap.md CI proof passes.
 targets = ["aarch64-apple-darwin"]
 
 [dist.binaries]
