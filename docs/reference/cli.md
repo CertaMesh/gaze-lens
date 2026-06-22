@@ -2,7 +2,7 @@
 
 `gaze-lens` ships exactly six CLI subcommands: `serve`, `init`, `query`, `replay`, `check`, `demo`. The set is locked at v1; adding a subcommand requires a [SPEC](./spec.md) amendment, not an implementation change.
 
-This page documents every subcommand's synopsis, arguments, flags, and side effects. For task-oriented walkthroughs see the how-to guides linked under each subcommand.
+This page documents every subcommand's synopsis, arguments, flags, and side effects. For setup walkthroughs see the how-to guides linked under each subcommand.
 
 ## Invocation
 
@@ -55,7 +55,7 @@ gaze-lens serve [--profile <NAME>]... [--manifest <PATH>] [--snapshot-dir <PATH>
 ### Side effects
 
 - Opens the manifest and (lazily) source connections.
-- Runs the snapshot-retention sweep before constructing the session when any loaded profile sets `snapshot_retention_days`; with multiple profiles, the **most-restrictive** retention applies (`min(days)`, `auto_purge` conjunction). See [profile-schema.md](./profile-schema.md#snapshot-retention).
+- Runs the snapshot-retention sweep before constructing the session when any loaded profile sets `snapshot_retention_days`; with multiple profiles, the **most-restrictive** retention applies (`min(days)`, least-destructive `auto_purge`). See [profile-schema.md](./profile-schema.md#snapshot-retention).
 - Writes a manifest row and snapshot per successful tool call.
 - Emits process diagnostics to stderr/tracing.
 
@@ -81,14 +81,14 @@ gaze-lens init [--profile <NAME>] [--source-kind <KIND>] [--scope <SCOPE>] [conn
 | Option | Default | Description |
 |---|---|---|
 | `--profile <NAME>` | (prompted) | Profile name. Required when `--non-interactive`. |
-| `--source-kind <KIND>` | (prompted) | One of `mysql`, `postgres`, `sqlite`, `ssh-log`. Required when `--non-interactive`. |
+| `--source-kind <KIND>` | (prompted) | One of `mysql`, `postgres`, `sqlite`, `ssh-log`, `local-log`. Required when `--non-interactive`. |
 | `--scope <SCOPE>` | (prompted) | Where to write the profile: `project` → `<cwd>/.gaze-lens.toml`; `user` → `~/.gaze-lens/profiles.toml`; `project-auto-purge` → project file with `auto_purge` opt-in. |
 
 **Connection details**
 
 | Option | Applies to | Description |
 |---|---|---|
-| `--source-host <HOST>` | db, ssh-log | DB or SSH host (required for `ssh-log`). |
+| `--source-host <HOST>` | db, ssh-log | DB or SSH host (required for `ssh-log`). Not used by `local-log`. |
 | `--source-port <PORT>` | db | DB port. |
 | `--source-database <NAME>` | db | Database name. |
 | `--source-username <USER>` | db | DB username. |
@@ -99,7 +99,7 @@ gaze-lens init [--profile <NAME>] [--source-kind <KIND>] [--scope <SCOPE>] [conn
 | `--no-keyring-write` | db | Do not write the keyring entry during init. |
 | `--source-ssh-host <HOST>` | mysql, postgres | SSH tunnel jump host. |
 | `--source-local-port <PORT>` | mysql, postgres | SSH tunnel local forwarded port. |
-| `--source-path <PATH>` | sqlite, ssh-log | SQLite DB path or remote log path. |
+| `--source-path <PATH>` | sqlite, ssh-log, local-log | SQLite DB path, remote log path, or local log path. |
 | `--source-json-text-columns <A,B,...>` | sqlite | SQLite TEXT-as-JSON column allowlist (comma-separated). |
 
 **MCP client and agent files**
@@ -137,6 +137,13 @@ gaze-lens init [--profile <NAME>] [--source-kind <KIND>] [--scope <SCOPE>] [conn
 - **Never writes a literal password.** Profiles rely on `password_env` or `source.secret`. With `--secret-backend keyring`, init performs a keyring round-trip preflight, refuses to replace a differing entry without `--allow-overwrite`/`--write-all`, verifies via read-back, then writes the profile; an orphaned keyring locator is reported if the keyring write succeeds but the profile commit fails.
 - **Scope role split.** `--scope project` refuses transport overrides (`host`/`port`); `--scope user` refuses policy and `auto_purge`; `auto_purge` is gated to `--scope project-auto-purge`.
 - **MCP config destinations.** `--client claude-code` writes `.mcp.json`; `--client codex` writes `~/.codex/config.toml`; `--client cursor` writes `.cursor/mcp.json`.
+
+Non-interactive log examples:
+
+```sh
+gaze-lens init --profile remote-log --source-kind ssh-log --source-host app@example.invalid --source-path /var/log/app.log --non-interactive
+gaze-lens init --profile local-log --source-kind local-log --source-path ./storage/logs/laravel.log --non-interactive
+```
 
 See [configure-profiles.md](../how-to/configure-profiles.md) and [wire-up-mcp-clients.md](../how-to/wire-up-mcp-clients.md).
 

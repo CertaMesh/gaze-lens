@@ -16,7 +16,7 @@ src/
     mod.rs
     ssh_tunnel.rs
     db/{mod.rs,mysql.rs,postgres.rs,sqlite.rs,query.rs,schema.rs}
-    log/{mod.rs,ssh_log.rs}
+    log/{mod.rs,ssh_log.rs,local_log.rs}
   frontend/
     mod.rs
     mcp.rs
@@ -31,7 +31,7 @@ src/
 
 Notes vs original spine sketch:
 
-- `log/file_log.rs` was DROP per the mining audit; the actual v1 log source is `log/ssh_log.rs` (D16, PR2b).
+- `log/file_log.rs` was DROP per the mining audit. `log/ssh_log.rs` is the remote log source (D16, PR2b); `log/local_log.rs` is the no-SSH local-file sibling. Both feed the same `log_tail` / `log_grep` MCP tools through the Source wrapper.
 - `value.rs` holds `LensValue` and the typed row plumbing introduced in PR1.
 - `source/db/{query.rs,schema.rs}` split the canned-query AST and schema presentation helpers out of the per-engine adapters (PR2a/PR3). `schema`/`list_tables` present raw labels by default; `schema_tokenize = true` enables legacy tokenized presentation with allowlist exceptions.
 - `examples/replay-fixture.rs` is an internal helper binary used by cross-process replay tests. It stays out of `src/bin` so Cargo's normal public/install bin surface only exposes `gaze-lens`.

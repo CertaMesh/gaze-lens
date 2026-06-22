@@ -2,7 +2,7 @@
 
 Profiles configure the sources `gaze-lens` connects to and the PII policy applied to each. They are TOML, loaded from two files and merged. This page documents every field, its type, default, and merge rule.
 
-For task-oriented setup see [configure-profiles.md](../how-to/configure-profiles.md); for the policy file referenced by `policy` see [policy-schema.md](./policy-schema.md).
+For setup examples see [configure-profiles.md](../how-to/configure-profiles.md); for the policy file referenced by `policy` see [policy-schema.md](./policy-schema.md).
 
 ## File locations and precedence
 
@@ -18,7 +18,7 @@ When both files define a profile of the same name, ownership is split so teams c
 | Field group | Owner | Fields |
 |---|---|---|
 | PII / schema policy | **Project** | `policy`, `schema_tokenize`, `schema_allowlist`, `database`, `username`, `secret`/`password_env`, `readonly_required` |
-| Transport | **User** | `host`, `port`, `ssh_host`, `local_port`, sqlite `path` (when supplied) |
+| Transport | **User** | `host`, `port`, `ssh_host`, `local_port`, sqlite `path`, local log `path` (when supplied) |
 
 Special merge rules apply to `production`, `snapshot_retention_days`, and `auto_purge` (below).
 
@@ -109,6 +109,14 @@ SQLite profiles have no password.
 
 `ssh_log` profiles have no password; SSH auth is the operator's (`~/.ssh/config`, SSH agent). Command construction uses the fixed `ssh -- <host> <command> -- <quoted_path>` form with validated host arguments (`-`-prefixed hosts rejected).
 
+### `kind = "local_log"` (class: log)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `path` | path | (required) | Local log file path on the laptop running `gaze-lens`. |
+
+`local_log` profiles have no password, host, or SSH fields. `gaze-lens` opens the configured file read-only through the local filesystem, applies the same line/byte caps, bounded grep window, redaction chokepoint, manifest-first ordering, regex/keyword semantics, and snapshot controls as `ssh_log`, and exposes it through the unchanged `log_tail` and `log_grep` tools. Because no shell command or remote argv is constructed, the SSH command-injection surface does not apply; operators are still responsible for pointing `path` at the intended file.
+
 ## Database secrets
 
 Database profiles support exactly one password reference. `gaze-lens` never accepts a literal `password = "..."` field; that key is rejected before merge (including inline-table forms).
@@ -139,7 +147,7 @@ Only `conversation` scope is supported in v0.1; `persistent` is reserved for v1.
 
 `production` is **escalate-only** across the project/user merge: if either file marks the profile `production = true`, it is production. A user file cannot downgrade a project's mandate. The mandate is opt-in; non-production profiles are unaffected.
 
-For `ssh_log` profiles, prefer `mode: "keyword"` on `log_grep` for sensitive or production-tier logs (the default `regex` mode is a raw-text presence oracle). See [mcp-tools.md](./mcp-tools.md#log_grep) and [threat-model.md](../explanation/threat-model.md).
+For log profiles (`ssh_log` or `local_log`), prefer `mode: "keyword"` on `log_grep` for sensitive or production-tier logs. The default remains `regex`; on `production = true` profiles, a regex `log_grep` emits a runtime warning because regex mode is a raw-text presence oracle. See [mcp-tools.md](./mcp-tools.md#log_grep) and [threat-model.md](../explanation/threat-model.md).
 
 ## Snapshot retention
 

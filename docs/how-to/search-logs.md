@@ -1,20 +1,37 @@
-# Search app logs over SSH
+# Search app logs
 
-`gaze-lens` exposes two MCP tools for app logs from a configured `ssh_log`
-profile: `log_tail` (recent lines) and `log_grep` (search). Both pseudonymize
-output through Gaze and write a manifest row before anything reaches the agent.
-This recipe covers tailing, the two `log_grep` modes, and when to prefer each.
+`gaze-lens` exposes two MCP tools for app logs from a configured log profile:
+`log_tail` (recent lines) and `log_grep` (search). A log profile can be remote
+over SSH (`kind = "ssh_log"`) or a local file path (`kind = "local_log"`). Both
+pseudonymize output through Gaze and write a manifest row before anything reaches
+the agent. This page covers tailing, the two `log_grep` modes, and when to prefer
+each.
 
-For the exact, locked tool semantics, do not rely on this page — see the canonical
-[reference/spec.md](../reference/spec.md) (§v1 sources → App logs) and
-[reference/mcp-tools.md](../reference/mcp-tools.md).
+For exact tool semantics, see [reference/spec.md](../reference/spec.md)
+(§v1 sources → App logs) and [reference/mcp-tools.md](../reference/mcp-tools.md).
 
 ## Prerequisites
 
-- An `ssh_log` profile that passes `check` (see
-  [configure-profiles.md](./configure-profiles.md)).
-- Your SSH key loaded and the host pinned in `known_hosts` — `gaze-lens` runs SSH
-  with `BatchMode=yes` and strict host-key checking.
+- A log profile that passes `check` (see [configure-profiles.md](./configure-profiles.md)).
+  For a local file:
+
+  ```toml
+  [profiles.source]
+  kind = "local_log"
+  path = "./storage/logs/app.log"
+  ```
+
+  For a remote file:
+
+  ```toml
+  [profiles.source]
+  kind = "ssh_log"
+  host = "deploy@app.example.invalid"
+  path = "/var/log/app.log"
+  ```
+
+- For `ssh_log`, your SSH key loaded and the host pinned in `known_hosts` —
+  `gaze-lens` runs SSH with `BatchMode=yes` and strict host-key checking.
 - An MCP client wired to the server (see
   [wire-up-mcp-clients.md](./wire-up-mcp-clients.md)). These are agent-facing
   tools; every call carries a `profile` argument.
@@ -36,6 +53,9 @@ For the exact, locked tool semantics, do not rely on this page — see the canon
    ```
 
    Matching lines come back with PII tokenized (`<EMAIL:Addr_1>` etc.).
+   On profiles marked `production = true`, regex mode emits a runtime warning
+   because it can act as a raw-text presence oracle. The call still runs; default
+   mode remains `regex`.
 
 3. **Prefer keyword mode for sensitive or production logs.** Pass `mode: "keyword"`
    to run the match predicate over the *same redacted text the agent sees*:
@@ -45,13 +65,14 @@ For the exact, locked tool semantics, do not rely on this page — see the canon
    ```
 
    In keyword mode, `pattern` is whitespace-separated terms (case-insensitive,
-   ANDed across all terms, original line order, honors `limit`). Whole Gaze tokens
-   such as `<EMAIL:Addr_1>` stay searchable as single literal terms. Any unknown
-   `mode` value fails closed as invalid args.
+   ANDed across all terms, original line order, honors `limit`). Token searches
+   must use the complete token minted for the current session, such as
+   `<hash:Name_N>`; partial fragments such as `Email_1` return 0 hits by design.
+   Any unknown `mode` value fails closed as invalid args.
 
 4. **Refresh the cache when you need fresh lines.** Keyword mode is backed by a
    short-lived in-memory cache over redacted text. Bust it and re-tail the bounded
-   SSH window with `refresh`:
+   log window with `refresh`:
 
    ```json
    {"tool": "log_grep", "args": {"profile": "prod", "pattern": "payment failed", "mode": "keyword", "refresh": true}}
