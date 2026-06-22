@@ -91,6 +91,8 @@ pub struct LogsPolicy {
     pub path: Option<PathBuf>,
     #[serde(default)]
     pub strip_patterns: Vec<String>,
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +211,10 @@ pub fn build_pipeline(policy: &PolicyFile) -> Result<Pipeline, PolicyError> {
                 .map_err(|err| PolicyError::Recognizer(err.to_string()))?,
             );
         }
+        if !logs.strip_patterns.is_empty() {
+            let action = parse_log_strip_action(logs.action.as_deref())?;
+            builder = builder.rule(GazeClassRule::new(PiiClass::custom("log_strip"), action));
+        }
     }
 
     Ok(builder.rule(DefaultRule::new(Action::Preserve)).build()?)
@@ -249,6 +255,18 @@ fn parse_action(raw: &str, column: &str) -> Result<Action, PolicyError> {
         other => Err(PolicyError::InvalidAction {
             column: column.to_string(),
             action: other.to_string(),
+        }),
+    }
+}
+
+fn parse_log_strip_action(raw: Option<&str>) -> Result<Action, PolicyError> {
+    let raw = raw.unwrap_or("redact");
+    let action = parse_action(raw, "policy.logs.action")?;
+    match action {
+        Action::Redact | Action::Tokenize => Ok(action),
+        _ => Err(PolicyError::InvalidAction {
+            column: "policy.logs.action".to_string(),
+            action: raw.to_string(),
         }),
     }
 }
