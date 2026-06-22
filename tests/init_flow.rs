@@ -52,6 +52,34 @@ fn non_interactive_sqlite_skips_prompts() {
 }
 
 #[test]
+fn non_interactive_mysql_missing_port_names_field() {
+    let env = InitEnv::test_with_home("/tmp/fake-home", "/tmp/fake-cwd", None, None);
+    let mut args = InitArgs::default_for_test();
+    args.non_interactive = true;
+    args.profile = Some("ci".into());
+    args.source_kind = Some(SourceKind::Mysql);
+    args.source_host = Some("db.example.invalid".into());
+    args.source_database = Some("app".into());
+    args.source_username = Some("app_user".into());
+    args.source_password_env = Some("GAZE_LENS_DB_PASSWORD".into());
+    args.scope = Some(InitScope::User);
+    args.no_mcp_config = true;
+    args.no_agents_md = true;
+    let mut p = FakePrompter::new();
+
+    let err = run_guided(&args, &mut p, &env).expect_err("missing port must error");
+    let detail = err.to_string();
+    assert!(
+        detail.contains("missing required field: mysql port (--source-port)"),
+        "{detail}"
+    );
+    assert!(
+        !detail.contains("requires all required inputs as flags"),
+        "{detail}"
+    );
+}
+
+#[test]
 fn auto_purge_destructive_confirm_present() {
     // Directive 11 + CB-r2-1: prompt template "This deletes snapshot files
     // older than {N} days. Continue?". `last_prompt` is `#[doc(hidden)] pub`

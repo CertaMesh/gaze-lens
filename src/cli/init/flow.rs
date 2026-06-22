@@ -117,7 +117,7 @@ pub fn run_guided<P: Prompter>(
     let name = match args.profile.as_deref() {
         Some(s) => s.to_string(),
         None => {
-            require_interactive(args)?;
+            require_interactive(args, "profile name", "--profile")?;
             p.input("Profile name?", Some("dev"))
                 .map_err(prompt_to_lens)?
         }
@@ -145,7 +145,7 @@ pub fn run_guided<P: Prompter>(
         match args.source_kind {
             Some(k) => k,
             None => {
-                require_interactive(args)?;
+                require_interactive(args, "source kind", "--source-kind")?;
                 let i = p
                     .select("Source kind?", SOURCE_KINDS)
                     .map_err(prompt_to_lens)?;
@@ -176,7 +176,7 @@ pub fn run_guided<P: Prompter>(
     let scope = match args.scope {
         Some(s) => s,
         None => {
-            require_interactive(args)?;
+            require_interactive(args, "profile scope", "--scope")?;
             let i = p
                 .select("Where to write the profile? Choose profile scope:", SCOPES)
                 .map_err(prompt_to_lens)?;
@@ -235,10 +235,14 @@ pub fn run_guided<P: Prompter>(
     })
 }
 
-fn require_interactive(args: &InitArgs) -> Result<(), LensError> {
+fn require_interactive(
+    args: &InitArgs,
+    field: impl Into<String>,
+    flag: &str,
+) -> Result<(), LensError> {
     if args.non_interactive {
         return Err(LensError::Profile {
-            detail: "--non-interactive requires all required inputs as flags".into(),
+            detail: format!("missing required field: {} ({flag})", field.into()),
         });
     }
     Ok(())
@@ -328,7 +332,7 @@ fn populate_discovered_source_params<P: Prompter>(
     let chosen = if args.accept_prod_rw.is_some() {
         DiscoveryPath::AsIs
     } else {
-        require_interactive(args)?;
+        require_interactive(args, "discovery path consent", "--accept-prod-rw")?;
         let i = p
             .select(DISCOVERY_PATH_PROMPT, DISCOVERY_PATH_CHOICES)
             .map_err(prompt_to_lens)?;
@@ -378,7 +382,7 @@ fn populate_discovered_source_params<P: Prompter>(
         }
         DiscoveryPath::HostDbOnly => {
             drop(password);
-            require_interactive(args)?;
+            require_interactive(args, "readonly database credentials", "--source-username")?;
             let username = p
                 .input("Readonly database username?", meta.username.as_deref())
                 .map_err(prompt_to_lens)?;
@@ -413,7 +417,7 @@ fn populate_source_params<P: Prompter>(
     match kind {
         SourceKind::Sqlite => {
             if section.source_path.is_none() {
-                require_interactive(args)?;
+                require_interactive(args, "sqlite path", "--source-path")?;
                 let s = p
                     .input("SQLite database path?", None)
                     .map_err(prompt_to_lens)?;
@@ -422,29 +426,30 @@ fn populate_source_params<P: Prompter>(
         }
         SourceKind::SshLog => {
             if section.source_host.is_none() {
-                require_interactive(args)?;
+                require_interactive(args, "ssh_log host", "--source-host")?;
                 let s = p.input("SSH host?", None).map_err(prompt_to_lens)?;
                 section.source_host = Some(s);
             }
             if section.source_path.is_none() {
-                require_interactive(args)?;
+                require_interactive(args, "ssh_log path", "--source-path")?;
                 let s = p.input("Remote log path?", None).map_err(prompt_to_lens)?;
                 section.source_path = Some(PathBuf::from(s));
             }
         }
         SourceKind::Mysql | SourceKind::Postgres => {
+            let kind_label = kind_to_toml_str(kind);
             let default_port: u16 = if matches!(kind, SourceKind::Mysql) {
                 3306
             } else {
                 5432
             };
             if section.source_host.is_none() {
-                require_interactive(args)?;
+                require_interactive(args, format!("{kind_label} host"), "--source-host")?;
                 let s = p.input("Database host?", None).map_err(prompt_to_lens)?;
                 section.source_host = Some(s);
             }
             if section.source_port.is_none() {
-                require_interactive(args)?;
+                require_interactive(args, format!("{kind_label} port"), "--source-port")?;
                 let s = p
                     .input("Database port?", Some(&default_port.to_string()))
                     .map_err(prompt_to_lens)?;
@@ -453,12 +458,12 @@ fn populate_source_params<P: Prompter>(
                 })?);
             }
             if section.source_database.is_none() {
-                require_interactive(args)?;
+                require_interactive(args, format!("{kind_label} database"), "--source-database")?;
                 let s = p.input("Database name?", None).map_err(prompt_to_lens)?;
                 section.source_database = Some(s);
             }
             if section.source_username.is_none() {
-                require_interactive(args)?;
+                require_interactive(args, format!("{kind_label} username"), "--source-username")?;
                 let s = p
                     .input("Database username?", None)
                     .map_err(prompt_to_lens)?;
@@ -467,7 +472,11 @@ fn populate_source_params<P: Prompter>(
             match args.secret_backend {
                 SecretBackendChoice::Env => {
                     if section.source_password_env.is_none() && section.source_secret.is_none() {
-                        require_interactive(args)?;
+                        require_interactive(
+                            args,
+                            format!("{kind_label} password env"),
+                            "--source-password-env",
+                        )?;
                         let s = p
                             .input(
                                 "Env var holding DB password?",
@@ -481,7 +490,11 @@ fn populate_source_params<P: Prompter>(
                     let service = match args.source_password_keyring_service.clone() {
                         Some(service) => service,
                         None => {
-                            require_interactive(args)?;
+                            require_interactive(
+                                args,
+                                format!("{kind_label} keyring service"),
+                                "--source-password-keyring-service",
+                            )?;
                             p.input("Keyring service?", Some("gaze-lens"))
                                 .map_err(prompt_to_lens)?
                         }
@@ -489,7 +502,11 @@ fn populate_source_params<P: Prompter>(
                     let account = match args.source_password_keyring_account.clone() {
                         Some(account) => account,
                         None => {
-                            require_interactive(args)?;
+                            require_interactive(
+                                args,
+                                format!("{kind_label} keyring account"),
+                                "--source-password-keyring-account",
+                            )?;
                             p.input("Keyring account?", Some(&section.name))
                                 .map_err(prompt_to_lens)?
                         }
@@ -497,7 +514,11 @@ fn populate_source_params<P: Prompter>(
                     let write_value = if args.no_keyring_write {
                         None
                     } else {
-                        require_interactive(args)?;
+                        require_interactive(
+                            args,
+                            format!("{kind_label} keyring write policy"),
+                            "--no-keyring-write",
+                        )?;
                         let should_write = p
                             .confirm("Write password to keyring now?", true)
                             .map_err(prompt_to_lens)?;
