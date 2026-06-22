@@ -120,22 +120,22 @@ A new MCP tool or CLI subcommand for observability is not approved by this amend
 v0.2 introduces two profile fields governing snapshot lifecycle. Both are opt-in; v0.1 default-unlimited behavior is preserved when neither is set.
 
 - `snapshot_retention_days: Option<u32>` — when set, snapshots whose ULID-embedded creation timestamp is older than `retention_days * 86_400_000` ms are subject to a startup sweep. `None` (default) = unlimited; manifest remains the operator's audit log of record per D3.
-- `auto_purge: bool` — `false` (default) emits warn-only stderr listings of expired snapshots that would be purged. `true` performs a best-effort `remove_file` on each expired snapshot and writes a `purged_at_ms` tombstone on the corresponding `calls` row. The manifest row is preserved; only `snapshot_ref` is cleared. Replay of a tombstoned row produces a structured `LensError::SnapshotPurged` citing the policy — never a silent FS-only delete.
+- `auto_purge: AutoPurge` — a three-state string enum (`"off"` / `"warn"` / `"purge"`, default `"off"`) governing what the startup sweep does when it finds expired snapshots. `"off"` performs no sweep at all: no manifest open, no filesystem scan, no warning. `"warn"` runs a read-only scan and emits a per-day-suppressed stderr listing of the expired snapshots that *would* be purged (a `tracing` debug event fires on every sweep). `"purge"` performs a best-effort `remove_file` on each expired snapshot and writes a `purged_at_ms` tombstone on the corresponding `calls` row — the manifest row is preserved; only `snapshot_ref` is cleared — then emits a non-suppressed info-level count. Replay of a tombstoned row produces a structured `LensError::SnapshotPurged` citing the policy — never a silent FS-only delete.
 
-**Profile merge rule (destructive-default default-deny).** When merging a project profile file with a user profile file, the resolved `auto_purge` is
+**Profile merge rule (least-destructive default-deny).** When merging a project profile file with a user profile file, the resolved `auto_purge` is the **least-destructive** of the two values under the total ordering `off < warn < purge`:
 
 ```text
-merged_auto_purge = project.auto_purge && user.auto_purge
+merged_auto_purge = min(project.auto_purge, user.auto_purge)   // over off < warn < purge
 ```
 
-Plain conjunction. If the project file does not enable `auto_purge`, the user file cannot override to `true`. If the project file enables `auto_purge`, the user file may downgrade to warn-only by setting `auto_purge = false`. Consent for a destructive operational policy must be expressed at the team-shared (project) layer.
+The project file sets the ceiling; the user file may opt **down** to a less destructive mode but can never escalate above what the project authorizes. The merge can never silently raise the policy to a more destructive mode than the project opted into. A profile defined **only** in the user file is forced to `off` regardless of any value set there — consent for a destructive operational policy must be expressed at the team-shared (project) layer.
 
-`snapshot_retention_days` itself merges by user-overrides-project (standard merge); the destructive-conjunction rule applies only to `auto_purge`.
+`snapshot_retention_days` itself merges by user-overrides-project (standard merge); the least-destructive `min` rule applies only to `auto_purge`.
 
 **Multi-profile process retention bound.** When `gaze-lens serve` loads multiple profiles, snapshot retention is bound by the most-restrictive policy across loaded profiles, computed in addition to the per-profile project×user merge:
 
 - `snapshot_retention_days = min(days)` over the loaded set; `None` is treated as +∞.
-- `auto_purge` is a plain conjunction across loaded profiles; if any loaded profile resolves `auto_purge = false`, the process runs warn-only.
+- `auto_purge` is the least-destructive value across loaded profiles (`min` over `off < warn < purge`); the process runs at the policy of the loaded profile that authorizes the least destruction.
 
 Shared snapshot_dir means the sweep affects all profiles' replay. Most-restrictive merge is the only safe boundary — never escalate destructiveness silently.
 
