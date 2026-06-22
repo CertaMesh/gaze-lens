@@ -98,6 +98,7 @@ fn prepare_session(
     for (profile, (_policy, pipeline, column_actions)) in runtime {
         session.register_pipeline(profile.name.clone(), Arc::new(pipeline))?;
         session.register_column_action_policy(profile.name.clone(), column_actions)?;
+        session.register_profile_production(profile.name.clone(), profile.production)?;
         register_lazy_source(&session, profile);
     }
 

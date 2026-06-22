@@ -68,7 +68,12 @@ impl Tool for LogGrepTool {
     }
 
     async fn invoke(&self, ctx: &ToolCtx<'_>) -> Result<ToolResponse, ToolError> {
-        match log_grep_mode(ctx.redacted_args())? {
+        let args = ctx.redacted_args();
+        let mode = log_grep_mode(args)?;
+        let profile = profile_key_from_args(args);
+        warn_if_production_regex_mode(profile, self.session.profile_is_production(profile), mode);
+
+        match mode {
             LogGrepMode::Regex => invoke_session_tool(&self.session, "log_grep", ctx).await,
             LogGrepMode::Keyword => self.invoke_keyword(ctx).await,
         }
@@ -115,6 +120,23 @@ fn log_grep_mode(args: &serde_json::Value) -> Result<LogGrepMode, ToolError> {
         Some(_) => Err(ToolError::InvalidArgs(
             "invalid log_grep mode; expected `regex` or `keyword`".to_string(),
         )),
+    }
+}
+
+fn profile_key_from_args(args: &serde_json::Value) -> &str {
+    args.get("profile")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+}
+
+fn warn_if_production_regex_mode(profile: &str, production: bool, mode: LogGrepMode) {
+    if production && mode == LogGrepMode::Regex {
+        tracing::warn!(
+            target: "gaze_lens::mcp::tools::log_grep",
+            profile,
+            mode = "regex",
+            "production log_grep regex mode can act as a raw-text presence/absence oracle; use mode=\"keyword\" for production logs"
+        );
     }
 }
 
@@ -272,11 +294,7 @@ fn keyword_request_from_args(args: &serde_json::Value) -> Result<KeywordRequest,
         .map(ToOwned::to_owned);
     let limit = optional_usize_arg(args, "limit")?.unwrap_or(100);
     let refresh = optional_bool_arg(args, "refresh")?.unwrap_or(false);
-    let profile_key = args
-        .get("profile")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let profile_key = profile_key_from_args(args).to_string();
     Ok(KeywordRequest {
         pattern,
         level,
