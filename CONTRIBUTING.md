@@ -40,8 +40,6 @@ cargo test --all-targets
 
 This default CI path must stay self-contained: no Docker, no live database, no production credentials, and no feature-gated integration services. Keep MySQL and Postgres integration suites behind their explicit `integration-mysql` and `integration-postgres` features.
 
-See [docs/public-readiness.md](./docs/public-readiness.md) for the public-release checklist.
-
 ## Gaze dependency pin
 
 `Cargo.toml` pins `gaze` to crates.io `gaze-pii` through Cargo's `package = "gaze-pii"` alias, plus `gaze-recognizers` and `gaze-mcp-core` from crates.io. Do not silently float these dependencies. When adopting new Gaze features, bump the crates.io versions together in `Cargo.toml`, run `cargo update -p gaze-pii -p gaze-recognizers -p gaze-mcp-core`, and bump the gaze-lens version in the same PR.
@@ -78,7 +76,7 @@ The release workflow uses public crates.io Gaze packages. When changing the requ
 
 ## Public release checklist
 
-Before making the repository public or announcing a public release, confirm [docs/public-readiness.md](./docs/public-readiness.md), [SECURITY.md](./SECURITY.md), [LICENSE](./LICENSE), README status wording, release notes, and the default public PR CI all match the intended release state. Do not bundle branch protection, visibility, tag, publish, or release actions into a docs-only readiness PR.
+Before making the repository public or announcing a public release, confirm the (internally tracked) public-release readiness checklist, [SECURITY.md](./SECURITY.md), [LICENSE](./LICENSE), README status wording, release notes, and the default public PR CI all match the intended release state. Do not bundle branch protection, visibility, tag, publish, or release actions into a docs-only readiness PR.
 
 ## sqlx macro policy (banned for production-source queries)
 
