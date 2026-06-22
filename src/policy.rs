@@ -66,6 +66,10 @@ pub struct NerSection {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicySection {
+    /// Action for detected spans without a more-specific column/class rule.
+    /// Production-tier profiles should set this to `tokenize` or `redact`.
+    #[serde(default)]
+    pub default_action: Option<String>,
     pub database: DatabasePolicy,
     #[serde(default)]
     pub logs: Option<LogsPolicy>,
@@ -217,7 +221,16 @@ pub fn build_pipeline(policy: &PolicyFile) -> Result<Pipeline, PolicyError> {
         }
     }
 
-    Ok(builder.rule(DefaultRule::new(Action::Preserve)).build()?)
+    let default_action = parse_action(
+        policy
+            .policy
+            .default_action
+            .as_deref()
+            .unwrap_or("preserve"),
+        "policy.default_action",
+    )?;
+
+    Ok(builder.rule(DefaultRule::new(default_action)).build()?)
 }
 
 /// Enforce the production-profile NER mandate (#988).

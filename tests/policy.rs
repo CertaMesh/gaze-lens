@@ -46,6 +46,42 @@ fn minimal_policy_preserves_detected_email_without_explicit_rule() {
     assert_eq!(output, "email alice@example.invalid about the incident");
 }
 
+#[test]
+fn explicit_preserve_default_action_keeps_detected_email_byte_identical() {
+    let policy = PolicyFile::from_toml(
+        r#"
+        [policy]
+        default_action = "preserve"
+
+        [policy.database]
+        "#,
+    )
+    .expect("policy");
+
+    let output = redact_policy_text(&policy, "email alice@example.invalid about the incident");
+
+    assert_eq!(output, "email alice@example.invalid about the incident");
+}
+
+#[test]
+fn tokenize_default_action_tokenizes_detected_email_without_explicit_rule() {
+    let policy = PolicyFile::from_toml(
+        r#"
+        [policy]
+        default_action = "tokenize"
+
+        [policy.database]
+        "#,
+    )
+    .expect("policy");
+
+    let output = redact_policy_text(&policy, "email alice@example.invalid about the incident");
+
+    assert!(!output.contains("alice@example.invalid"), "{output}");
+    assert!(output.starts_with("email <"), "{output}");
+    assert!(output.ends_with(":Email_1> about the incident"), "{output}");
+}
+
 fn policy_with_scope(scope: &str) -> PolicyFile {
     PolicyFile::from_toml(&format!(
         r#"
