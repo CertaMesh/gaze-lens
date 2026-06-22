@@ -280,6 +280,62 @@ fn serve_print_discovery_lists_db_and_log_profiles_without_starting_mcp() {
     assert_hash(&log_profile["schema_hash"]);
 }
 
+#[test]
+fn serve_print_discovery_schema_tokenize_does_not_leak_raw_labels() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("profiles.toml");
+    seed_tokenized_sqlite(&db);
+    write_tokenized_profiles(&project, &db);
+
+    let output = Command::cargo_bin("gaze-lens")
+        .expect("binary")
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "serve",
+            "--print-discovery",
+            "--manifest",
+            temp.path()
+                .join("manifest.sqlite")
+                .to_str()
+                .expect("manifest path"),
+            "--snapshot-dir",
+            temp.path()
+                .join("snapshots")
+                .to_str()
+                .expect("snapshot dir"),
+        ])
+        .output()
+        .expect("serve --print-discovery");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let encoded = String::from_utf8(output.stdout).expect("inventory utf8");
+
+    assert!(!encoded.contains("customers_private"), "{encoded}");
+    assert!(!encoded.contains("email_address"), "{encoded}");
+    assert!(!encoded.contains("internal_note"), "{encoded}");
+    assert!(encoded.contains("<TABLE_001>"), "{encoded}");
+    assert!(encoded.contains("<COL_001>"), "{encoded}");
+    assert!(encoded.contains("<COL_002>"), "{encoded}");
+
+    let inventory: serde_json::Value = serde_json::from_str(&encoded).expect("inventory json");
+    let profiles = inventory["profiles"].as_array().expect("profiles array");
+    let db_profile = profile_named(profiles, "local-db");
+
+    assert_eq!(db_profile["scope"]["tables"][0]["name"], "<TABLE_001>");
+    assert_eq!(
+        db_profile["scope"]["tables"][0]["allowed_columns"],
+        serde_json::json!(["<COL_001>", "<COL_002>"])
+    );
+    assert_hash(&db_profile["schema_hash"]);
+}
+
 fn profile_named<'a>(profiles: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
     profiles
         .iter()
@@ -307,6 +363,19 @@ fn seed_sqlite(path: &std::path::Path) {
     .expect("seed db");
 }
 
+fn seed_tokenized_sqlite(path: &std::path::Path) {
+    let conn = Connection::open(path).expect("sqlite");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE customers_private (
+            email_address TEXT,
+            internal_note TEXT
+        );
+        "#,
+    )
+    .expect("seed tokenized db");
+}
+
 fn write_profiles(path: &std::path::Path, db: &std::path::Path) {
     std::fs::write(
         path,
@@ -324,6 +393,22 @@ fn write_profiles(path: &std::path::Path, db: &std::path::Path) {
         ),
     )
     .expect("profiles");
+}
+
+fn write_tokenized_profiles(path: &std::path::Path, db: &std::path::Path) {
+    std::fs::write(
+        path,
+        format!(
+            r#"
+            [[profiles]]
+            name = "local-db"
+            schema_tokenize = true
+            source = {{ kind = "sqlite", path = "{}", readonly_required = true }}
+            "#,
+            db.display()
+        ),
+    )
+    .expect("tokenized profiles");
 }
 
 #[derive(Clone)]

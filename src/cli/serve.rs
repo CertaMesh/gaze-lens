@@ -289,8 +289,7 @@ async fn discover_profile(profile: &Profile) -> Result<ProfileDiscovery, LensErr
 async fn discover_database_profile(profile: &Profile) -> Result<ProfileDiscovery, LensError> {
     let source_class = SourceClass::Database;
     let supported_tools = supported_tools(source_class);
-    let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
-    let source = connect_db_source(profile, limit_cap).await?;
+    let source = connect_db_source(profile, default_db_limit_cap()).await?;
     let mut raw_tables = source.list_tables().await?;
     raw_tables.sort();
 
@@ -408,10 +407,9 @@ fn selected_profile_names(args: &ServeArgs) -> Vec<String> {
 }
 
 async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
-    let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
     let db_source = match &profile.source {
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
-            connect_db_source(&profile, limit_cap).await?
+            connect_db_source(&profile, default_db_limit_cap()).await?
         }
         SourceSpec::SshLog { .. } => {
             return Err(LensError::Profile {
@@ -430,6 +428,10 @@ async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError>
         db_source,
         schema_presentation,
     )))
+}
+
+fn default_db_limit_cap() -> u32 {
+    OutputCaps::default().rows.min(u32::MAX as usize) as u32
 }
 
 fn build_log_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
