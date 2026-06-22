@@ -92,7 +92,10 @@ impl Source for LocalLogSourceWrapper {
                 let args: LogTailArgs = serde_json::from_value(call.args.0.clone())
                     .map_err(|err| source_error(self.inner.profile_name(), err.to_string()))?;
                 let lines = args.lines.unwrap_or(100);
-                self.inner.tail(lines).await.map(text_output_from_local_log)
+                self.inner
+                    .tail(lines)
+                    .await
+                    .and_then(text_output_from_local_log)
             }
             "log_grep" => {
                 let args: LogGrepArgs =
@@ -111,7 +114,7 @@ impl Source for LocalLogSourceWrapper {
                             args.limit.unwrap_or(100),
                         )
                         .await
-                        .map(text_output_from_local_log),
+                        .and_then(text_output_from_local_log),
                     "keyword" => self
                         .inner
                         .grep_window(
@@ -121,7 +124,7 @@ impl Source for LocalLogSourceWrapper {
                             args.refresh.unwrap_or(false),
                         )
                         .await
-                        .map(text_output_from_local_log),
+                        .and_then(text_output_from_local_log),
                     other => Err(source_error(
                         self.inner.profile_name(),
                         format!("invalid log_grep mode `{other}`; expected `regex` or `keyword`"),
@@ -167,10 +170,12 @@ fn text_output_from_log(output: ssh_log::SshLogOutput) -> SourceOutput {
     }
 }
 
-fn text_output_from_local_log(output: local_log::LocalLogOutput) -> SourceOutput {
+fn text_output_from_local_log(
+    output: local_log::LocalLogOutput,
+) -> Result<SourceOutput, LensError> {
     let truncated_at = output.truncated_at.clone();
-    SourceOutput::TextWithTruncation {
-        text: output.into_text(),
+    Ok(SourceOutput::TextWithTruncation {
+        text: output.into_text()?,
         truncated_at,
-    }
+    })
 }

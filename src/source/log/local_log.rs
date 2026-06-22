@@ -108,12 +108,12 @@ impl WindowCache {
         Fut: Future<Output = Result<LocalLogOutput, LensError>>,
     {
         let now = (self.now)();
-        if let Some(output) = self.fresh(&key, now) {
+        if let Some(output) = self.fresh(&key, now)? {
             return Ok(output);
         }
 
         let output = fetch().await?;
-        self.store(key, output.clone(), (self.now)());
+        self.store(key, output.clone(), (self.now)())?;
         Ok(output)
     }
 
@@ -132,40 +132,59 @@ impl WindowCache {
         }
 
         let output = fetch().await?;
-        self.store(key, output.clone(), (self.now)());
+        self.store(key, output.clone(), (self.now)())?;
         Ok(output)
     }
 
-    fn fresh(&self, key: &WindowCacheKey, now: Instant) -> Option<LocalLogOutput> {
-        self.entries
-            .lock()
-            .expect("window cache")
+    fn fresh(
+        &self,
+        key: &WindowCacheKey,
+        now: Instant,
+    ) -> Result<Option<LocalLogOutput>, LensError> {
+        Ok(self
+            .entries()?
             .get(key)
             .filter(|entry| now.saturating_duration_since(entry.minted_at) <= self.ttl)
-            .map(|entry| entry.output.clone())
+            .map(|entry| entry.output.clone()))
     }
 
-    fn store(&self, key: WindowCacheKey, output: LocalLogOutput, minted_at: Instant) {
-        self.entries
-            .lock()
-            .expect("window cache")
+    fn store(
+        &self,
+        key: WindowCacheKey,
+        output: LocalLogOutput,
+        minted_at: Instant,
+    ) -> Result<(), LensError> {
+        self.entries()?
             .insert(key, CachedWindow { minted_at, output });
+        Ok(())
+    }
+
+    fn entries(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, HashMap<WindowCacheKey, CachedWindow>>, LensError> {
+        self.entries.lock().map_err(|_| LensError::Internal {
+            detail: "local log window cache lock poisoned".to_string(),
+        })
     }
 }
 
 impl LocalLogOutput {
-    pub fn into_text(self) -> String {
+    pub fn into_text(self) -> Result<String, LensError> {
         let lines = self.lines.join("\n");
         let Some(metadata) = self.metadata else {
-            return lines;
+            return Ok(lines);
         };
-        let metadata =
-            serde_json::to_string(&metadata).expect("local log metadata should serialize");
-        if lines.is_empty() {
+        let metadata = serde_json::to_string(&metadata).map_err(|err| {
+            source_error(
+                &metadata.profile,
+                format!("local log metadata serialization failed: {err}"),
+            )
+        })?;
+        Ok(if lines.is_empty() {
             metadata
         } else {
             format!("{metadata}\n{lines}")
-        }
+        })
     }
 }
 
@@ -430,8 +449,31 @@ impl LocalLogSource {
         }
 
         let max_read = self.max_total_bytes.saturating_add(1);
+        let start = self.tail_start_offset(&mut file, len, lines).await?;
+        file.seek(std::io::SeekFrom::Start(start))
+            .await
+            .map_err(|err| source_error(&self.profile_name, err.to_string()))?;
+        read_capped(&mut file, max_read)
+            .await
+            .map_err(|err| source_error(&self.profile_name, err.to_string()))
+    }
+
+    async fn tail_start_offset(
+        &self,
+        file: &mut tokio::fs::File,
+        len: u64,
+        lines: usize,
+    ) -> Result<u64, LensError> {
+        let last_byte_pos = len.saturating_sub(1);
+        file.seek(std::io::SeekFrom::Start(last_byte_pos))
+            .await
+            .map_err(|err| source_error(&self.profile_name, err.to_string()))?;
+        let last_byte = read_capped(&mut *file, 1)
+            .await
+            .map_err(|err| source_error(&self.profile_name, err.to_string()))?;
+        let target_newlines = lines.saturating_add(usize::from(last_byte == b"\n"));
         let mut pos = len;
-        let mut buf = Vec::new();
+        let mut seen = 0usize;
         while pos > 0 {
             let read_len =
                 usize::try_from(pos.min(READ_CHUNK_BYTES as u64)).unwrap_or(READ_CHUNK_BYTES);
@@ -439,49 +481,21 @@ impl LocalLogSource {
             file.seek(std::io::SeekFrom::Start(start))
                 .await
                 .map_err(|err| source_error(&self.profile_name, err.to_string()))?;
-            let chunk = read_capped(&mut file, read_len)
+            let chunk = read_capped(&mut *file, read_len)
                 .await
                 .map_err(|err| source_error(&self.profile_name, err.to_string()))?;
-            let mut next = chunk;
-            next.extend_from_slice(&buf);
-            buf = next;
+            for index in (0..chunk.len()).rev() {
+                if chunk[index] == b'\n' {
+                    seen += 1;
+                    if seen == target_newlines {
+                        return Ok(start + index as u64 + 1);
+                    }
+                }
+            }
             pos = start;
-
-            if let Some(start) = complete_tail_start(&buf, lines) {
-                let tail = &buf[start..];
-                let end = tail.len().min(max_read);
-                return Ok(tail[..end].to_vec());
-            }
-            if pos == 0 {
-                return Ok(buf);
-            }
-            if buf.len() > max_read {
-                let start = buf.len().saturating_sub(max_read);
-                return Ok(buf[start..].to_vec());
-            }
         }
-        Ok(buf)
+        Ok(0)
     }
-}
-
-fn complete_tail_start(raw: &[u8], lines: usize) -> Option<usize> {
-    if lines == 0 {
-        return Some(raw.len());
-    }
-    let mut end = raw.len();
-    while end > 0 && raw[end - 1] == b'\n' {
-        end -= 1;
-    }
-    let mut seen = 0usize;
-    for index in (0..end).rev() {
-        if raw[index] == b'\n' {
-            seen += 1;
-            if seen == lines {
-                return Some(index + 1);
-            }
-        }
-    }
-    None
 }
 
 fn validate_utf8(raw: &[u8]) -> Result<(), LensError> {
@@ -527,12 +541,16 @@ fn source_error(profile_name: &str, detail: String) -> LensError {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::path::PathBuf;
     use std::time::Duration;
 
     use crate::errors::LensError;
     use crate::value::LowerError;
 
-    use super::{LocalLogCaps, LocalLogSource};
+    use super::{
+        LocalLogCaps, LocalLogOutput, LocalLogSource, READ_CHUNK_BYTES, WindowCache, WindowCacheKey,
+    };
 
     #[tokio::test]
     async fn tail_reads_last_lines_from_local_file() {
@@ -568,6 +586,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tail_one_line_matches_ssh_tail_n_for_trailing_blank_line() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("app.log");
+        tokio::fs::write(&path, "ERROR previous@example.com leaked\n\n")
+            .await
+            .expect("write log");
+        let source = LocalLogSource::new(
+            "dev-log",
+            path,
+            LocalLogCaps {
+                line_bytes: 1024,
+                bytes: 4096,
+                timeout: Duration::from_secs(1),
+            },
+        )
+        .expect("source");
+
+        let output = source.tail(1).await.expect("tail");
+
+        assert!(output.lines.is_empty());
+        assert_eq!(output.bytes, 1);
+        assert!(output.truncated_at.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tail_byte_cap_matches_ssh_when_requested_lines_exceed_file_lines() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("app.log");
+        let prefix = "A".repeat(READ_CHUNK_BYTES + 32);
+        let contents = format!("{prefix}\nERROR newest@example.com hidden\n");
+        tokio::fs::write(&path, contents).await.expect("write log");
+        let source = LocalLogSource::new(
+            "dev-log",
+            path,
+            LocalLogCaps {
+                line_bytes: 1024,
+                bytes: 16,
+                timeout: Duration::from_secs(1),
+            },
+        )
+        .expect("source");
+
+        let output = source.tail(10).await.expect("tail");
+
+        assert_eq!(output.lines, vec!["A".repeat(16)]);
+        assert_eq!(output.bytes, 16);
+        assert_eq!(
+            output.truncated_at,
+            vec![crate::session::TruncatedAt::Bytes]
+        );
+    }
+
+    #[tokio::test]
+    async fn window_cache_lock_poison_returns_internal_error() {
+        let cache = WindowCache::new(Duration::from_secs(5));
+        let key = WindowCacheKey {
+            path: PathBuf::from("/tmp/app.log"),
+            window_lines: 10,
+        };
+        let poison = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = cache.entries.lock().expect("lock");
+            panic!("poison local log cache");
+        }));
+        assert!(poison.is_err());
+
+        let err = cache
+            .get_or_fetch(key, || async {
+                Ok::<_, LensError>(LocalLogOutput {
+                    lines: vec!["ERROR fetched unexpectedly".to_string()],
+                    truncated_at: Vec::new(),
+                    bytes: 26,
+                    metadata: None,
+                })
+            })
+            .await
+            .expect_err("poison error");
+
+        assert!(matches!(err, LensError::Internal { .. }));
+    }
+
+    #[tokio::test]
     async fn grep_filters_local_tail_window_and_reports_row_truncation() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("app.log");
@@ -595,7 +694,7 @@ mod tests {
 
         assert_eq!(output.lines, vec!["ERROR first@example.com failed"]);
         assert_eq!(output.truncated_at, vec![crate::session::TruncatedAt::Rows]);
-        let text = output.into_text();
+        let text = output.into_text().expect("text");
         let metadata = text.lines().next().expect("metadata");
         assert!(
             metadata.contains(r#""source_kind":"local_log""#),
