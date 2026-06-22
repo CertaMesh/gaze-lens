@@ -29,6 +29,8 @@ pub enum SourceKind {
     Sqlite,
     #[value(name = "ssh-log")]
     SshLog,
+    #[value(name = "local-log")]
+    LocalLog,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -216,7 +218,7 @@ impl InitArgs {
             if self.source_kind.is_none() && self.discover_ssh_host.is_none() {
                 return Err(LensError::Profile {
                     detail:
-                        "--non-interactive requires --source-kind <mysql|postgres|sqlite|ssh-log>"
+                        "--non-interactive requires --source-kind <mysql|postgres|sqlite|ssh-log|local-log>"
                             .into(),
                 });
             }
@@ -234,6 +236,12 @@ impl InitArgs {
                         detail: "--source-kind ssh-log requires --source-path <log-path>".into(),
                     });
                 }
+            }
+            if matches!(self.source_kind, Some(SourceKind::LocalLog)) && self.source_path.is_none()
+            {
+                return Err(LensError::Profile {
+                    detail: "--source-kind local-log requires --source-path <log-path>".into(),
+                });
             }
         }
         if let Some(confirm) = &self.accept_prod_rw {

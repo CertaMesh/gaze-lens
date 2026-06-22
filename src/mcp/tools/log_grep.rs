@@ -401,18 +401,25 @@ fn split_redacted_window_text(text: &str) -> (Option<serde_json::Value>, Vec<Str
 }
 
 fn is_log_grep_metadata_header(metadata: &serde_json::Value) -> bool {
+    let Some(source_kind) = metadata
+        .get("source_kind")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
     metadata.as_object().is_some()
         && metadata
             .get("operation")
             .and_then(serde_json::Value::as_str)
             == Some("log_grep")
+        && is_log_source_kind(source_kind)
+        && (source_kind != "ssh_log" || has_string(metadata, "host"))
         && metadata
-            .get("source_kind")
-            .and_then(serde_json::Value::as_str)
-            == Some("ssh_log")
+            .get("truncated_at")
+            .and_then(serde_json::Value::as_array)
+            .is_some()
         && has_string(metadata, "status")
         && has_string(metadata, "profile")
-        && has_string(metadata, "host")
         && has_string(metadata, "path")
         && has_string(metadata, "pattern")
         && has_u64(metadata, "requested_limit")
@@ -421,10 +428,10 @@ fn is_log_grep_metadata_header(metadata: &serde_json::Value) -> bool {
         && has_u64(metadata, "matched_lines")
         && has_u64(metadata, "returned_lines")
         && has_u64(metadata, "searched_bytes")
-        && metadata
-            .get("truncated_at")
-            .and_then(serde_json::Value::as_array)
-            .is_some()
+}
+
+fn is_log_source_kind(source_kind: &str) -> bool {
+    matches!(source_kind, "ssh_log" | "local_log")
 }
 
 fn has_string(metadata: &serde_json::Value, key: &str) -> bool {
@@ -845,6 +852,32 @@ mod tests {
             "source_kind": "ssh_log",
             "host": "app.example",
             "path": "/var/log/app.log",
+            "pattern": "43301",
+            "level": null,
+            "requested_limit": 100,
+            "tail_window_lines": 10000,
+            "searched_lines": 2,
+            "matched_lines": 2,
+            "returned_lines": 2,
+            "searched_bytes": 42,
+            "truncated_at": []
+        });
+        let text = format!("{header}\nERROR release_id=43301");
+
+        let (metadata, lines) = split_redacted_window_text(&text);
+
+        assert_eq!(metadata, Some(header));
+        assert_eq!(lines, vec!["ERROR release_id=43301"]);
+    }
+
+    #[test]
+    fn split_redacted_window_text_strips_local_log_metadata_header() {
+        let header = json!({
+            "operation": "log_grep",
+            "status": "matches",
+            "profile": "dev-log",
+            "source_kind": "local_log",
+            "path": "/tmp/app.log",
             "pattern": "43301",
             "level": null,
             "requested_limit": 100,

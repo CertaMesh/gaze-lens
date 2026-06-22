@@ -768,16 +768,15 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
                 user_path.clone()
             },
         },
-        (
-            SourceSpec::LocalLog { path: user_path },
-            SourceSpec::LocalLog { path: project_path },
-        ) => SourceSpec::LocalLog {
-            path: if user_path.as_os_str().is_empty() {
-                project_path.clone()
-            } else {
-                user_path.clone()
-            },
-        },
+        (SourceSpec::LocalLog { path: user_path }, SourceSpec::LocalLog { path: project_path }) => {
+            SourceSpec::LocalLog {
+                path: if user_path.as_os_str().is_empty() {
+                    project_path.clone()
+                } else {
+                    user_path.clone()
+                },
+            }
+        }
         (_, project) => project.clone(),
     }
 }

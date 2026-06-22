@@ -7,7 +7,7 @@
 //! `allow_overwrite`), or errors with `Collision`.
 //!
 //! Wire format (CB3): source `kind` is snake_case (`mysql`, `postgres`,
-//! `sqlite`, `ssh_log`). CLI dash-spelling (`ssh-log`) is exclusive to the
+//! `sqlite`, `ssh_log`, `local_log`). CLI dash-spelling (`ssh-log`/`local-log`) is exclusive to the
 //! flag layer.
 //!
 //! Parse errors carry an explicit `(line, column)` in `Display` (MS3) so the
@@ -250,5 +250,6 @@ fn source_kind_str_toml(k: SourceKind) -> &'static str {
         SourceKind::Postgres => "postgres",
         SourceKind::Sqlite => "sqlite",
         SourceKind::SshLog => "ssh_log",
+        SourceKind::LocalLog => "local_log",
     }
 }

@@ -486,6 +486,48 @@ fn check_validates_ssh_log_by_reading_configured_path() {
 }
 
 #[test]
+fn check_validates_local_log_by_opening_configured_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    let log_path = temp.path().join("app.log");
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    std::fs::write(&log_path, "one local log line\n").expect("log");
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "test-local-log-read"
+            policy = "{}"
+            source = {{ kind = "local_log", path = "{}" }}
+            "#,
+            policy.display(),
+            log_path.display()
+        ),
+    )
+    .expect("profile");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "test-local-log-read",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.contains("none not required"), "{stdout}");
+    assert!(stdout.contains("source: ok"));
+    assert!(!temp.path().join("ssh-args.txt").exists());
+}
+
+#[test]
 fn check_warns_on_email_regex_only_log_profile() {
     let temp = tempfile::tempdir().expect("tempdir");
     let project = temp.path().join("project.toml");

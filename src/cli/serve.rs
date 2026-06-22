@@ -18,8 +18,9 @@ use crate::session::{OutputCaps, Session, SourceClass, schema_hash};
 use crate::source::db::TableSchema;
 use crate::source::db::connect_db_source;
 use crate::source::db::schema::SchemaTokenizer;
-use crate::source::log::SshLogSourceWrapper;
+use crate::source::log::local_log::{LocalLogCaps, LocalLogSource};
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
+use crate::source::log::{LocalLogSourceWrapper, SshLogSourceWrapper};
 use crate::source::{DbSourceWrapper, SchemaPresentation, Source};
 
 #[derive(Debug, Args)]
@@ -439,23 +440,39 @@ fn default_db_limit_cap() -> u32 {
 }
 
 fn build_log_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
-    let SourceSpec::SshLog { host, path } = &profile.source else {
-        return Err(LensError::Profile {
-            detail: format!("profile `{}` is not a log source", profile.name),
-        });
-    };
     let caps = OutputCaps::default();
-    let log_source = Arc::new(SshLogSource::new(
-        profile.name.clone(),
-        host.clone(),
-        path.clone(),
-        SshLogCaps {
-            line_bytes: caps.line_bytes,
-            bytes: caps.bytes,
-            timeout: caps.timeout,
-        },
-    )?);
-    Ok(Arc::new(SshLogSourceWrapper::new(log_source)))
+    match &profile.source {
+        SourceSpec::SshLog { host, path } => {
+            let log_source = Arc::new(SshLogSource::new(
+                profile.name.clone(),
+                host.clone(),
+                path.clone(),
+                SshLogCaps {
+                    line_bytes: caps.line_bytes,
+                    bytes: caps.bytes,
+                    timeout: caps.timeout,
+                },
+            )?);
+            Ok(Arc::new(SshLogSourceWrapper::new(log_source)))
+        }
+        SourceSpec::LocalLog { path } => {
+            let log_source = Arc::new(LocalLogSource::new(
+                profile.name.clone(),
+                path.clone(),
+                LocalLogCaps {
+                    line_bytes: caps.line_bytes,
+                    bytes: caps.bytes,
+                    timeout: caps.timeout,
+                },
+            )?);
+            Ok(Arc::new(LocalLogSourceWrapper::new(log_source)))
+        }
+        SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
+            Err(LensError::Profile {
+                detail: format!("profile `{}` is not a log source", profile.name),
+            })
+        }
+    }
 }
 
 #[doc(hidden)]

@@ -428,12 +428,14 @@ async fn validate_source(
                     stderr: None,
                 });
             }
-            let _ = tokio::fs::File::open(path).await.map_err(|err| LensError::SourceError {
-                source_name: profile.name.clone(),
-                detail: format!("failed to open local log {}: {err}", path.display()),
-                sql: None,
-                stderr: None,
-            })?;
+            let _ = tokio::fs::File::open(path)
+                .await
+                .map_err(|err| LensError::SourceError {
+                    source_name: profile.name.clone(),
+                    detail: format!("failed to open local log {}: {err}", path.display()),
+                    sql: None,
+                    stderr: None,
+                })?;
         }
     }
     Ok(())
