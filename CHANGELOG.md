@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.2] — 2026-06-22
+
+Re-release of v0.5.1 that carries the prebuilt binary asset. **No code changes
+from v0.5.1.** The v0.5.1 tag could not carry assets — it was published under
+GitHub immutable releases, which forbid attaching assets after publish and
+protect the tag from recreation. v0.5.1's code is on `main`; this cut re-tags it
+with the binary attached at publish.
+
+### Added
+- Prebuilt release binary for `aarch64-apple-darwin` (macOS arm64) attached to
+  the GitHub release, with a SHA-256 checksum. Cross-platform binaries remain a
+  v1.x item (see `docs/cross-platform-roadmap.md`).
+
 ## [0.5.1] — 2026-06-22
 
 Dogfood-driven hardening of log-source redaction defaults (found by exercising
