@@ -46,7 +46,7 @@ The gaze-lens v1 public surface is **locked**:
 - **CLI subcommands (6):** `serve`, `init`, `query`, `replay`, `check`, `demo`.
 
 Adding any MCP tool or CLI subcommand is a **SPEC-level change** — it requires a
-[SPEC.md](../SPEC.md) amendment PR, not an implementation PR. Several capabilities below
+[SPEC.md](../reference/spec.md) amendment PR, not an implementation PR. Several capabilities below
 are attractive but cross that line; they are explicitly flagged **SPEC-amendment** and
 gated on a maintainer decision. Internal helpers and richer metadata on *existing*
 responses are not SPEC changes; new agent-visible verbs are.
@@ -362,9 +362,9 @@ Three items cannot proceed on engineering judgment alone:
 
 ## References
 
-- [SPEC.md](../SPEC.md) — locked product surface, threat model, anti-features.
-- [CLAUDE.md](../CLAUDE.md) — non-negotiables (no raw SQL, chokepoint routing, snapshot
+- [SPEC.md](../reference/spec.md) — locked product surface, threat model, anti-features.
+- [CLAUDE.md](../../CLAUDE.md) — non-negotiables (no raw SQL, chokepoint routing, snapshot
   encryption assumption, SSH argv construction, `LensValue` decode-failure policy).
-- [docs/replay.md](./replay.md) — `replay` usage and snapshot operator controls (updated by T1/T3).
-- [docs/profiles.md](./profiles.md) — profile schema (touched by T2).
-- [CHANGELOG.md](../CHANGELOG.md) — current pin is `0.9.0-rc.1`; T0 moves it to `0.11.x`.
+- [replay how-to](../how-to/replay-a-session.md) — `replay` usage and snapshot operator controls (updated by T1/T3).
+- [profile schema](../reference/profile-schema.md) — profile schema (touched by T2).
+- [CHANGELOG.md](../../CHANGELOG.md) — current pin is `0.9.0-rc.1`; T0 moves it to `0.11.x`.

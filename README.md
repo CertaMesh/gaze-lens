@@ -6,140 +6,54 @@
 
 PII-safe read-access for live production investigation by AI agents.
 
-`gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.invalid`. The engineer can later replay the agent's session locally to see the original values.
+`gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.invalid` — while a local audit manifest records every retrieval. The engineer can later replay the agent's session locally to see the original values. Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine; part of the [EmpireTwo](https://github.com/EmpireTwo) `gaze-X` product family.
 
-Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine. Part of the [EmpireTwo](https://github.com/EmpireTwo) product family — every product in the family is named `gaze-X`.
+> **Status:** v0.5.1. The public surface is locked: **5 MCP tools** (`query`, `schema`, `list_tables`, `log_tail`, `log_grep`) and **6 CLI subcommands** (`serve`, `init`, `query`, `replay`, `check`, `demo`). Badges and links target the intended public GitHub location and may require repository access until visibility changes.
 
-> **Status:** v0.4.1 is the latest tagged release. The repository may still be private while public-readiness work is in flight; badges and links are written for the intended public GitHub location and may require repository access until visibility changes. The public surface remains locked: 5 MCP tools and 6 CLI subcommands. v0.4.1 uses `gaze-mcp-core::PiiEnvelope` as the internal MCP chokepoint and resolves the Gaze runtime from crates.io. See [SPEC.md](./SPEC.md) for the locked product spec, [ARCHITECTURE.md](./ARCHITECTURE.md) for the implementer spine, [CONTRIBUTING.md](./CONTRIBUTING.md) for dev workflow, and [SECURITY.md](./SECURITY.md) for vulnerability reporting.
+## Quick start
 
-## Why
-
-Today, when an engineer wants their AI agent to investigate prod, they have two bad options:
-
-1. Give the agent raw access — and leak names / emails / addresses to the model provider.
-2. Give the agent nothing — and waste an hour eyeballing psql while the incident burns.
-
-`gaze-lens` is the third option: **pseudonymized agent access with auditable, reversible token mapping**.
-
-## Install
-
-### Apple Silicon macOS quick install
-
-> Prebuilt binaries currently target Apple Silicon macOS (`aarch64-apple-darwin`). Other platforms should build from source until Linux and Windows have CI-backed release proof.
+Download the latest prebuilt Apple Silicon macOS binary and run the built-in demo — it tokenizes a small canned dataset and restores it inline in one process, writing nothing to `~/.gaze-lens/`:
 
 ```sh
-curl -L https://github.com/EmpireTwo/gaze-lens/releases/download/v0.4.1/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+curl -L https://github.com/EmpireTwo/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
 ./gaze-lens demo
 ```
 
-`gaze-lens demo` tokenizes a small canned dataset (3 emails, 2 phones, 1 SSN-shaped string) and inline-restores it in a single process — both sections print side by side. The demo writes nothing to `~/.gaze-lens/`; everything lives in a tempdir that is wiped on exit. No follow-up `gaze-lens replay <id>` is required.
+Not on Apple Silicon, or want the full first-query-and-replay loop? Start with the [getting-started tutorial](./docs/tutorials/getting-started.md), which also covers building from source.
 
-The v0.4.1 tarball above ships an Apple Silicon (`aarch64-apple-darwin`) binary.
+## Documentation
 
-### Prebuilt binaries
+The docs follow the [Diátaxis](https://diataxis.fr/) model. Start with the tutorial; reach for how-to guides when you have a task, reference when you need exact contracts, and explanation when you want the "why".
 
-Releases attach prebuilt tarballs to the [GitHub releases page](https://github.com/EmpireTwo/gaze-lens/releases). Near-term release automation intentionally builds only the Apple Silicon macOS archive. Intel macOS, Linux, and Windows remain source-build or future binary targets until the checks in [docs/cross-platform-roadmap.md](./docs/cross-platform-roadmap.md) pass in CI.
+### Tutorial — learn by doing
+- [Getting started](./docs/tutorials/getting-started.md) — install, run `demo`, then your first real redacted query and its replay (~10 min). **Start here.**
 
-### Building from source
+### How-to guides — task recipes
+- [Configure profiles](./docs/how-to/configure-profiles.md) — define a source, policy, and schema posture.
+- [Wire up MCP clients](./docs/how-to/wire-up-mcp-clients.md) — connect Claude Code, Codex, or Cursor.
+- [Search app logs over SSH](./docs/how-to/search-logs.md) — `log_tail` / `log_grep`, regex vs keyword mode.
+- [Replay a session](./docs/how-to/replay-a-session.md) — recover original values and tune snapshot retention.
+- [Set up production NER](./docs/how-to/set-up-production-NER.md) — the model-backed `production = true` profile tier.
 
-```sh
-git clone https://github.com/EmpireTwo/gaze-lens
-cd gaze-lens
-cargo build --release
-./target/release/gaze-lens demo
-```
+### Reference — exact contracts
+- [Product spec](./docs/reference/spec.md) — the locked v1 product contract, threat model, anti-features, roadmap.
+- [Architecture](./docs/reference/architecture.md) — implementer spine, core traits, session/manifest flow, locked design decisions.
+- [CLI](./docs/reference/cli.md) — every subcommand, flag, and exit behavior.
+- [MCP tools](./docs/reference/mcp-tools.md) — the 5 tools and their argument schemas.
+- [Profile schema](./docs/reference/profile-schema.md) — profile fields, project vs user precedence, schema policy.
+- [Policy schema](./docs/reference/policy-schema.md) — redaction policy TOML.
 
-The `gaze`, `gaze-recognizers`, and `gaze-mcp-core` crates are wired from crates.io. `gaze` aliases the published `gaze-pii` package so existing imports stay stable. See [CONTRIBUTING.md](./CONTRIBUTING.md#gaze-dependency-pin) for the pin policy and the local-checkout patch recipe.
+### Explanation — understand the design
+- [Pseudonymization and replay](./docs/explanation/pseudonymization-and-replay.md) — why tokens are reversible only locally.
+- [Threat model](./docs/explanation/threat-model.md) — what gaze-lens defends against, and the residual risks it does not.
+- [Cross-platform roadmap](./docs/explanation/cross-platform-roadmap.md) — why prebuilt binaries are Apple Silicon-only for now.
+- [Gaze 0.11 adoption](./docs/explanation/gaze-0.11-adoption.md) — the upstream fail-closed NER migration.
 
-`gaze-lens` builds with stable Rust 1.89+.
-
-On Linux, install the platform packages needed by the native keyring backend before building, for example `pkg-config` and `libdbus-1-dev` on Debian/Ubuntu.
-
-## New Project Onboarding
-
-After `gaze-lens demo` confirms the binary works, run guided init from the project you want your agent to investigate:
-
-```sh
-# 1. Create a profile and optional agent config.
-gaze-lens init --profile prod
-
-# 2. Validate profile parsing, policy, redaction, and source connectivity.
-gaze-lens check --profile prod
-
-# 3. Dry-run one human query through the same audit + redaction path as MCP.
-gaze-lens query --profile prod --table users --limit 5
-# Use compact JSON for scripts.
-gaze-lens query --profile prod --table users --limit 5 --format json
-
-# 4. Later, replay an agent session locally to restore original values.
-gaze-lens replay <session_ulid>
-```
-
-`init` is the preferred setup path. It prompts for source kind (`mysql`, `postgres`, `sqlite`, or `ssh-log`), connection details, where to write the profile, optional Claude Code `.mcp.json` setup, and whether to append an AGENTS.md primer. Codex and Cursor MCP config files are written only when supplied explicitly with repeatable `--client codex` or `--client cursor` flags. For Laravel-style SSH targets, it can inspect an explicit remote `.env` path and guide you toward a read-only credential instead of copying production app secrets blindly.
-
-By default, interactive init can write:
-
-- `.gaze-lens.toml` in the project or `~/.gaze-lens/profiles.toml` for user-level profiles.
-- `.mcp.json` for Claude Code, or `~/.codex/config.toml` / `.cursor/mcp.json` when `--client codex` or `--client cursor` is supplied.
-- An AGENTS.md snippet telling future agents to call the 5 locked MCP tools with a `profile` argument.
-
-`check` is the gate before giving an agent access. It validates the profile and source without writing a manifest row or snapshot. Add `--explain-risk` when you want a structured trust report for the profile.
-
-`gaze-lens` ships six CLI subcommands: `serve`, `init`, `query`, `replay`, `check`, `demo`. See [docs/profiles.md](./docs/profiles.md) for profile schema and [docs/replay.md](./docs/replay.md) for replay + snapshot handling.
-
-## Use it from your agent
-
-The primary surface is the MCP server (stdio). Prefer `gaze-lens init`; it can write the right MCP config for Claude Code, Codex, or Cursor.
-
-Manual MCP config is still small. Use one `gaze-lens` server entry:
-
-```jsonc
-{
-  "mcpServers": {
-    "gaze-lens": {
-      "command": "gaze-lens",
-      "args": ["serve"]
-    }
-  }
-}
-```
-
-The server loads configured profiles. `serve --profile prod` remains available as a one-profile restrict-list, and `serve --profile prod --profile staging` exposes only those profiles. Every MCP tool call must still pass `profile: "prod"` or another configured profile name.
-
-Example tool call:
-
-```json
-{"tool": "query", "args": {"profile": "prod", "table": "users", "limit": 5}}
-```
-
-The agent sees five tools and nothing else:
-
-| Tool | Purpose |
-|---|---|
-| `query` | Run a canned structured DB query (no raw SQL accepted). |
-| `schema` | Describe one raw configured table schema. |
-| `list_tables` | List table names, raw by default. |
-| `log_tail` | Tail a configured SSH log source. |
-| `log_grep` | Search a configured SSH log source. |
-
-Every tool result routes through `Session::dispatch_tool` before it leaves the process. Under the hood, `dispatch_tool` builds a `gaze_mcp_core::PiiEnvelope` whose sealed `ToolCtx` makes the redact→manifest→return ordering a compile-time invariant rather than a hand-rolled runtime guard. Tool args are tokenized through the Gaze path before the manifest is written, so the manifest never stores raw arguments. Schema/list output shows raw table and column names by default; set `schema_tokenize = true` in the profile when schema names themselves are sensitive. In tokenized mode, `schema_allowlist` is presentation-only: it keeps selected labels raw but does not grant query access, and canned queries still use raw configured table and column names. Restart or reload the MCP server after profile edits.
-
-## Threat model — short version
-
-`gaze-lens` defends against raw production data reaching the LLM, SQL string-injection, SSH command injection, operator-error retrieval bypass, and schema-name leak. It assumes the operator's laptop disk is encrypted (FileVault / LUKS), the DB user is read-only at the database side, SSH credentials are managed by the OS, and snapshot files are not auto-uploaded to cloud backups.
-
-Full threat model + locked anti-features in [SPEC.md §Threat model](./SPEC.md#threat-model).
-
-## Sources (v1)
-
-- **Database** — MySQL, Postgres, SQLite via sqlx. Read-only. Canned structured queries only — no raw SQL strings in v1.
-- **App logs** — file `tail` / `grep` over SSH. No server-side install required; gaze-lens shells out from the laptop.
-
-## Reference
-
-`reference/debug-proxy/` is the historical predecessor crate extracted from the Gaze monorepo. It is retained for archaeology only, excluded from the published package, and not part of the active public source or build.
+Contributors: see [CONTRIBUTING.md](./CONTRIBUTING.md) for the dev workflow, the crates.io Gaze dependency pin, the sqlx macro ban, and PR review routing.
 
 ## Security
+
+`gaze-lens` defends against raw production data reaching the LLM, SQL string-injection, SSH command injection, operator-error retrieval bypass, and schema-name leak. It assumes the operator's laptop disk is encrypted (FileVault / LUKS), the DB user is read-only at the database side, and snapshot files are not auto-uploaded to cloud backups. Full threat model and locked anti-features: [docs/reference/spec.md](./docs/reference/spec.md#threat-model) and [docs/explanation/threat-model.md](./docs/explanation/threat-model.md).
 
 Report suspected vulnerabilities privately; do not open public issues for security reports. See [SECURITY.md](./SECURITY.md).
 
