@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::LensError;
-use crate::session::{CleanOutput, Session, TruncatedAt};
+use crate::session::{CleanOutput, ResultSummary, Session, TruncatedAt};
 
 use super::{clean_output_response, invoke_session_tool, lens_error_to_tool_error, schema_for};
 
@@ -84,7 +84,7 @@ impl LogGrepTool {
     async fn invoke_keyword(&self, ctx: &ToolCtx<'_>) -> Result<ToolResponse, ToolError> {
         let request = keyword_request_from_args(ctx.redacted_args())?;
         let key = keyword_cache_key(ctx, &request);
-        let indexed = keyword_index_cache()
+        let lookup = keyword_index_cache()
             .get_or_fetch(key, request.refresh, || async {
                 let clean = self
                     .session
@@ -94,8 +94,15 @@ impl LogGrepTool {
                 redacted_keyword_window_from_clean(clean)
             })
             .await?;
-        filter_keyword_indexed_window(&indexed.window, &indexed.index, &request)
-            .and_then(clean_output_response)
+        let clean =
+            filter_keyword_indexed_window(&lookup.indexed.window, &lookup.indexed.index, &request)?;
+        if lookup.cache_hit {
+            self.session.record_core_summary(
+                ctx.call_id(),
+                keyword_core_summary(&lookup.indexed.window, &request),
+            );
+        }
+        clean_output_response(clean)
     }
 }
 
@@ -216,6 +223,12 @@ impl IndexedKeywordWindow {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct KeywordIndexLookup {
+    indexed: IndexedKeywordWindow,
+    cache_hit: bool,
+}
+
 #[derive(Debug, Clone)]
 struct CachedKeywordWindow {
     minted_at: Instant,
@@ -249,20 +262,26 @@ impl KeywordIndexCache {
         key: KeywordCacheKey,
         refresh: bool,
         fetch: F,
-    ) -> Result<IndexedKeywordWindow, ToolError>
+    ) -> Result<KeywordIndexLookup, ToolError>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<RedactedKeywordWindow, ToolError>>,
     {
         let now = (self.now)();
         if !refresh && let Some(indexed) = self.fresh(&key, now) {
-            return Ok(indexed);
+            return Ok(KeywordIndexLookup {
+                indexed,
+                cache_hit: true,
+            });
         }
 
         let window = fetch().await?;
         let indexed = IndexedKeywordWindow::new(window);
         self.store(key, indexed.clone(), (self.now)());
-        Ok(indexed)
+        Ok(KeywordIndexLookup {
+            indexed,
+            cache_hit: false,
+        })
     }
 
     fn fresh(&self, key: &KeywordCacheKey, now: Instant) -> Option<IndexedKeywordWindow> {
@@ -383,6 +402,55 @@ fn redacted_keyword_window_from_clean(
         metadata,
         truncated_at,
     })
+}
+
+fn keyword_core_summary(window: &RedactedKeywordWindow, request: &KeywordRequest) -> ResultSummary {
+    let text = render_keyword_core_window(window, request);
+    CleanOutput::Text {
+        text,
+        truncated_at: window.truncated_at.clone(),
+    }
+    .summary()
+}
+
+fn render_keyword_core_window(window: &RedactedKeywordWindow, request: &KeywordRequest) -> String {
+    let metadata = window
+        .metadata
+        .as_ref()
+        .map(|metadata| keyword_core_metadata(metadata, request).to_string());
+    let lines = window.lines.join("\n");
+    match (metadata, lines.is_empty()) {
+        (Some(metadata), false) => format!("{metadata}\n{lines}"),
+        (Some(metadata), true) => metadata,
+        (None, _) => lines,
+    }
+}
+
+fn keyword_core_metadata(
+    metadata: &serde_json::Value,
+    request: &KeywordRequest,
+) -> serde_json::Value {
+    let serde_json::Value::Object(existing) = metadata else {
+        return metadata.clone();
+    };
+    let mut metadata = existing.clone();
+    metadata.insert(
+        "pattern".to_string(),
+        serde_json::Value::String(request.pattern.clone()),
+    );
+    metadata.insert(
+        "level".to_string(),
+        request
+            .level
+            .clone()
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    metadata.insert(
+        "requested_limit".to_string(),
+        serde_json::json!(request.limit),
+    );
+    serde_json::Value::Object(metadata)
 }
 
 fn split_redacted_window_text(text: &str) -> (Option<serde_json::Value>, Vec<String>) {
@@ -927,6 +995,7 @@ mod tests {
             })
             .await
             .expect("first fetch");
+        assert!(!first.cache_hit);
         clock.advance(Duration::from_secs(1));
         let second = cache
             .get_or_fetch(key, false, {
@@ -940,7 +1009,8 @@ mod tests {
             .expect("cached fetch");
 
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
-        assert_eq!(second, first);
+        assert!(second.cache_hit);
+        assert_eq!(second.indexed, first.indexed);
     }
 
     #[tokio::test]
@@ -972,8 +1042,9 @@ mod tests {
             .expect("refresh fetch");
 
         assert_eq!(fetches.load(Ordering::SeqCst), 2);
+        assert!(!refreshed.cache_hit);
         assert_eq!(
-            refreshed.window.lines,
+            refreshed.indexed.window.lines,
             vec!["ERROR release_id=43301 refreshed"]
         );
     }
@@ -1008,7 +1079,11 @@ mod tests {
             .expect("stale fetch");
 
         assert_eq!(fetches.load(Ordering::SeqCst), 2);
-        assert_eq!(stale.window.lines, vec!["ERROR release_id=43301 stale"]);
+        assert!(!stale.cache_hit);
+        assert_eq!(
+            stale.indexed.window.lines,
+            vec!["ERROR release_id=43301 stale"]
+        );
     }
 
     fn redacted_window(lines: impl IntoIterator<Item = &'static str>) -> RedactedKeywordWindow {

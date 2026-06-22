@@ -493,12 +493,16 @@ impl Session {
         })
         .await
         .map_err(|_| operation_timeout("redaction", &call.tool_name, self.inner.caps.timeout))??;
+        self.record_core_summary(call_id, clean.summary());
+        Ok(clean)
+    }
+
+    pub(crate) fn record_core_summary(&self, call_id: ulid::Ulid, summary: ResultSummary) {
         self.inner
             .core_summaries
             .lock()
             .expect("core summary map lock")
-            .insert(call.call_id.clone(), clean.summary());
-        Ok(clean)
+            .insert(call_id.to_string(), summary);
     }
 
     pub fn register_source(&self, name: impl Into<String>, source: Arc<dyn Source>) {
