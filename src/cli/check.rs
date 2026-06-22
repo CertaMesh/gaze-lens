@@ -129,7 +129,7 @@ async fn run_with_writer(
     )
     .await
     {
-        render_source_error(stderr, &profile.name, &err)?;
+        render_source_error(stderr, &profile.name, &profile.source, &err)?;
         return Err(err);
     }
     writeln!(out, "source: ok").map_err(write_error)?;
@@ -203,16 +203,29 @@ fn render_secret_error(out: &mut dyn Write, err: &LensError) -> Result<(), LensE
 fn render_source_error(
     stderr: &mut dyn Write,
     profile_name: &str,
+    source: &SourceSpec,
     err: &LensError,
 ) -> Result<(), LensError> {
     if matches!(err, LensError::SourceError { .. }) {
+        let hint = source_error_hint(source);
         writeln!(
             stderr,
-            "source failed while connecting/querying profile `{profile_name}`. If the database host is private, configure source ssh_host/local_port or rerun `gaze-lens init` with tunnel settings."
+            "source failed while connecting/querying profile `{profile_name}`. {hint}"
         )
         .map_err(write_error)?;
     }
     Ok(())
+}
+
+fn source_error_hint(source: &SourceSpec) -> &'static str {
+    match source {
+        SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
+            "If the database host is private, configure source ssh_host/local_port or rerun `gaze-lens init` with tunnel settings."
+        }
+        SourceSpec::SshLog { .. } => {
+            "verify the SSH host is reachable (`ssh <host>`), the remote log path exists and is readable, and the host is defined in ~/.ssh/config; rerun `gaze-lens init` to reconfigure the log source."
+        }
+    }
 }
 
 struct ValidatedPolicy {
@@ -398,5 +411,24 @@ async fn validate_secret_for_check(
             },
             db_password: None,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_error_hint_for_ssh_log_is_log_specific() {
+        let hint = source_error_hint(&SourceSpec::SshLog {
+            host: "logs-prod".to_string(),
+            path: "/var/log/app.log".into(),
+        });
+
+        assert!(hint.contains("verify the SSH host is reachable"));
+        assert!(hint.contains("remote log path exists and is readable"));
+        assert!(hint.contains("~/.ssh/config"));
+        assert!(!hint.contains("database host is private"));
+        assert!(!hint.contains("source ssh_host/local_port"));
     }
 }
