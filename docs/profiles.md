@@ -38,6 +38,18 @@ user-file profile cannot silently downgrade a project's production mandate.
 Non-production profiles are unaffected — the mandate is opt-in. Mark prod-data
 profiles `production = true` to enforce it.
 
+For `ssh_log` profiles, prefer `mode: "keyword"` when running `log_grep` against
+sensitive or `production`-tier logs. The default `mode: "regex"` evaluates its
+match predicate over the **raw** log text while only the displayed lines are
+redacted, so a crafted regex can confirm the presence or absence of a raw PII
+substring (an email local-part, an account id) that never appears in the
+tokenized output — a one-bit-per-query oracle over raw data. No raw value is ever
+returned, and the searched window is still fully manifested, but the boolean
+match result leaks. `mode: "keyword"` runs its predicate over the same redacted
+text the agent sees and cannot probe raw values. This is a documented residual
+risk preserved for v0.4 compatibility; see [SPEC.md](../SPEC.md) §v1 sources →
+App logs.
+
 ```toml
 [[profiles]]
 name = "prod"

@@ -65,6 +65,14 @@ async fn run_with_writer(
 
     let validated_policy = validate_policy(&profile)?;
     write_status_line(json_mode, out, stderr, "policy: ok")?;
+    if should_warn_email_regex_only_redaction(&profile, &validated_policy.policy) {
+        write_status_line(
+            json_mode,
+            out,
+            stderr,
+            &email_regex_only_redaction_warning(&profile, &validated_policy.policy),
+        )?;
+    }
 
     if args.explain_risk {
         write_status_line(
@@ -129,7 +137,7 @@ async fn run_with_writer(
     )
     .await
     {
-        render_source_error(stderr, &profile.name, &err)?;
+        render_source_error(stderr, &profile.name, &profile.source, &err)?;
         return Err(err);
     }
     writeln!(out, "source: ok").map_err(write_error)?;
@@ -203,20 +211,34 @@ fn render_secret_error(out: &mut dyn Write, err: &LensError) -> Result<(), LensE
 fn render_source_error(
     stderr: &mut dyn Write,
     profile_name: &str,
+    source: &SourceSpec,
     err: &LensError,
 ) -> Result<(), LensError> {
     if matches!(err, LensError::SourceError { .. }) {
+        let hint = source_error_hint(source);
         writeln!(
             stderr,
-            "source failed while connecting/querying profile `{profile_name}`. If the database host is private, configure source ssh_host/local_port or rerun `gaze-lens init` with tunnel settings."
+            "source failed while connecting/querying profile `{profile_name}`. {hint}"
         )
         .map_err(write_error)?;
     }
     Ok(())
 }
 
+fn source_error_hint(source: &SourceSpec) -> &'static str {
+    match source {
+        SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
+            "If the database host is private, configure source ssh_host/local_port or rerun `gaze-lens init` with tunnel settings."
+        }
+        SourceSpec::SshLog { .. } => {
+            "verify the SSH host is reachable (`ssh <host>`), the remote log path exists and is readable, and the host is defined in ~/.ssh/config; rerun `gaze-lens init` to reconfigure the log source."
+        }
+    }
+}
+
 struct ValidatedPolicy {
     parsed: Option<ParsedPolicy>,
+    policy: PolicyFile,
     pipeline: gaze::Pipeline,
 }
 
@@ -245,6 +267,7 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
         })?;
         return Ok(ValidatedPolicy {
             parsed: None,
+            policy,
             pipeline,
         });
     };
@@ -282,8 +305,77 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
             raw_bytes,
             toml,
         }),
+        policy,
         pipeline,
     })
+}
+
+fn should_warn_email_regex_only_redaction(
+    profile: &crate::profile::Profile,
+    policy: &PolicyFile,
+) -> bool {
+    let has_column_rules = !policy.policy.database.column_rules.is_empty();
+    let has_ner = policy.ner.model_dir.is_some();
+    let has_log_strip_patterns = policy
+        .policy
+        .logs
+        .as_ref()
+        .is_some_and(|logs| !logs.strip_patterns.is_empty());
+
+    !(has_column_rules || has_ner || has_log_strip_patterns)
+        && matches!(
+            profile.source,
+            SourceSpec::Mysql { .. }
+                | SourceSpec::Postgres { .. }
+                | SourceSpec::Sqlite { .. }
+                | SourceSpec::SshLog { .. }
+        )
+}
+
+fn email_regex_only_redaction_warning(
+    profile: &crate::profile::Profile,
+    policy: &PolicyFile,
+) -> String {
+    let is_log_profile = matches!(profile.source, SourceSpec::SshLog { .. });
+    let high_risk = is_log_profile || profile.production;
+    let severity = if high_risk {
+        "CRITICAL WARNING"
+    } else {
+        "WARNING"
+    };
+    let context = match (is_log_profile, profile.production) {
+        (true, true) => " for this log production profile",
+        (true, false) => " for this log profile",
+        (false, true) => " for this production profile",
+        (false, false) => "",
+    };
+    let default_action = policy
+        .policy
+        .default_action
+        .as_deref()
+        .unwrap_or("preserve");
+    let detected_span_note = match default_action {
+        "preserve" => {
+            "Detected-span action gap: policy.default_action is preserve (the default), so even DETECTED spans, including emails, pass through RAW; set policy.default_action = \"tokenize\" or \"redact\" to fail closed on detected spans."
+        }
+        "tokenize" => {
+            "Detected-span action: policy.default_action = \"tokenize\", so detected spans are tokenized, but undetected PII (for example names without an NER model) still passes RAW."
+        }
+        "redact" => {
+            "Detected-span action: policy.default_action = \"redact\", so detected spans are redacted, but undetected PII (for example names without an NER model) still passes RAW."
+        }
+        other => {
+            return format!(
+                "{severity}: profile `{}` uses email-regex-only detection{context}. Detection gap: only email-shaped text is detected; person names and other PII are NOT detected without [ner].model_dir, [policy.database].columns rules, or policy.logs.strip_patterns, so they pass through RAW. Detected-span action: policy.default_action = \"{other}\", so detected spans no longer use the preserve default, but undetected PII (for example names without an NER model) still passes RAW.",
+                profile.name
+            );
+        }
+    };
+
+    format!(
+        "{severity}: profile `{}` uses email-regex-only detection{context}. Detection gap: only email-shaped text is detected; person names and other PII are NOT detected without [ner].model_dir, [policy.database].columns rules, or policy.logs.strip_patterns, so they pass through RAW. {detected_span_note}",
+        profile.name
+    )
 }
 
 fn default_manifest_path() -> std::path::PathBuf {
@@ -398,5 +490,55 @@ async fn validate_secret_for_check(
             },
             db_password: None,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn email_regex_only_warning_is_critical_for_production_profiles() {
+        let profile = crate::profile::Profile {
+            name: "prod".to_string(),
+            source: SourceSpec::Sqlite {
+                path: "fixture.sqlite".into(),
+                readonly_required: true,
+                json_text_columns: Vec::new(),
+            },
+            discovered_from_ssh_host: None,
+            discovered_from_path: None,
+            discovered_at: None,
+            discovered_ssh_host_key_fingerprint: None,
+            credential_class: None,
+            policy: None,
+            schema_tokenize: None,
+            schema_allowlist: None,
+            production: true,
+            snapshot_retention_days: None,
+            auto_purge: crate::session::maintenance::AutoPurge::Off,
+        };
+        let policy = PolicyFile::from_toml("[policy.database]\n").expect("policy");
+
+        let warning = email_regex_only_redaction_warning(&profile, &policy);
+
+        assert!(warning.starts_with("CRITICAL WARNING: profile `prod`"));
+        assert!(warning.contains("production profile"));
+        assert!(warning.contains("person names and other PII are NOT detected"));
+        assert!(warning.contains("even DETECTED spans, including emails, pass through RAW"));
+    }
+
+    #[test]
+    fn source_error_hint_for_ssh_log_is_log_specific() {
+        let hint = source_error_hint(&SourceSpec::SshLog {
+            host: "logs-prod".to_string(),
+            path: "/var/log/app.log".into(),
+        });
+
+        assert!(hint.contains("verify the SSH host is reachable"));
+        assert!(hint.contains("remote log path exists and is readable"));
+        assert!(hint.contains("~/.ssh/config"));
+        assert!(!hint.contains("database host is private"));
+        assert!(!hint.contains("source ssh_host/local_port"));
     }
 }

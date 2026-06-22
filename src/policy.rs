@@ -66,6 +66,10 @@ pub struct NerSection {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicySection {
+    /// Action for detected spans without a more-specific column/class rule.
+    /// Production-tier profiles should set this to `tokenize` or `redact`.
+    #[serde(default)]
+    pub default_action: Option<String>,
     pub database: DatabasePolicy,
     #[serde(default)]
     pub logs: Option<LogsPolicy>,
@@ -91,6 +95,8 @@ pub struct LogsPolicy {
     pub path: Option<PathBuf>,
     #[serde(default)]
     pub strip_patterns: Vec<String>,
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -209,9 +215,22 @@ pub fn build_pipeline(policy: &PolicyFile) -> Result<Pipeline, PolicyError> {
                 .map_err(|err| PolicyError::Recognizer(err.to_string()))?,
             );
         }
+        if !logs.strip_patterns.is_empty() {
+            let action = parse_log_strip_action(logs.action.as_deref())?;
+            builder = builder.rule(GazeClassRule::new(PiiClass::custom("log_strip"), action));
+        }
     }
 
-    Ok(builder.rule(DefaultRule::new(Action::Preserve)).build()?)
+    let default_action = parse_action(
+        policy
+            .policy
+            .default_action
+            .as_deref()
+            .unwrap_or("preserve"),
+        "policy.default_action",
+    )?;
+
+    Ok(builder.rule(DefaultRule::new(default_action)).build()?)
 }
 
 /// Enforce the production-profile NER mandate (#988).
@@ -253,6 +272,18 @@ fn parse_action(raw: &str, column: &str) -> Result<Action, PolicyError> {
     }
 }
 
+fn parse_log_strip_action(raw: Option<&str>) -> Result<Action, PolicyError> {
+    let raw = raw.unwrap_or("redact");
+    let action = parse_action(raw, "policy.logs.action")?;
+    match action {
+        Action::Redact | Action::Tokenize => Ok(action),
+        _ => Err(PolicyError::InvalidAction {
+            column: "policy.logs.action".to_string(),
+            action: raw.to_string(),
+        }),
+    }
+}
+
 fn parse_class(raw: &str, column: &str) -> Result<PiiClass, PolicyError> {
     Ok(match raw {
         "email" => PiiClass::Email,
@@ -281,6 +312,39 @@ mod tests {
         let mut policy = PolicyFile::from_toml("[policy.database]\n").expect("policy");
         policy.ner.model_dir = model_dir.map(std::path::PathBuf::from);
         policy
+    }
+
+    fn redact_policy_text(policy: &PolicyFile, text: &str) -> String {
+        let pipeline = build_pipeline(policy).expect("pipeline");
+        let session = gaze::Session::new(gaze::Scope::Conversation(ulid::Ulid::new().to_string()))
+            .expect("gaze session");
+        match pipeline
+            .redact(&session, gaze::RawDocument::Text(text.to_string()))
+            .expect("redact")
+        {
+            gaze::CleanDocument::Text(text) => text,
+            other => panic!("expected text output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_strip_patterns_remove_matching_text() {
+        let policy = PolicyFile::from_toml(
+            r#"
+            [policy.database]
+
+            [policy.logs]
+            strip_patterns = ["Bob Marley"]
+            "#,
+        )
+        .expect("policy");
+
+        let output = redact_policy_text(&policy, "INFO customer=Bob Marley login=ok");
+
+        assert!(
+            !output.contains("Bob Marley"),
+            "strip pattern survived redaction: {output}"
+        );
     }
 
     #[test]

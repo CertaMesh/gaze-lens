@@ -11,6 +11,9 @@ use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Mutex, OnceLock};
 
+const LOCAL_PRESERVE_WARNING: &str = "WARNING: profile `local` uses email-regex-only detection. Detection gap: only email-shaped text is detected; person names and other PII are NOT detected without [ner].model_dir, [policy.database].columns rules, or policy.logs.strip_patterns, so they pass through RAW. Detected-span action gap: policy.default_action is preserve (the default), so even DETECTED spans, including emails, pass through RAW; set policy.default_action = \"tokenize\" or \"redact\" to fail closed on detected spans.";
+const LOCAL_TOKENIZE_WARNING: &str = "WARNING: profile `local` uses email-regex-only detection. Detection gap: only email-shaped text is detected; person names and other PII are NOT detected without [ner].model_dir, [policy.database].columns rules, or policy.logs.strip_patterns, so they pass through RAW. Detected-span action: policy.default_action = \"tokenize\", so detected spans are tokenized, but undetected PII (for example names without an NER model) still passes RAW.";
+
 #[test]
 fn trust_report_json_shape_is_stable() {
     use gaze_lens::cli::check_trust::{REPORT_VERSION, TrustReport};
@@ -483,7 +486,226 @@ fn check_validates_ssh_log_by_reading_configured_path() {
 }
 
 #[test]
-fn check_without_explain_risk_unchanged_backward_compat() {
+fn check_warns_on_email_regex_only_log_profile() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "prod-log"
+            policy = "{}"
+            source = {{ kind = "ssh_log", host = "app-prod", path = "/var/log/app.log" }}
+            "#,
+            policy.display()
+        ),
+    )
+    .expect("profile");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "prod-log",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(
+        stdout.contains("CRITICAL WARNING: profile `prod-log` uses email-regex-only detection"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("person names and other PII are NOT detected"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("even DETECTED spans, including emails, pass through RAW"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("set policy.default_action = \"tokenize\" or \"redact\""),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn check_explain_risk_json_routes_email_regex_only_warning_to_stderr() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json stdout");
+    assert_eq!(v["report_version"], 1);
+    let stderr = stderr(&output);
+    assert!(stderr.contains(LOCAL_PRESERVE_WARNING), "{stderr}");
+    assert!(!stdout(&output).contains("WARNING"), "{}", stdout(&output));
+}
+
+#[test]
+fn check_does_not_warn_when_redaction_policy_is_configured() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(
+        &policy,
+        r#"
+        [policy.database]
+        [[policy.database.columns]]
+        column = "email"
+        class = "email"
+        action = "tokenize"
+        "#,
+    )
+    .expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("email-regex-only"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn check_does_not_warn_when_log_strip_patterns_are_configured() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    std::fs::write(
+        &policy,
+        r#"
+        [policy.database]
+
+        [policy.logs]
+        strip_patterns = ["customer=[^ ]+"]
+        "#,
+    )
+    .expect("policy");
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "prod-log"
+            policy = "{}"
+            source = {{ kind = "ssh_log", host = "app-prod", path = "/var/log/app.log" }}
+            "#,
+            policy.display()
+        ),
+    )
+    .expect("profile");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "prod-log",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("email-regex-only"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn check_warns_when_default_action_tokenizes_but_no_detection_coverage() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(
+        &policy,
+        r#"
+        [policy]
+        default_action = "tokenize"
+
+        [policy.database]
+        "#,
+    )
+    .expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.contains(LOCAL_TOKENIZE_WARNING), "{}", stdout);
+    assert!(
+        !stdout.contains("even DETECTED spans, including emails, pass through RAW"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("detected spans are tokenized"), "{stdout}");
+}
+
+#[test]
+fn check_without_explain_risk_warns_before_secret_and_source() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
     let project = temp.path().join("project.toml");
@@ -507,7 +729,9 @@ fn check_without_explain_risk_unchanged_backward_compat() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "profile: ok (local)\npolicy: ok\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
+        format!(
+            "profile: ok (local)\npolicy: ok\n{LOCAL_PRESERVE_WARNING}\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
+        )
     );
 }
 
@@ -536,9 +760,12 @@ fn check_explain_risk_text_appends_after_status_lines() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let stdout = stdout(&output);
-    assert!(stdout.starts_with(
-        "profile: ok (local)\npolicy: ok\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
-    ), "{stdout}");
+    assert!(
+        stdout.starts_with(&format!(
+            "profile: ok (local)\npolicy: ok\n{LOCAL_PRESERVE_WARNING}\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
+        )),
+        "{stdout}"
+    );
     assert!(stdout.contains("Input surface"), "{stdout}");
 }
 
