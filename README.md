@@ -23,7 +23,7 @@ Not on Apple Silicon, or want the full first-query-and-replay loop? Start with t
 
 ## Documentation
 
-The docs follow the [Diátaxis](https://diataxis.fr/) model. Start with the tutorial; reach for how-to guides when you have a task, reference when you need exact contracts, and explanation when you want the "why".
+The docs follow the [Diátaxis](https://diataxis.fr/) model — see the [docs hub](./docs/README.md) for the full map. Start with the tutorial; reach for how-to guides when you have a task, reference when you need exact contracts, and explanation when you want the "why".
 
 ### Tutorial — learn by doing
 - [Getting started](./docs/tutorials/getting-started.md) — install, run `demo`, then your first real redacted query and its replay (~10 min). **Start here.**
@@ -47,7 +47,6 @@ The docs follow the [Diátaxis](https://diataxis.fr/) model. Start with the tuto
 - [Pseudonymization and replay](./docs/explanation/pseudonymization-and-replay.md) — why tokens are reversible only locally.
 - [Threat model](./docs/explanation/threat-model.md) — what gaze-lens defends against, and the residual risks it does not.
 - [Cross-platform roadmap](./docs/explanation/cross-platform-roadmap.md) — why prebuilt binaries are Apple Silicon-only for now.
-- [Gaze 0.11 adoption](./docs/explanation/gaze-0.11-adoption.md) — the upstream fail-closed NER migration.
 
 Contributors: see [CONTRIBUTING.md](./CONTRIBUTING.md) for the dev workflow, the crates.io Gaze dependency pin, the sqlx macro ban, and PR review routing.
 
