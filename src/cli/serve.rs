@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use clap::{Arg, ArgAction, ArgMatches, Command, Error, FromArgMatches};
+use clap::Args;
 use serde::Serialize;
 
 use crate::errors::LensError;
@@ -22,78 +22,27 @@ use crate::source::log::SshLogSourceWrapper;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
 use crate::source::{DbSourceWrapper, SchemaPresentation, Source};
 
-const PRINT_DISCOVERY_SENTINEL: &str = "\0gaze-lens-print-discovery";
-
-#[derive(Debug)]
+#[derive(Debug, Args)]
 pub struct ServeArgs {
+    #[arg(long, value_name = "PROFILE")]
     pub profile: Vec<String>,
+    #[arg(
+        long,
+        env = "GAZE_LENS_MANIFEST",
+        default_value = "~/.gaze-lens/manifest.sqlite"
+    )]
     pub manifest: PathBuf,
+    #[arg(
+        long,
+        env = "GAZE_LENS_SNAPSHOT_DIR",
+        default_value = "~/.gaze-lens/snapshots"
+    )]
     pub snapshot_dir: PathBuf,
-}
-
-impl FromArgMatches for ServeArgs {
-    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
-        let mut profile = matches
-            .get_many::<String>("profile")
-            .map(|values| values.cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-        if matches.get_flag("print_discovery") {
-            profile.push(PRINT_DISCOVERY_SENTINEL.to_string());
-        }
-        let manifest = matches
-            .get_one::<PathBuf>("manifest")
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from("~/.gaze-lens/manifest.sqlite"));
-        let snapshot_dir = matches
-            .get_one::<PathBuf>("snapshot_dir")
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from("~/.gaze-lens/snapshots"));
-        Ok(Self {
-            profile,
-            manifest,
-            snapshot_dir,
-        })
-    }
-
-    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
-        *self = Self::from_arg_matches(matches)?;
-        Ok(())
-    }
-}
-
-impl clap::Args for ServeArgs {
-    fn augment_args(cmd: Command) -> Command {
-        cmd.arg(
-            Arg::new("profile")
-                .long("profile")
-                .value_name("PROFILE")
-                .action(ArgAction::Append),
-        )
-        .arg(
-            Arg::new("manifest")
-                .long("manifest")
-                .env("GAZE_LENS_MANIFEST")
-                .default_value("~/.gaze-lens/manifest.sqlite")
-                .value_parser(clap::value_parser!(PathBuf)),
-        )
-        .arg(
-            Arg::new("snapshot_dir")
-                .long("snapshot-dir")
-                .env("GAZE_LENS_SNAPSHOT_DIR")
-                .default_value("~/.gaze-lens/snapshots")
-                .value_parser(clap::value_parser!(PathBuf)),
-        )
-        .arg(
-            Arg::new("print_discovery")
-                .long("print-discovery")
-                .help("Print configured profile discovery inventory as JSON and exit without starting MCP")
-                .action(ArgAction::SetTrue),
-        )
-    }
-
-    fn augment_args_for_update(cmd: Command) -> Command {
-        Self::augment_args(cmd)
-    }
+    #[arg(
+        long,
+        help = "Print configured profile discovery inventory as JSON and exit without starting MCP"
+    )]
+    pub print_discovery: bool,
 }
 
 #[doc(hidden)]
@@ -451,17 +400,11 @@ fn presented_table_name(schema: &TableSchema) -> String {
 }
 
 fn print_discovery_requested(args: &ServeArgs) -> bool {
-    args.profile
-        .iter()
-        .any(|profile| profile == PRINT_DISCOVERY_SENTINEL)
+    args.print_discovery
 }
 
 fn selected_profile_names(args: &ServeArgs) -> Vec<String> {
-    args.profile
-        .iter()
-        .filter(|profile| profile.as_str() != PRINT_DISCOVERY_SENTINEL)
-        .cloned()
-        .collect()
+    args.profile.clone()
 }
 
 async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
