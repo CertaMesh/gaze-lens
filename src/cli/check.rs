@@ -70,7 +70,7 @@ async fn run_with_writer(
             json_mode,
             out,
             stderr,
-            &email_regex_only_redaction_warning(&profile),
+            &email_regex_only_redaction_warning(&profile, &validated_policy.policy),
         )?;
     }
 
@@ -321,17 +321,8 @@ fn should_warn_email_regex_only_redaction(
         .logs
         .as_ref()
         .is_some_and(|logs| !logs.strip_patterns.is_empty());
-    let default_action_preserves = policy
-        .policy
-        .default_action
-        .as_deref()
-        .unwrap_or("preserve")
-        == "preserve";
 
-    !has_column_rules
-        && !has_ner
-        && !has_log_strip_patterns
-        && default_action_preserves
+    !(has_column_rules || has_ner || has_log_strip_patterns)
         && matches!(
             profile.source,
             SourceSpec::Mysql { .. }
@@ -341,7 +332,10 @@ fn should_warn_email_regex_only_redaction(
         )
 }
 
-fn email_regex_only_redaction_warning(profile: &crate::profile::Profile) -> String {
+fn email_regex_only_redaction_warning(
+    profile: &crate::profile::Profile,
+    policy: &PolicyFile,
+) -> String {
     let is_log_profile = matches!(profile.source, SourceSpec::SshLog { .. });
     let high_risk = is_log_profile || profile.production;
     let severity = if high_risk {
@@ -355,9 +349,31 @@ fn email_regex_only_redaction_warning(profile: &crate::profile::Profile) -> Stri
         (false, true) => " for this production profile",
         (false, false) => "",
     };
+    let default_action = policy
+        .policy
+        .default_action
+        .as_deref()
+        .unwrap_or("preserve");
+    let detected_span_note = match default_action {
+        "preserve" => {
+            "Detected-span action gap: policy.default_action is preserve (the default), so even DETECTED spans, including emails, pass through RAW; set policy.default_action = \"tokenize\" or \"redact\" to fail closed on detected spans."
+        }
+        "tokenize" => {
+            "Detected-span action: policy.default_action = \"tokenize\", so detected spans are tokenized, but undetected PII (for example names without an NER model) still passes RAW."
+        }
+        "redact" => {
+            "Detected-span action: policy.default_action = \"redact\", so detected spans are redacted, but undetected PII (for example names without an NER model) still passes RAW."
+        }
+        other => {
+            return format!(
+                "{severity}: profile `{}` uses email-regex-only detection{context}. Detection gap: only email-shaped text is detected; person names and other PII are NOT detected without [ner].model_dir, [policy.database].columns rules, or policy.logs.strip_patterns, so they pass through RAW. Detected-span action: policy.default_action = \"{other}\", so detected spans no longer use the preserve default, but undetected PII (for example names without an NER model) still passes RAW.",
+                profile.name
+            );
+        }
+    };
 
     format!(
-        "{severity}: profile `{}` uses email-regex-only redaction{context}; PII (especially person names) will pass through RAW. Remedies: add [policy.database].columns rules, configure [ner].model_dir, add policy.logs.strip_patterns (for logs), or set policy.default_action = \"tokenize\" to enable deny-by-default.",
+        "{severity}: profile `{}` uses email-regex-only detection{context}. Detection gap: only email-shaped text is detected; person names and other PII are NOT detected without [ner].model_dir, [policy.database].columns rules, or policy.logs.strip_patterns, so they pass through RAW. {detected_span_note}",
         profile.name
     )
 }
@@ -502,12 +518,14 @@ mod tests {
             snapshot_retention_days: None,
             auto_purge: crate::session::maintenance::AutoPurge::Off,
         };
+        let policy = PolicyFile::from_toml("[policy.database]\n").expect("policy");
 
-        let warning = email_regex_only_redaction_warning(&profile);
+        let warning = email_regex_only_redaction_warning(&profile, &policy);
 
         assert!(warning.starts_with("CRITICAL WARNING: profile `prod`"));
         assert!(warning.contains("production profile"));
-        assert!(warning.contains("PII (especially person names) will pass through RAW"));
+        assert!(warning.contains("person names and other PII are NOT detected"));
+        assert!(warning.contains("even DETECTED spans, including emails, pass through RAW"));
     }
 
     #[test]
