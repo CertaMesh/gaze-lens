@@ -11,7 +11,7 @@ The product surface is exactly:
 - **5 MCP tools:** `query`, `schema`, `list_tables`, `log_tail`, `log_grep`.
 - **6 CLI subcommands:** `serve`, `init`, `query`, `replay`, `check`, `demo`.
 
-`demo` is a CLI-only inline-replay helper introduced in v0.2.0; it tokenizes a canned in-memory dataset and inline-restores it without persistent state. Adding a 7th subcommand or new MCP tool requires a SPEC amendment PR, not an impl PR. Internal helpers are fine; do not wire them through `frontend::mcp::McpFrontend` without updating [SPEC.md](./SPEC.md).
+`demo` is a CLI-only inline-replay helper introduced in v0.2.0; it tokenizes a canned in-memory dataset and inline-restores it without persistent state. Adding a 7th subcommand or new MCP tool requires a SPEC amendment PR, not an impl PR. Internal helpers are fine; do not wire them through `frontend::mcp::McpFrontend` without updating [SPEC.md](./docs/reference/spec.md).
 
 ## Non-negotiables
 
@@ -93,15 +93,15 @@ gaze-lens replay <session_ulid> → gaze::Session::import → original values
 
 **Manifest vs Gaze redaction log.** `gaze-lens` writes its own SQLite manifest at `~/.gaze-lens/manifest.sqlite`; this coexists with Gaze's metadata-only redaction log but is a separate data plane. Snapshot blobs are stored as out-of-row files referenced from the manifest (D9).
 
-For full architectural detail, file-by-file mining verdicts, and the 16 locked design decisions (D1-D16), read [ARCHITECTURE.md](./ARCHITECTURE.md) and the `Open decisions` reference in CONTRIBUTING.md.
+For full architectural detail, file-by-file mining verdicts, and the 16 locked design decisions (D1-D16), read [ARCHITECTURE.md](./docs/reference/architecture.md) and the `Open decisions` reference in CONTRIBUTING.md.
 
 ## Where to look first
 
-- [SPEC.md](./SPEC.md) — locked product spec, threat model, anti-features, v1.x / v2 roadmap.
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — implementer spine, core traits, session/manifest flow, file-by-file mining verdict.
+- [docs/reference/spec.md](./docs/reference/spec.md) — locked product spec, threat model, anti-features, v1.x / v2 roadmap.
+- [docs/reference/architecture.md](./docs/reference/architecture.md) — implementer spine, core traits, session/manifest flow, file-by-file mining verdict.
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — dev workflow, crates.io Gaze dependency pinning, sqlx ban, PR review routing, integration-test feature flags.
-- [docs/profiles.md](./docs/profiles.md) — profile schema, project vs user file precedence, schema policy.
-- [docs/replay.md](./docs/replay.md) — `replay` command usage and snapshot operator controls.
+- [docs/reference/profile-schema.md](./docs/reference/profile-schema.md) — profile schema, project vs user file precedence, schema policy.
+- [docs/how-to/replay-a-session.md](./docs/how-to/replay-a-session.md) — `replay` command usage and snapshot operator controls.
 
 ## Status
 

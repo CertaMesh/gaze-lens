@@ -72,7 +72,7 @@ Releases are tag-driven through [cargo-dist](https://opensource.axo.dev/cargo-di
 3. Create a matching SemVer tag, for example `git tag v0.1.1`.
 4. Push the tag with `git push origin v0.1.1`.
 
-The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured archives, generates installers, and uploads everything to the GitHub release for that tag. The near-term binary target is Apple Silicon macOS (`aarch64-apple-darwin`) only. Intel macOS, Linux, and Windows remain future binary targets until the cross-platform proof in [docs/cross-platform-roadmap.md](./docs/cross-platform-roadmap.md) passes in CI.
+The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured archives, generates installers, and uploads everything to the GitHub release for that tag. The near-term binary target is Apple Silicon macOS (`aarch64-apple-darwin`) only. Intel macOS, Linux, and Windows remain future binary targets until the cross-platform proof in [docs/explanation/cross-platform-roadmap.md](./docs/explanation/cross-platform-roadmap.md) passes in CI.
 
 The release workflow uses public crates.io Gaze packages. When changing the required Gaze revision, bump the dependency versions in `Cargo.toml`, refresh `Cargo.lock`, bump the package version, and call out the crates.io versions in the release PR description.
 
@@ -149,9 +149,9 @@ Plain conjunction. If the project file does not enable `auto_purge`, the user fi
 
 **Per-day friction-warning suppression.** When `auto_purge = false` and the sweep finds expired snapshots, gaze-lens emits a stderr listing of what would be purged. To avoid warning fatigue on one-shot `query` invocations, gaze-lens touches `~/.gaze-lens/.warned-YYYY-MM-DD-<profile>` on the first emission per day per profile and suppresses subsequent stderr text for the same day. A `tracing` debug event is still emitted on every sweep so operators can observe activity from logs. `auto_purge = true` info-level emissions are NOT suppressed (cheap and informational).
 
-**v0.1 posture preserved.** Profiles with neither field set produce zero sweep activity. CLI builders skip `ManifestMaintenance::open` entirely; no manifest IO, no FS scan, no warning text. v0.1.x manifests open under v0.2 binaries via the `user_version = 2 → 3` migration described in ARCHITECTURE.md §Manifest schema versioning.
+**v0.1 posture preserved.** Profiles with neither field set produce zero sweep activity. CLI builders skip `ManifestMaintenance::open` entirely; no manifest IO, no FS scan, no warning text. v0.1.x manifests open under v0.2 binaries via the `user_version = 2 → 3` migration described in docs/reference/architecture.md §Manifest schema versioning.
 
-See ARCHITECTURE.md §ManifestMaintenance for the implementation contract and SPEC.md §Snapshot retention (v0.2 opt-in) for the surface contract.
+See docs/reference/architecture.md §ManifestMaintenance for the implementation contract and docs/reference/spec.md §Snapshot retention (v0.2 opt-in) for the surface contract.
 
 ## rmcp version pin
 

@@ -47,7 +47,7 @@ SSH-log work, which is folded into this entry.
   distinguish database vs log profiles and their scope without triggering
   `ProfileUnknown` errors. SPEC-safe — no new MCP tool or subcommand. (#1490)
 - `replay` surfaces structured restore telemetry (success/partial/failed plus
-  restored-token counts). See [docs/replay.md](./docs/replay.md).
+  restored-token counts). See [docs/how-to/replay-a-session.md](./docs/how-to/replay-a-session.md).
 
 ### Changed
 - Bumped the Gaze runtime crates `0.9.0-rc.1` → `0.11` (`gaze-pii`,
@@ -88,7 +88,7 @@ SSH-log work, which is folded into this entry.
   of passing arbitrary person names — including names nested in JSON column
   values — through unredacted. Builds on the fail-closed NER behavior above. The
   flag is escalate-only across the project/user merge and opt-in (non-production
-  profiles are unchanged). See [docs/profiles.md](./docs/profiles.md). (#988)
+  profiles are unchanged). See [docs/reference/profile-schema.md](./docs/reference/profile-schema.md). (#988)
 - Bumped `astral-tokio-tar` `0.6.1` → `0.6.2` (GHSA-3cv2-h65g-fgmm; dev/
   docker-test dependency path, no runtime exposure). (#70)
 - Pinned third-party GitHub Actions to verified commit SHAs in CI. (#66)

@@ -25,7 +25,7 @@ For the exact, locked tool semantics, do not rely on this page — see the canon
    redacted:
 
    ```json
-   {"tool": "log_tail", "args": {"profile": "prod", "limit": 200}}
+   {"tool": "log_tail", "args": {"profile": "prod", "lines": 200}}
    ```
 
 2. **Search with a regex (default mode).** `log_grep` defaults to `mode: "regex"`,
