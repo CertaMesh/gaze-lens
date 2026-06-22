@@ -102,6 +102,9 @@ pub enum SourceSpec {
         host: String,
         path: String,
     },
+    LocalLog {
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -148,6 +151,11 @@ impl Profile {
             SourceSpec::SshLog { .. } => {
                 return Err(LensError::Profile {
                     detail: "ssh_log profiles do not have database passwords".to_string(),
+                });
+            }
+            SourceSpec::LocalLog { .. } => {
+                return Err(LensError::Profile {
+                    detail: "local_log profiles do not have database passwords".to_string(),
                 });
             }
         };
@@ -367,7 +375,9 @@ fn validate_post_merge(profiles: &[Profile]) -> Result<(), LensError> {
                 secret,
                 ..
             } => (password_env, secret),
-            SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } => continue,
+            SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
+                continue;
+            }
         };
         match (password_env.is_some(), secret.is_some()) {
             (true, true) => {
@@ -753,6 +763,16 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
                 user_host.clone()
             },
             path: if user_path.is_empty() {
+                project_path.clone()
+            } else {
+                user_path.clone()
+            },
+        },
+        (
+            SourceSpec::LocalLog { path: user_path },
+            SourceSpec::LocalLog { path: project_path },
+        ) => SourceSpec::LocalLog {
+            path: if user_path.as_os_str().is_empty() {
                 project_path.clone()
             } else {
                 user_path.clone()

@@ -172,7 +172,7 @@ fn register_lazy_source(session: &Arc<Session>, profile: Profile) {
                 }),
             );
         }
-        SourceSpec::SshLog { .. } => {
+        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
             session.register_source_lazy(
                 SourceClass::Log,
                 profile.name.clone(),
@@ -284,6 +284,9 @@ async fn discover_profile(profile: &Profile) -> Result<ProfileDiscovery, LensErr
             discover_database_profile(profile).await
         }
         SourceSpec::SshLog { host, path } => discover_log_profile(profile, host, path),
+        SourceSpec::LocalLog { path } => {
+            discover_log_profile(profile, "local", &path.to_string_lossy())
+        }
     }
 }
 
@@ -412,7 +415,7 @@ async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError>
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
             connect_db_source(&profile, default_db_limit_cap()).await?
         }
-        SourceSpec::SshLog { .. } => {
+        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
             return Err(LensError::Profile {
                 detail: format!("profile `{}` is not a database source", profile.name),
             });

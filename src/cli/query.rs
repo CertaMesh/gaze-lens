@@ -203,7 +203,7 @@ pub(crate) async fn build_db_session(
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
             connect_db_source(&profile, limit_cap).await?
         }
-        SourceSpec::SshLog { .. } => {
+        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
             return Err(LensError::Profile {
                 detail: format!("profile `{profile_name}` is not a database source"),
             });

@@ -287,6 +287,29 @@ fn ssh_log_profile_parses_host_and_exact_path() {
 }
 
 #[test]
+fn local_log_profile_parses_exact_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "dev-log"
+            source = { kind = "local_log", path = "/var/log/app.log" }
+        "#,
+    );
+
+    let profile = load_profile("dev-log", Some(&project), None).expect("profile");
+
+    match profile.source {
+        SourceSpec::LocalLog { path } => {
+            assert_eq!(path, std::path::PathBuf::from("/var/log/app.log"));
+        }
+        _ => panic!("expected local_log"),
+    }
+}
+
+#[test]
 fn postgres_profile_parses_database_connection_fields() {
     let temp = tempfile::tempdir().expect("tempdir");
     let project = temp.path().join("project.toml");
@@ -608,5 +631,37 @@ fn ssh_log_two_file_merge_user_transport_wins() {
             assert_eq!(path, "/var/log/user.log");
         }
         _ => panic!("expected ssh_log"),
+    }
+}
+
+#[test]
+fn local_log_two_file_merge_user_path_wins() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    let user = temp.path().join("user.toml");
+    write(
+        &project,
+        r#"
+            [[profiles]]
+            name = "dev-log"
+            source = { kind = "local_log", path = "/var/log/project.log" }
+        "#,
+    );
+    write(
+        &user,
+        r#"
+            [[profiles]]
+            name = "dev-log"
+            source = { kind = "local_log", path = "/var/log/user.log" }
+        "#,
+    );
+
+    let profile = load_profile("dev-log", Some(&project), Some(&user)).expect("profile");
+
+    match profile.source {
+        SourceSpec::LocalLog { path } => {
+            assert_eq!(path, std::path::PathBuf::from("/var/log/user.log"));
+        }
+        _ => panic!("expected local_log"),
     }
 }
