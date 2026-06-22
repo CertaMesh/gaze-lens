@@ -57,6 +57,7 @@ fn test_serve_parses_profile_and_paths() {
         panic!("expected serve command");
     };
     assert_eq!(args.profile, vec!["prod".to_string()]);
+    assert!(!args.print_discovery);
     assert_eq!(
         cli.project_config.as_deref(),
         Some(std::path::Path::new("project.toml"))
@@ -98,6 +99,7 @@ readonly_required = true
             profile: vec!["prod".to_string()],
             manifest: temp.path().join("manifest.sqlite"),
             snapshot_dir: temp.path().join("snapshots"),
+            print_discovery: false,
         },
         Some(&project_config),
         Some(&empty_user_config(&temp)),
@@ -395,6 +397,7 @@ fn serve_args(temp: &tempfile::TempDir, profiles: &[&str]) -> ServeArgs {
         profile: profiles.iter().map(|name| name.to_string()).collect(),
         manifest: temp.path().join("manifest.sqlite"),
         snapshot_dir: temp.path().join("snapshots"),
+        print_discovery: false,
     }
 }
 
