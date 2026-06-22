@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.5.1] — 2026-06-22
+
+Dogfood-driven hardening of log-source redaction defaults (found by exercising
+v0.5.0 against a real Laravel app).
+
+### Fixed
+- `policy.logs.strip_patterns` now actually redacts. Matched spans were
+  previously detected as a custom class but then preserved — the documented
+  log-scrub mechanism was a silent no-op. They are now redacted, with regression
+  coverage. (#1636)
+
+### Security
+- Closed a leak-by-omission footgun: a log profile with no redaction policy
+  beyond the email regex silently passed raw PII while `check` reported
+  `policy: ok`. `check` now warns on an email-regex-only redaction posture, and
+  profiles can opt in to a deny-by-default `DefaultRule` action. (#1637)
+- Documented the regex-`log_grep` raw-text presence-oracle as an in-scope
+  residual risk in `SPEC.md` and the `log_grep` tool description; `mode:
+  "keyword"` (predicate over redacted text) is recommended for sensitive /
+  `production`-tier logs. (#1638)
+
+### Changed
+- UX: `check` gives ssh_log profiles a log-appropriate source-error hint;
+  `init --non-interactive` names the missing required field; `log_grep` keyword
+  help documents the full `<hash:Name_N>` token requirement. (#1640)
+
 ## [0.5.0] — 2026-06-21
 
 First release on the Gaze `0.11` runtime. Supersedes the never-tagged `0.4.1`
