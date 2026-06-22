@@ -163,7 +163,10 @@ impl McpFrontend {
             .await
     }
 
-    #[tool(name = "log_grep", description = "Search a configured SSH log source.")]
+    #[tool(
+        name = "log_grep",
+        description = "Search a configured SSH log source. mode=regex (default) matches over RAW log text (only displayed lines are redacted), so a regex can act as a presence/absence oracle for raw PII; prefer mode=keyword (matches over redacted text) for sensitive or production logs."
+    )]
     async fn log_grep(
         &self,
         Parameters(args): Parameters<LogGrepArgs>,
