@@ -54,6 +54,7 @@ pub struct LogTailArgs {
     )]
     pub profile: String,
     #[serde(default)]
+    #[schemars(description = "Maximum number of trailing log lines to return. Defaults to 100.")]
     pub lines: Option<u32>,
 }
 
@@ -64,14 +65,27 @@ pub struct LogGrepArgs {
         regex(pattern = r"^[a-z0-9][a-z0-9_-]{0,63}$")
     )]
     pub profile: String,
+    #[schemars(
+        description = "Search expression. In regex mode (default), this is a Rust regex matched over RAW log text before displayed lines are redacted, so it can act as a raw-text presence/absence oracle. In keyword mode, this is split into literal terms and AND-matched over redacted log text; token queries must use the complete `<hash:Name_N>` token minted for the current session, because partial fragments such as `Email_1` intentionally return 0 hits."
+    )]
     pub pattern: String,
     #[serde(default)]
+    #[schemars(
+        description = "Optional log level filter passed to the configured log source, such as INFO, WARN, or ERROR."
+    )]
     pub level: Option<String>,
     #[serde(default)]
+    #[schemars(description = "Maximum number of matching log lines to return. Defaults to 100.")]
     pub limit: Option<u32>,
     #[serde(default)]
+    #[schemars(
+        description = "Search mode: `regex` (default) treats pattern as a Rust regex over RAW log text before displayed lines are redacted; `keyword` treats pattern as literal terms matched over redacted log text. In keyword mode, token searches require the complete `<hash:Name_N>` token."
+    )]
     pub mode: Option<String>,
     #[serde(default)]
+    #[schemars(
+        description = "When true in keyword mode, bypasses the short-lived redacted keyword-window cache and rebuilds it before filtering. Ignored by regex mode."
+    )]
     pub refresh: Option<bool>,
 }
 

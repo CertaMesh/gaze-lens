@@ -117,6 +117,69 @@ fn test_schema_tool_descriptions_explain_tokenized_presentation() {
     );
 }
 
+#[test]
+fn test_log_grep_served_schema_documents_keyword_token_pattern() {
+    let frontend = McpFrontend::new();
+    let tools = frontend.list_all_tools();
+    let log_grep = tools
+        .iter()
+        .find(|tool| tool.name == "log_grep")
+        .expect("log_grep tool");
+    let properties = log_grep
+        .input_schema
+        .as_ref()
+        .get("properties")
+        .and_then(|value| value.as_object())
+        .expect("log_grep properties");
+
+    let pattern_description = properties["pattern"]["description"]
+        .as_str()
+        .expect("pattern description");
+    assert!(pattern_description.contains("RAW log text"));
+    assert!(pattern_description.contains("presence/absence oracle"));
+    assert!(pattern_description.contains("keyword mode"));
+    assert!(pattern_description.contains("complete `<hash:Name_N>` token"));
+    assert!(pattern_description.contains("Email_1"));
+    assert!(pattern_description.contains("0 hits"));
+
+    let mode_description = properties["mode"]["description"]
+        .as_str()
+        .expect("mode description");
+    assert!(mode_description.contains("`regex` (default)"));
+    assert!(mode_description.contains("`keyword`"));
+    assert!(mode_description.contains("complete `<hash:Name_N>` token"));
+}
+
+#[test]
+fn test_frontend_served_schema_documents_every_local_argument_field() {
+    let frontend = McpFrontend::new();
+    let tools = frontend.list_all_tools();
+
+    for tool_name in ["schema", "list_tables", "log_tail", "log_grep"] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == tool_name)
+            .unwrap_or_else(|| panic!("missing tool {tool_name}"));
+        let properties = tool
+            .input_schema
+            .as_ref()
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .unwrap_or_else(|| panic!("missing properties for {tool_name}"));
+
+        for (field_name, field_schema) in properties {
+            let description = field_schema
+                .get("description")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            assert!(
+                !description.trim().is_empty(),
+                "{tool_name}.{field_name} missing description"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_log_tail_and_grep_dispatch_through_source() {
     let manifest = Arc::new(RecordingManifest::default());

@@ -25,7 +25,7 @@ pub struct LogGrepArgs {
     )]
     pub profile: String,
     #[schemars(
-        description = "Search expression. In regex mode (default), this is a Rust regex applied to the redacted log window. In keyword mode, this is split into literal terms and AND-matched; token queries must use the complete `<hash:Name_N>` token minted for the current session, because partial fragments such as `Email_1` intentionally return 0 hits."
+        description = "Search expression. In regex mode (default), this is a Rust regex matched over RAW log text before displayed lines are redacted, so it can act as a raw-text presence/absence oracle. In keyword mode, this is split into literal terms and AND-matched over redacted log text; token queries must use the complete `<hash:Name_N>` token minted for the current session, because partial fragments such as `Email_1` intentionally return 0 hits."
     )]
     pub pattern: String,
     #[serde(default)]
@@ -34,7 +34,7 @@ pub struct LogGrepArgs {
     pub limit: Option<u32>,
     #[serde(default)]
     #[schemars(
-        description = "Search mode: `regex` (default) treats pattern as a regular expression; `keyword` treats pattern as literal terms. In keyword mode, token searches require the complete `<hash:Name_N>` token."
+        description = "Search mode: `regex` (default) treats pattern as a Rust regex over RAW log text before displayed lines are redacted; `keyword` treats pattern as literal terms matched over redacted log text. In keyword mode, token searches require the complete `<hash:Name_N>` token."
     )]
     pub mode: Option<String>,
     #[serde(default)]
@@ -695,20 +695,6 @@ mod tests {
                     && message.contains("regex")
                     && message.contains("keyword")
         ));
-    }
-
-    #[test]
-    fn log_grep_schema_documents_keyword_token_pattern() {
-        let schema = schema_for::<LogGrepArgs>();
-        let pattern_description = schema
-            .pointer("/properties/pattern/description")
-            .and_then(serde_json::Value::as_str)
-            .expect("pattern description");
-
-        assert!(pattern_description.contains("keyword mode"));
-        assert!(pattern_description.contains("complete `<hash:Name_N>` token"));
-        assert!(pattern_description.contains("Email_1"));
-        assert!(pattern_description.contains("0 hits"));
     }
 
     #[test]
