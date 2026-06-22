@@ -1,5 +1,18 @@
 use gaze_lens::policy::{PolicyFile, build_pipeline};
 
+fn redact_policy_text(policy: &PolicyFile, text: &str) -> String {
+    let pipeline = build_pipeline(policy).expect("pipeline");
+    let session = gaze::Session::new(gaze::Scope::Conversation(ulid::Ulid::new().to_string()))
+        .expect("gaze session");
+    match pipeline
+        .redact(&session, gaze::RawDocument::Text(text.to_string()))
+        .expect("redact")
+    {
+        gaze::CleanDocument::Text(text) => text,
+        other => panic!("expected text output, got {other:?}"),
+    }
+}
+
 #[test]
 fn minimal_policy_toml_builds_pipeline_and_allows_non_production_profiles() {
     let policy = PolicyFile::from_toml(
@@ -22,6 +35,15 @@ fn minimal_policy_toml_builds_pipeline_and_allows_non_production_profiles() {
 
     assert_eq!(policy.connection.len(), 2);
     build_pipeline(&policy).expect("pipeline");
+}
+
+#[test]
+fn minimal_policy_preserves_detected_email_without_explicit_rule() {
+    let policy = PolicyFile::from_toml("[policy.database]\n").expect("policy");
+
+    let output = redact_policy_text(&policy, "email alice@example.invalid about the incident");
+
+    assert_eq!(output, "email alice@example.invalid about the incident");
 }
 
 fn policy_with_scope(scope: &str) -> PolicyFile {
