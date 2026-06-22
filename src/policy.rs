@@ -283,6 +283,39 @@ mod tests {
         policy
     }
 
+    fn redact_policy_text(policy: &PolicyFile, text: &str) -> String {
+        let pipeline = build_pipeline(policy).expect("pipeline");
+        let session = gaze::Session::new(gaze::Scope::Conversation(ulid::Ulid::new().to_string()))
+            .expect("gaze session");
+        match pipeline
+            .redact(&session, gaze::RawDocument::Text(text.to_string()))
+            .expect("redact")
+        {
+            gaze::CleanDocument::Text(text) => text,
+            other => panic!("expected text output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_strip_patterns_remove_matching_text() {
+        let policy = PolicyFile::from_toml(
+            r#"
+            [policy.database]
+
+            [policy.logs]
+            strip_patterns = ["Bob Marley"]
+            "#,
+        )
+        .expect("policy");
+
+        let output = redact_policy_text(&policy, "INFO customer=Bob Marley login=ok");
+
+        assert!(
+            !output.contains("Bob Marley"),
+            "strip pattern survived redaction: {output}"
+        );
+    }
+
     #[test]
     fn production_profile_without_ner_is_rejected() {
         let policy = policy_with_ner(None);
