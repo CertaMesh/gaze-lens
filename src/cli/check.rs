@@ -65,6 +65,14 @@ async fn run_with_writer(
 
     let validated_policy = validate_policy(&profile)?;
     write_status_line(json_mode, out, stderr, "policy: ok")?;
+    if should_warn_email_regex_only_redaction(&profile, &validated_policy.policy) {
+        write_status_line(
+            json_mode,
+            out,
+            stderr,
+            &email_regex_only_redaction_warning(&profile),
+        )?;
+    }
 
     if args.explain_risk {
         write_status_line(
@@ -230,6 +238,7 @@ fn source_error_hint(source: &SourceSpec) -> &'static str {
 
 struct ValidatedPolicy {
     parsed: Option<ParsedPolicy>,
+    policy: PolicyFile,
     pipeline: gaze::Pipeline,
 }
 
@@ -258,6 +267,7 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
         })?;
         return Ok(ValidatedPolicy {
             parsed: None,
+            policy,
             pipeline,
         });
     };
@@ -295,8 +305,61 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
             raw_bytes,
             toml,
         }),
+        policy,
         pipeline,
     })
+}
+
+fn should_warn_email_regex_only_redaction(
+    profile: &crate::profile::Profile,
+    policy: &PolicyFile,
+) -> bool {
+    let has_column_rules = !policy.policy.database.column_rules.is_empty();
+    let has_ner = policy.ner.model_dir.is_some();
+    let has_log_strip_patterns = policy
+        .policy
+        .logs
+        .as_ref()
+        .is_some_and(|logs| !logs.strip_patterns.is_empty());
+    let default_action_preserves = policy
+        .policy
+        .default_action
+        .as_deref()
+        .unwrap_or("preserve")
+        == "preserve";
+
+    !has_column_rules
+        && !has_ner
+        && !has_log_strip_patterns
+        && default_action_preserves
+        && matches!(
+            profile.source,
+            SourceSpec::Mysql { .. }
+                | SourceSpec::Postgres { .. }
+                | SourceSpec::Sqlite { .. }
+                | SourceSpec::SshLog { .. }
+        )
+}
+
+fn email_regex_only_redaction_warning(profile: &crate::profile::Profile) -> String {
+    let is_log_profile = matches!(profile.source, SourceSpec::SshLog { .. });
+    let high_risk = is_log_profile || profile.production;
+    let severity = if high_risk {
+        "CRITICAL WARNING"
+    } else {
+        "WARNING"
+    };
+    let context = match (is_log_profile, profile.production) {
+        (true, true) => " for this log production profile",
+        (true, false) => " for this log profile",
+        (false, true) => " for this production profile",
+        (false, false) => "",
+    };
+
+    format!(
+        "{severity}: profile `{}` uses email-regex-only redaction{context}; PII (especially person names) will pass through RAW. Remedies: add [policy.database].columns rules, configure [ner].model_dir, add policy.logs.strip_patterns (for logs), or set policy.default_action = \"tokenize\" to enable deny-by-default.",
+        profile.name
+    )
 }
 
 fn default_manifest_path() -> std::path::PathBuf {
@@ -417,6 +480,35 @@ async fn validate_secret_for_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn email_regex_only_warning_is_critical_for_production_profiles() {
+        let profile = crate::profile::Profile {
+            name: "prod".to_string(),
+            source: SourceSpec::Sqlite {
+                path: "fixture.sqlite".into(),
+                readonly_required: true,
+                json_text_columns: Vec::new(),
+            },
+            discovered_from_ssh_host: None,
+            discovered_from_path: None,
+            discovered_at: None,
+            discovered_ssh_host_key_fingerprint: None,
+            credential_class: None,
+            policy: None,
+            schema_tokenize: None,
+            schema_allowlist: None,
+            production: true,
+            snapshot_retention_days: None,
+            auto_purge: crate::session::maintenance::AutoPurge::Off,
+        };
+
+        let warning = email_regex_only_redaction_warning(&profile);
+
+        assert!(warning.starts_with("CRITICAL WARNING: profile `prod`"));
+        assert!(warning.contains("production profile"));
+        assert!(warning.contains("PII (especially person names) will pass through RAW"));
+    }
 
     #[test]
     fn source_error_hint_for_ssh_log_is_log_specific() {

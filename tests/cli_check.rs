@@ -483,7 +483,225 @@ fn check_validates_ssh_log_by_reading_configured_path() {
 }
 
 #[test]
-fn check_without_explain_risk_unchanged_backward_compat() {
+fn check_warns_on_email_regex_only_log_profile() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "prod-log"
+            policy = "{}"
+            source = {{ kind = "ssh_log", host = "app-prod", path = "/var/log/app.log" }}
+            "#,
+            policy.display()
+        ),
+    )
+    .expect("profile");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "prod-log",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(
+        stdout.contains("CRITICAL WARNING: profile `prod-log` uses email-regex-only redaction"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("PII (especially person names) will pass through RAW"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "add [policy.database].columns rules, configure [ner].model_dir, add policy.logs.strip_patterns (for logs), or set policy.default_action = \"tokenize\""
+        ),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn check_explain_risk_json_routes_email_regex_only_warning_to_stderr() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(&policy, "[policy.database]\n").expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json stdout");
+    assert_eq!(v["report_version"], 1);
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("WARNING: profile `local` uses email-regex-only redaction"),
+        "{stderr}"
+    );
+    assert!(!stdout(&output).contains("WARNING"), "{}", stdout(&output));
+}
+
+#[test]
+fn check_does_not_warn_when_redaction_policy_is_configured() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(
+        &policy,
+        r#"
+        [policy.database]
+        [[policy.database.columns]]
+        column = "email"
+        class = "email"
+        action = "tokenize"
+        "#,
+    )
+    .expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("email-regex-only"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn check_does_not_warn_when_log_strip_patterns_are_configured() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    std::fs::write(
+        &policy,
+        r#"
+        [policy.database]
+
+        [policy.logs]
+        strip_patterns = ["customer=[^ ]+"]
+        "#,
+    )
+    .expect("policy");
+    std::fs::write(
+        &project,
+        format!(
+            r#"
+            [[profiles]]
+            name = "prod-log"
+            policy = "{}"
+            source = {{ kind = "ssh_log", host = "app-prod", path = "/var/log/app.log" }}
+            "#,
+            policy.display()
+        ),
+    )
+    .expect("profile");
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "prod-log",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("email-regex-only"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn check_does_not_warn_when_default_action_tokenizes_detected_spans() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    let policy = temp.path().join("policy.toml");
+    seed_sqlite(&db);
+    std::fs::write(
+        &policy,
+        r#"
+        [policy]
+        default_action = "tokenize"
+
+        [policy.database]
+        "#,
+    )
+    .expect("policy");
+    write_profile(&project, &db, &policy);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "check",
+            "--profile",
+            "local",
+            "--explain-risk",
+        ])
+        .output()
+        .expect("check");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("email-regex-only"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn check_without_explain_risk_warns_before_secret_and_source() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
     let project = temp.path().join("project.toml");
@@ -507,7 +725,7 @@ fn check_without_explain_risk_unchanged_backward_compat() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "profile: ok (local)\npolicy: ok\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
+        "profile: ok (local)\npolicy: ok\nWARNING: profile `local` uses email-regex-only redaction; PII (especially person names) will pass through RAW. Remedies: add [policy.database].columns rules, configure [ner].model_dir, add policy.logs.strip_patterns (for logs), or set policy.default_action = \"tokenize\" to enable deny-by-default.\nsecret: ok (none not required)\nsource: ok\npipeline: ok\n"
     );
 }
 
@@ -537,7 +755,7 @@ fn check_explain_risk_text_appends_after_status_lines() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let stdout = stdout(&output);
     assert!(stdout.starts_with(
-        "profile: ok (local)\npolicy: ok\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
+        "profile: ok (local)\npolicy: ok\nWARNING: profile `local` uses email-regex-only redaction; PII (especially person names) will pass through RAW. Remedies: add [policy.database].columns rules, configure [ner].model_dir, add policy.logs.strip_patterns (for logs), or set policy.default_action = \"tokenize\" to enable deny-by-default.\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
     ), "{stdout}");
     assert!(stdout.contains("Input surface"), "{stdout}");
 }
