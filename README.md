@@ -1,12 +1,12 @@
 # gaze-lens
 
-[![CI](https://github.com/EmpireTwo/gaze-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/EmpireTwo/gaze-lens/actions/workflows/ci.yml)
-[![Release](https://github.com/EmpireTwo/gaze-lens/actions/workflows/release.yml/badge.svg)](https://github.com/EmpireTwo/gaze-lens/actions/workflows/release.yml)
+[![CI](https://github.com/CertaMesh/gaze-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/CertaMesh/gaze-lens/actions/workflows/ci.yml)
+[![Release](https://github.com/CertaMesh/gaze-lens/actions/workflows/release.yml/badge.svg)](https://github.com/CertaMesh/gaze-lens/actions/workflows/release.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 PII-safe read-access for live production investigation by AI agents.
 
-`gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.invalid` — while a local audit manifest records every retrieval. The engineer can later replay the agent's session locally to see the original values. Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine; part of the [EmpireTwo](https://github.com/EmpireTwo) `gaze-X` product family.
+`gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.invalid` — while a local audit manifest records every retrieval. The engineer can later replay the agent's session locally to see the original values. Built on the [Gaze](https://github.com/CertaMesh/gaze) pseudonymization engine; part of the [CertaMesh](https://github.com/CertaMesh) `gaze-X` product family.
 
 > **Status:** v0.5.x. The public surface is locked: **5 MCP tools** (`query`, `schema`, `list_tables`, `log_tail`, `log_grep`) and **6 CLI subcommands** (`serve`, `init`, `query`, `replay`, `check`, `demo`). Log profiles can read remote logs over SSH (`ssh_log`) or a local file path (`local_log`) through the same `log_tail` / `log_grep` tools. The Gaze runtime crates (`gaze-pii`, `gaze-recognizers`, `gaze-mcp-core`) resolve from crates.io at `0.11`.
 
@@ -15,7 +15,7 @@ PII-safe read-access for live production investigation by AI agents.
 Download the latest prebuilt Apple Silicon macOS binary and run the built-in demo — it tokenizes a small canned dataset and restores it inline in one process, writing nothing to `~/.gaze-lens/`:
 
 ```sh
-curl -L https://github.com/EmpireTwo/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
 ./gaze-lens demo
 ```
 

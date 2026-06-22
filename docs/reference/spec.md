@@ -1,9 +1,9 @@
 # gaze-lens — product spec v1
 
 > **Status:** locked 2026-04-26 via `/interview-me` + `/grill-me` sessions.
-> **Org:** [EmpireTwo](https://github.com/EmpireTwo)
+> **Org:** [CertaMesh](https://github.com/CertaMesh)
 > **Engine:** built on the Gaze pseudonymization runtime.
-> **Naming:** all EmpireTwo products carry the `gaze-` prefix. Decided 2026-04-26 with Markus. The original working name "Glance" was retired in favor of `gaze-lens` to fit the family convention.
+> **Naming:** all CertaMesh products carry the `gaze-` prefix. Decided 2026-04-26 with Markus. The original working name "Glance" was retired in favor of `gaze-lens` to fit the family convention.
 
 ## Problem
 
@@ -169,10 +169,10 @@ Shared snapshot_dir means the sweep affects all profiles' replay. Most-restricti
 
 ## Sibling products in the gaze-* family
 
-- **gaze** — open-source pseudonymization engine. The substrate `gaze-lens` and every other EmpireTwo product builds on.
+- **gaze** — open-source pseudonymization engine. The substrate `gaze-lens` and every other CertaMesh product builds on.
 - **gaze-laravel** — Laravel adapter for the Gaze engine. Already in development.
 - **`gaze-lens`** (this product) — laptop-side, agent reaches OUT to prod via SSH/DB.
-- **Future server-side companion (name TBD).** Installable on the prod box itself; inspects incoming SSH access to enable team-wide PII-safe access without each engineer running their own `gaze-lens`. Deferred: scoped + named in a separate session when ready. Likely repo `EmpireTwo/gaze-<X>`.
+- **Future server-side companion (name TBD).** Installable on the prod box itself; inspects incoming SSH access to enable team-wide PII-safe access without each engineer running their own `gaze-lens`. Deferred: scoped + named in a separate session when ready. Likely repo `CertaMesh/gaze-<X>`.
 
 ## Explicitly out of roadmap
 

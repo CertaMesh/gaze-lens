@@ -26,14 +26,14 @@ Apple Silicon is the current binary distribution target.
 
 ```sh
 version="0.4.1"
-curl -L "https://github.com/EmpireTwo/gaze-lens/releases/download/v${version}/gaze-lens-aarch64-apple-darwin.tar.xz" | tar -xJ
+curl -L "https://github.com/CertaMesh/gaze-lens/releases/download/v${version}/gaze-lens-aarch64-apple-darwin.tar.xz" | tar -xJ
 sudo mv gaze-lens-aarch64-apple-darwin/gaze-lens /usr/local/bin/gaze-lens
 ```
 
 Other platforms do not have published first-class binary artifacts yet. Build from source only if the user accepts that path:
 
 ```sh
-git clone https://github.com/EmpireTwo/gaze-lens.git
+git clone https://github.com/CertaMesh/gaze-lens.git
 cd gaze-lens
 cargo build --release --bin gaze-lens
 ```

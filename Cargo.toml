@@ -5,8 +5,8 @@ edition = "2024"
 rust-version = "1.89"
 license = "Apache-2.0"
 description = "PII-safe read-access for live production investigation by AI agents"
-repository = "https://github.com/EmpireTwo/gaze-lens"
-authors = ["EmpireTwo"]
+repository = "https://github.com/CertaMesh/gaze-lens"
+authors = ["CertaMesh"]
 include = [
     ".claude/rules/rust.md",
     ".claude/skills/gaze-lens-setup/SKILL.md",
