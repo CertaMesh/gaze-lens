@@ -51,7 +51,12 @@ impl LogGrepTool {
         Self {
             session,
             descriptor: ToolDescriptor::agent("log_grep", schema_for::<LogGrepArgs>())
-                .with_description("Search a configured SSH log source."),
+                .with_description(
+                    "Search a configured SSH log source. mode=regex (default) evaluates the \
+                     pattern over RAW log text (only displayed lines are redacted), so a regex \
+                     can act as a presence/absence oracle for raw PII; prefer mode=keyword \
+                     (matches over redacted text) for sensitive or production logs.",
+                ),
         }
     }
 }
