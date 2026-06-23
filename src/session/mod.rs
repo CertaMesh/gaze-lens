@@ -18,7 +18,7 @@ use crate::errors::LensError;
 use crate::manifest::gaze_mcp_adapter::GazeMcpManifestAdapter;
 use crate::mcp::auth::LensAuthHook;
 use crate::mcp::tools::list_tables::ListTablesTool;
-use crate::mcp::tools::log_grep::LogGrepTool;
+use crate::mcp::tools::log_grep::{LogGrepTool, RAW_LOG_GREP_PATTERN};
 use crate::mcp::tools::log_tail::LogTailTool;
 use crate::mcp::tools::query::QueryTool;
 use crate::mcp::tools::schema::SchemaTool;
@@ -415,12 +415,21 @@ impl Session {
             &[],
             &session_id_policy,
         );
-        let response = envelope
-            .dispatch(
-                &gaze_mcp_core::Principal::new("lens-agent"),
-                &call.tool_name,
-                call.args.0,
-                None,
+        let raw_log_grep_pattern = call
+            .args
+            .0
+            .get("pattern")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let response = RAW_LOG_GREP_PATTERN
+            .scope(
+                raw_log_grep_pattern,
+                envelope.dispatch(
+                    &gaze_mcp_core::Principal::new("lens-agent"),
+                    &call.tool_name,
+                    call.args.0,
+                    None,
+                ),
             )
             .await
             .map_err(dispatch_error_to_lens_error)?;

@@ -17,6 +17,10 @@ const KEYWORD_INDEX_CACHE_TTL: Duration = Duration::from_secs(3);
 
 static KEYWORD_INDEX_CACHE: OnceLock<KeywordIndexCache> = OnceLock::new();
 
+tokio::task_local! {
+    pub(crate) static RAW_LOG_GREP_PATTERN: Option<String>;
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct LogGrepArgs {
     #[schemars(
@@ -82,7 +86,19 @@ impl Tool for LogGrepTool {
 
 impl LogGrepTool {
     async fn invoke_keyword(&self, ctx: &ToolCtx<'_>) -> Result<ToolResponse, ToolError> {
-        let request = keyword_request_from_args(ctx.redacted_args())?;
+        let raw_pattern = RAW_LOG_GREP_PATTERN
+            .try_with(Clone::clone)
+            .map_err(|_| {
+                ToolError::internal(LensError::Internal {
+                    detail: "keyword log_grep raw pattern task-local was not scoped".to_string(),
+                })
+            })?
+            .ok_or_else(|| {
+                ToolError::internal(LensError::Internal {
+                    detail: "keyword log_grep raw pattern task-local was empty".to_string(),
+                })
+            })?;
+        let request = keyword_request_from_args(ctx.redacted_args(), raw_pattern)?;
         let key = keyword_cache_key(ctx, &request);
         let lookup = keyword_index_cache()
             .get_or_fetch(key, request.refresh, || async {
@@ -150,6 +166,7 @@ fn warn_if_production_regex_mode(profile: &str, production: bool, mode: LogGrepM
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct KeywordRequest {
     pattern: String,
+    match_pattern: String,
     level: Option<String>,
     limit: usize,
     refresh: bool,
@@ -301,9 +318,12 @@ impl KeywordIndexCache {
     }
 }
 
-fn keyword_request_from_args(args: &serde_json::Value) -> Result<KeywordRequest, ToolError> {
+fn keyword_request_from_args(
+    args: &serde_json::Value,
+    match_pattern: String,
+) -> Result<KeywordRequest, ToolError> {
     let pattern = string_arg(args, "pattern")?.to_string();
-    if keyword_query_terms(&pattern).is_empty() {
+    if keyword_query_terms(&match_pattern).is_empty() {
         return Err(ToolError::InvalidArgs(
             "keyword log_grep pattern must contain at least one term".to_string(),
         ));
@@ -316,6 +336,7 @@ fn keyword_request_from_args(args: &serde_json::Value) -> Result<KeywordRequest,
     let profile_key = profile_key_from_args(args).to_string();
     Ok(KeywordRequest {
         pattern,
+        match_pattern,
         level,
         limit,
         refresh,
@@ -337,7 +358,7 @@ fn filter_keyword_indexed_window(
     index: &KeywordIndex,
     request: &KeywordRequest,
 ) -> Result<CleanOutput, ToolError> {
-    let terms = keyword_query_terms(&request.pattern);
+    let terms = keyword_query_terms(&request.match_pattern);
     let level_re = request
         .level
         .as_ref()
@@ -819,21 +840,32 @@ mod tests {
             .expect("token search");
         assert_eq!(clean_text(token_match), "ERROR actor=<EMAIL:Addr_1> failed");
 
-        let raw_match = filter_keyword_window(&window, &keyword_request("alice@example.com", 10))
-            .expect("raw search");
+        let raw_match = filter_keyword_window(
+            &window,
+            &keyword_request_with_match_pattern("<EMAIL:Addr_1>", "alice@example.com", 10),
+        )
+        .expect("raw search");
         let raw_text = clean_text(raw_match);
         assert!(raw_text.contains(r#""status":"no_matches""#), "{raw_text}");
+        assert!(
+            raw_text.contains(r#""pattern":"<EMAIL:Addr_1>""#),
+            "{raw_text}"
+        );
+        assert!(!raw_text.contains("alice@example.com"), "{raw_text}");
         assert!(!raw_text.contains("actor=<EMAIL:Addr_1>"), "{raw_text}");
     }
 
     #[test]
     fn keyword_request_normalizes_empty_level_to_absent() {
-        let request = keyword_request_from_args(&json!({
-            "profile": "prod-logs",
-            "pattern": "43301",
-            "level": "",
-            "mode": "keyword"
-        }))
+        let request = keyword_request_from_args(
+            &json!({
+                "profile": "prod-logs",
+                "pattern": "43301",
+                "level": "",
+                "mode": "keyword"
+            }),
+            "43301".to_string(),
+        )
         .expect("keyword request");
 
         assert_eq!(request.level, None);
@@ -1095,8 +1127,17 @@ mod tests {
     }
 
     fn keyword_request(pattern: &str, limit: usize) -> KeywordRequest {
+        keyword_request_with_match_pattern(pattern, pattern, limit)
+    }
+
+    fn keyword_request_with_match_pattern(
+        pattern: &str,
+        match_pattern: &str,
+        limit: usize,
+    ) -> KeywordRequest {
         KeywordRequest {
             pattern: pattern.to_string(),
+            match_pattern: match_pattern.to_string(),
             level: None,
             limit,
             refresh: false,
