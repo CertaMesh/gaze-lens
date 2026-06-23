@@ -88,7 +88,7 @@ async fn local_log_tail_routes_through_redaction_and_manifest() {
 }
 
 #[tokio::test]
-async fn local_log_keyword_grep_matches_redacted_tokens_over_mcp() {
+async fn local_log_keyword_grep_rejects_raw_pii_but_matches_held_tokens_over_mcp() {
     let temp = tempfile::tempdir().expect("tempdir");
     let log_path = temp.path().join("app.log");
     tokio::fs::write(
@@ -157,6 +157,37 @@ async fn local_log_keyword_grep_matches_redacted_tokens_over_mcp() {
     assert!(!tail_text.contains("bob@example.com"), "{tail_text}");
     let token = first_gaze_token(&tail_text).to_string();
 
+    let raw_grep = client
+        .call_tool(CallToolRequestParam {
+            name: "log_grep".into(),
+            arguments: serde_json::json!({
+                "profile": "dev-log",
+                "pattern": "bob@example.com",
+                "mode": "keyword",
+                "limit": 5,
+                "refresh": true
+            })
+            .as_object()
+            .cloned(),
+        })
+        .await
+        .expect("log_grep raw keyword");
+    let raw_grep_text = tool_result_text(&raw_grep);
+    let raw_clean_text = clean_text_from_tool_json(&raw_grep_text);
+    let raw_metadata: serde_json::Value =
+        serde_json::from_str(raw_clean_text.lines().next().expect("raw metadata"))
+            .expect("raw metadata json");
+    assert_eq!(raw_metadata["status"], "no_matches", "{raw_grep_text}");
+    assert!(
+        !raw_grep_text.contains("bob@example.com"),
+        "{raw_grep_text}"
+    );
+    assert!(!raw_grep_text.contains("ERROR customer"), "{raw_grep_text}");
+    assert!(
+        !raw_grep_text.contains(&format!("ERROR customer {token} failed checkout")),
+        "{raw_grep_text}"
+    );
+
     let grep = client
         .call_tool(CallToolRequestParam {
             name: "log_grep".into(),
@@ -182,7 +213,7 @@ async fn local_log_keyword_grep_matches_redacted_tokens_over_mcp() {
     let call_count: u32 = connection
         .query_row("SELECT COUNT(*) FROM calls", [], |row| row.get(0))
         .expect("call count");
-    assert_eq!(call_count, 2);
+    assert_eq!(call_count, 3);
 
     client.cancel().await.expect("client cancel");
     server_handle.await.expect("server task");
@@ -303,6 +334,14 @@ fn clean_text(output: CleanOutput) -> String {
         panic!("expected text output");
     };
     text
+}
+
+fn clean_text_from_tool_json(text: &str) -> String {
+    let value: serde_json::Value = serde_json::from_str(text).expect("tool json");
+    value["clean"]["Text"]["text"]
+        .as_str()
+        .expect("tool clean text")
+        .to_string()
 }
 
 fn log_grep_summaries(manifest: &std::path::Path) -> Vec<serde_json::Value> {
