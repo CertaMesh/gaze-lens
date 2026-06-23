@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.5.3] — 2026-06-23
+
+Adopter-driven release: dogfood-found fixes, a no-SSH local log source, and a
+repo/docs cleanup. Includes two security-correctness fixes caught by the
+pre-release dogfood gate.
+
+### Added
+- `log_grep` schema served to MCP agents now carries `pattern`/`mode`/`refresh`
+  descriptions, including the `<hash:Name_N>` keyword-token guidance — agents can
+  see how keyword mode works without trial and error. (#1663)
+- New `kind = "local_log"` source: read a local log file directly (no SSH),
+  through the same redaction chokepoint as `ssh_log` (only redacted text at
+  rest). Removes the SSH round-trip for local/Herd debugging. (#1639)
+
+### Changed
+- `serve` now initializes an stderr tracing subscriber honoring `--log` /
+  `RUST_LOG` (stdout stays JSON-RPC). Previously `tracing` warnings — including
+  the production-regex caveat below — were silently dropped. (#1654)
+- `log_grep` keyword cache-HIT now records the core manifest summary, matching
+  cache-MISS audit completeness. (#1632)
+- Docs restructured around the four documentation modes with a `docs/` index;
+  internal/process docs removed from the public tree; org references updated
+  `EmpireTwo` → `CertaMesh`.
+
+### Security
+- **Closed a keyword-search presence oracle.** `log_grep mode: "keyword"` matched
+  the search term *after* redacting it, so a raw PII value was rewritten to its
+  session token and matched the redacted window by token-equality — letting an
+  agent confirm the presence of regex-detectable raw values. The keyword needle
+  is now matched **raw against the already-redacted window**, so a raw value
+  finds nothing while a held Gaze token still matches. `spec.md`'s "keyword
+  cannot probe raw values" guarantee now holds. (#104)
+- A `production = true` profile running regex-mode `log_grep` now emits a runtime
+  warning (the regex predicate runs over raw text — a raw-text presence oracle);
+  `mode: "keyword"` is recommended for production. The warning is now actually
+  emitted (see the `serve` subscriber change above). (#1654)
+- `auto_purge` spec documentation corrected to match the shipped 3-state enum
+  (`off`/`warn`/`purge`) with least-destructive merge. (#1665)
+
 ## [0.5.2] — 2026-06-22
 
 Re-release of v0.5.1 that carries the prebuilt binary asset. **No code changes
