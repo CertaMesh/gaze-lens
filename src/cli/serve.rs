@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use clap::Args;
 use serde::Serialize;
+use tracing_subscriber::EnvFilter;
 
 use crate::errors::LensError;
 use crate::frontend::mcp::McpFrontend;
@@ -44,6 +45,8 @@ pub struct ServeArgs {
         help = "Print configured profile discovery inventory as JSON and exit without starting MCP"
     )]
     pub print_discovery: bool,
+    #[arg(long, value_name = "FILTER")]
+    pub log: Option<String>,
 }
 
 #[doc(hidden)]
@@ -57,6 +60,7 @@ pub async fn run(
     project_config: Option<&Path>,
     user_config: Option<&Path>,
 ) -> Result<(), LensError> {
+    init_tracing(args.log.as_deref())?;
     if print_discovery_requested(&args) {
         return print_discovery_inventory(&args, project_config, user_config).await;
     }
@@ -68,6 +72,47 @@ pub async fn run(
         wait_for_shutdown_signal(),
     )
     .await
+}
+
+fn init_tracing(log: Option<&str>) -> Result<(), LensError> {
+    let filter = serve_log_filter(log)?;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
+    Ok(())
+}
+
+fn serve_log_filter(log: Option<&str>) -> Result<EnvFilter, LensError> {
+    let rust_log = rust_log_env()?;
+    build_serve_log_filter(log, rust_log.as_deref())
+}
+
+fn rust_log_env() -> Result<Option<String>, LensError> {
+    match std::env::var("RUST_LOG") {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(LensError::Profile {
+            detail: "RUST_LOG is not valid Unicode".to_string(),
+        }),
+    }
+}
+
+fn build_serve_log_filter(
+    explicit_log: Option<&str>,
+    rust_log: Option<&str>,
+) -> Result<EnvFilter, LensError> {
+    let (source, filter) = if let Some(filter) = explicit_log {
+        ("--log", filter)
+    } else if let Some(filter) = rust_log {
+        ("RUST_LOG", filter)
+    } else {
+        ("default", "info")
+    };
+    EnvFilter::try_new(filter).map_err(|err| LensError::Profile {
+        detail: format!("invalid {source} tracing filter `{filter}`: {err}"),
+    })
 }
 
 fn prepare_session(
@@ -612,4 +657,27 @@ fn expand_path(path: &Path) -> Result<PathBuf, LensError> {
         .map_err(|err| LensError::Profile {
             detail: err.to_string(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_serve_log_filter;
+
+    #[test]
+    fn serve_log_filter_prefers_explicit_log() {
+        let filter = build_serve_log_filter(Some("gaze_lens=debug"), Some("warn")).expect("filter");
+        assert_eq!(filter.to_string(), "gaze_lens=debug");
+    }
+
+    #[test]
+    fn serve_log_filter_uses_rust_log_when_log_absent() {
+        let filter = build_serve_log_filter(None, Some("warn")).expect("filter");
+        assert_eq!(filter.to_string(), "warn");
+    }
+
+    #[test]
+    fn serve_log_filter_defaults_to_info() {
+        let filter = build_serve_log_filter(None, None).expect("filter");
+        assert_eq!(filter.to_string(), "info");
+    }
 }
