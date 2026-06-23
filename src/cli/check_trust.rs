@@ -243,6 +243,7 @@ pub fn source_kind(source: &SourceSpec) -> &'static str {
         SourceSpec::Postgres { .. } => "postgres",
         SourceSpec::Sqlite { .. } => "sqlite",
         SourceSpec::SshLog { .. } => "ssh_log",
+        SourceSpec::LocalLog { .. } => "local_log",
     }
 }
 
@@ -288,6 +289,9 @@ pub fn source_transport(source: &SourceSpec) -> serde_json::Value {
             "host": host,
             "path": path,
         }),
+        SourceSpec::LocalLog { path } => serde_json::json!({
+            "path": path,
+        }),
     }
 }
 
@@ -320,10 +324,12 @@ pub fn secret_locator(source: &SourceSpec) -> SecretLocator {
                 identity: "invalid".to_string(),
             },
         },
-        SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } => SecretLocator {
-            backend: "none",
-            identity: "not required".to_string(),
-        },
+        SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
+            SecretLocator {
+                backend: "none",
+                identity: "not required".to_string(),
+            }
+        }
     }
 }
 
@@ -332,7 +338,10 @@ pub fn sqlite_json_text_policy(source: &SourceSpec) -> Option<Vec<String>> {
         SourceSpec::Sqlite {
             json_text_columns, ..
         } => Some(json_text_columns.clone()),
-        SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::SshLog { .. } => None,
+        SourceSpec::Mysql { .. }
+        | SourceSpec::Postgres { .. }
+        | SourceSpec::SshLog { .. }
+        | SourceSpec::LocalLog { .. } => None,
     }
 }
 

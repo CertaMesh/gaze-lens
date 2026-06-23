@@ -102,6 +102,70 @@ fn init_non_interactive_user_scope_writes_profile() {
 }
 
 #[test]
+fn init_non_interactive_local_log_requires_source_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let user = temp.path().join("u.toml");
+
+    let output = Command::cargo_bin("gaze-lens")
+        .expect("binary")
+        .args([
+            "--user-config",
+            user.to_str().expect("user path"),
+            "init",
+            "--non-interactive",
+            "--profile",
+            "local",
+            "--source-kind",
+            "local-log",
+            "--scope",
+            "user",
+            "--no-mcp-config",
+            "--no-agents-md",
+        ])
+        .output()
+        .expect("run init");
+
+    assert!(!output.status.success());
+    let stderr = stderr(&output);
+    assert!(stderr.contains("--source-kind local-log requires --source-path <log-path>"));
+    assert!(!user.exists());
+}
+
+#[test]
+fn init_non_interactive_user_scope_writes_local_log_profile() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let user = temp.path().join("u.toml");
+
+    let output = Command::cargo_bin("gaze-lens")
+        .expect("binary")
+        .args([
+            "--user-config",
+            user.to_str().expect("user path"),
+            "init",
+            "--non-interactive",
+            "--profile",
+            "local",
+            "--source-kind",
+            "local-log",
+            "--source-path",
+            "/tmp/app.log",
+            "--scope",
+            "user",
+            "--no-mcp-config",
+            "--no-agents-md",
+        ])
+        .output()
+        .expect("run init");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let toml = std::fs::read_to_string(&user).expect("profile");
+    assert!(toml.contains(r#"name = "local""#), "got: {toml}");
+    assert!(toml.contains(r#"kind = "local_log""#), "got: {toml}");
+    assert!(toml.contains(r#"path = "/tmp/app.log""#), "got: {toml}");
+    assert!(!toml.contains("host ="), "got: {toml}");
+}
+
+#[test]
 fn user_config_override_writes_exact_path() {
     // CB4: explicit --user-config path overrides ~/.gaze-lens/profiles.toml default.
     let dir = tempfile::tempdir().unwrap();

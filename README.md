@@ -1,21 +1,21 @@
 # gaze-lens
 
-[![CI](https://github.com/EmpireTwo/gaze-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/EmpireTwo/gaze-lens/actions/workflows/ci.yml)
-[![Release](https://github.com/EmpireTwo/gaze-lens/actions/workflows/release.yml/badge.svg)](https://github.com/EmpireTwo/gaze-lens/actions/workflows/release.yml)
+[![CI](https://github.com/CertaMesh/gaze-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/CertaMesh/gaze-lens/actions/workflows/ci.yml)
+[![Release](https://github.com/CertaMesh/gaze-lens/actions/workflows/release.yml/badge.svg)](https://github.com/CertaMesh/gaze-lens/actions/workflows/release.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 PII-safe read-access for live production investigation by AI agents.
 
-`gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.invalid` — while a local audit manifest records every retrieval. The engineer can later replay the agent's session locally to see the original values. Built on the [Gaze](https://github.com/EmpireTwo/gaze) pseudonymization engine; part of the [EmpireTwo](https://github.com/EmpireTwo) `gaze-X` product family.
+`gaze-lens` lets a developer point their LLM agent at a production database or app log during an incident and get back **pseudonymized** results — `<EMAIL_001>` instead of `alice@example.invalid` — while a local audit manifest records every retrieval. The engineer can later replay the agent's session locally to see the original values. Built on the [Gaze](https://github.com/CertaMesh/gaze) pseudonymization engine; part of the [CertaMesh](https://github.com/CertaMesh) `gaze-X` product family.
 
-> **Status:** v0.5.1. The public surface is locked: **5 MCP tools** (`query`, `schema`, `list_tables`, `log_tail`, `log_grep`) and **6 CLI subcommands** (`serve`, `init`, `query`, `replay`, `check`, `demo`). Badges and links target the intended public GitHub location and may require repository access until visibility changes.
+> **Status:** v0.5.x. The public surface is locked: **5 MCP tools** (`query`, `schema`, `list_tables`, `log_tail`, `log_grep`) and **6 CLI subcommands** (`serve`, `init`, `query`, `replay`, `check`, `demo`). Log profiles can read remote logs over SSH (`ssh_log`) or a local file path (`local_log`) through the same `log_tail` / `log_grep` tools. The Gaze runtime crates (`gaze-pii`, `gaze-recognizers`, `gaze-mcp-core`) resolve from crates.io at `0.11`.
 
 ## Quick start
 
 Download the latest prebuilt Apple Silicon macOS binary and run the built-in demo — it tokenizes a small canned dataset and restores it inline in one process, writing nothing to `~/.gaze-lens/`:
 
 ```sh
-curl -L https://github.com/EmpireTwo/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
 ./gaze-lens demo
 ```
 
@@ -23,19 +23,19 @@ Not on Apple Silicon, or want the full first-query-and-replay loop? Start with t
 
 ## Documentation
 
-The docs follow the [Diátaxis](https://diataxis.fr/) model — see the [docs hub](./docs/README.md) for the full map. Start with the tutorial; reach for how-to guides when you have a task, reference when you need exact contracts, and explanation when you want the "why".
+See the [docs hub](./docs/README.md) for the full map.
 
-### Tutorial — learn by doing
+### Tutorials
 - [Getting started](./docs/tutorials/getting-started.md) — install, run `demo`, then your first real redacted query and its replay (~10 min). **Start here.**
 
-### How-to guides — task recipes
+### How-to
 - [Configure profiles](./docs/how-to/configure-profiles.md) — define a source, policy, and schema posture.
 - [Wire up MCP clients](./docs/how-to/wire-up-mcp-clients.md) — connect Claude Code, Codex, or Cursor.
-- [Search app logs over SSH](./docs/how-to/search-logs.md) — `log_tail` / `log_grep`, regex vs keyword mode.
+- [Search app logs](./docs/how-to/search-logs.md) — local or SSH log profiles, `log_tail` / `log_grep`, regex vs keyword mode.
 - [Replay a session](./docs/how-to/replay-a-session.md) — recover original values and tune snapshot retention.
 - [Set up production NER](./docs/how-to/set-up-production-NER.md) — the model-backed `production = true` profile tier.
 
-### Reference — exact contracts
+### Reference
 - [Product spec](./docs/reference/spec.md) — the locked v1 product contract, threat model, anti-features, roadmap.
 - [Architecture](./docs/reference/architecture.md) — implementer spine, core traits, session/manifest flow, locked design decisions.
 - [CLI](./docs/reference/cli.md) — every subcommand, flag, and exit behavior.
@@ -43,7 +43,7 @@ The docs follow the [Diátaxis](https://diataxis.fr/) model — see the [docs hu
 - [Profile schema](./docs/reference/profile-schema.md) — profile fields, project vs user precedence, schema policy.
 - [Policy schema](./docs/reference/policy-schema.md) — redaction policy TOML.
 
-### Explanation — understand the design
+### Explanation
 - [Pseudonymization and replay](./docs/explanation/pseudonymization-and-replay.md) — why tokens are reversible only locally.
 - [Threat model](./docs/explanation/threat-model.md) — what gaze-lens defends against, and the residual risks it does not.
 - [Cross-platform roadmap](./docs/explanation/cross-platform-roadmap.md) — why prebuilt binaries are Apple Silicon-only for now.

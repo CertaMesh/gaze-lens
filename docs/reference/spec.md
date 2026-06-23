@@ -1,9 +1,9 @@
 # gaze-lens — product spec v1
 
 > **Status:** locked 2026-04-26 via `/interview-me` + `/grill-me` sessions.
-> **Org:** [EmpireTwo](https://github.com/EmpireTwo)
+> **Org:** [CertaMesh](https://github.com/CertaMesh)
 > **Engine:** built on the Gaze pseudonymization runtime.
-> **Naming:** all EmpireTwo products carry the `gaze-` prefix. Decided 2026-04-26 with Markus. The original working name "Glance" was retired in favor of `gaze-lens` to fit the family convention.
+> **Naming:** all CertaMesh products carry the `gaze-` prefix. Decided 2026-04-26 with Markus. The original working name "Glance" was retired in favor of `gaze-lens` to fit the family convention.
 
 ## Problem
 
@@ -75,7 +75,11 @@ A single `gaze-lens serve` process binds to one MCP entry per host and exposes a
 
    In `mode: "keyword"`, the existing `pattern` field is interpreted as whitespace-separated keyword terms, not as a regex. Matching is case-insensitive, ANDs across all terms, returns matching lines in original order, honors `limit`, and keeps whole Gaze tokens such as `<EMAIL:Addr_1>` searchable as single literal terms. Keyword terms are never restored to raw values; a token-shaped term matches only the redacted token text already present in the redacted log window. The keyword index is an in-memory v1 derived cache over redacted text only, scoped to the running process and bounded by a short TTL. `refresh: true` busts the keyword cache and re-tails the bounded SSH window instead of relying on fragile incremental offsets. The keyword-mode manifest intentionally audits the full redacted bounded window searched, which is a superset of the matched response, because audit records data accessed rather than only data returned. The snapshot created for a keyword window likewise covers the full bounded window's raw token-to-PII mappings, creating a larger at-rest footprint than regex mode; that footprint remains governed by the existing snapshot retention / `auto_purge` controls and the documented FileVault / LUKS disk-encryption threat model. A keyword cache hit reuses the prior fetch's snapshot and does not create a new snapshot for repeated queries within the TTL; `refresh: true` or TTL expiry forces a new bounded-window fetch and snapshot. If keyword indexes are ever persisted, they must live under `~/.gaze-lens/` as `0600` files inside a `0700` directory. Regex and keyword retrievals still route through the same chokepoint and manifest-first ordering: source output enters `Session::dispatch_tool` / `gaze_mcp_core::PiiEnvelope`, is redacted through `Pipeline::redact`, and is durably manifested before any agent-visible response is returned.
 
-   **Residual risk — regex `log_grep` is a raw-text presence oracle.** In `mode: "regex"` (default, byte-identical to v0.4), the match predicate is evaluated over the RAW log text while only the returned/displayed lines are redacted. An agent can therefore confirm the exact presence or absence of a raw PII substring that never appears in the tokenized display — e.g. an email local-part, or an account id — by crafting a regex and observing whether any line matches (and the reported match count). No raw value is ever returned, but the boolean match result is a one-bit-per-query oracle over raw data. This is intrinsic to predicate-on-raw / display-redacted semantics and is preserved deliberately for v0.4 compatibility; the searched bounded window is still fully manifested (audit records data accessed, not only data returned). `mode: "keyword"` is the safe alternative: its predicate runs over the SAME redacted text the agent sees, so it cannot probe raw values and a token-shaped term matches only the redacted token already present. Operators handling sensitive logs — and `production`-tier profiles in particular — SHOULD prefer `mode: "keyword"`; the `log_grep` tool description surfaces this caveat to agents. A runtime warning (or keyword-default) for `production` regex searches is a tracked v0.5.x follow-up, not a v1 surface change. This residual risk changes neither the locked 5-MCP-tool / 6-CLI-subcommand surface nor the chokepoint/manifest-first ordering.
+   **Residual risk — regex `log_grep` is a raw-text presence oracle.** In `mode: "regex"` (default, byte-identical to v0.4), the match predicate is evaluated over the RAW log text while only the returned/displayed lines are redacted. An agent can therefore confirm the exact presence or absence of a raw PII substring that never appears in the tokenized display — e.g. an email local-part, or an account id — by crafting a regex and observing whether any line matches (and the reported match count). No raw value is ever returned, but the boolean match result is a one-bit-per-query oracle over raw data. This is intrinsic to predicate-on-raw / display-redacted semantics and is preserved deliberately for v0.4 compatibility; the searched bounded window is still fully manifested (audit records data accessed, not only data returned). `mode: "keyword"` is the safe alternative: its predicate runs over the SAME redacted text the agent sees, so it cannot probe raw values and a token-shaped term matches only the redacted token already present. Operators handling sensitive logs — and `production`-tier profiles in particular — SHOULD prefer `mode: "keyword"`; the `log_grep` tool description surfaces this caveat to agents. For `production = true` profiles, regex searches emit a runtime warning recommending keyword mode, but the default remains `regex` for compatibility. This residual risk changes neither the locked 5-MCP-tool / 6-CLI-subcommand surface nor the chokepoint/manifest-first ordering.
+
+3. **Local app logs** (`kind = "local_log"`) — plain file tail / grep over a LOCAL filesystem path, no SSH. Reads the configured local file directly (`tokio::fs`) and applies the SAME line/byte caps, truncation, bounded grep window, redaction chokepoint, and manifest-first ordering as the `ssh_log` source; it differs only in transport (direct file read instead of `ssh -- <host> tail -- <path>`). It exists because every log source previously required SSH even for a log on the same machine (local Herd / Laravel dogfooding had to stand up a loopback sshd — pure friction). This is a new SOURCE KIND (a `Source` trait impl + a `SourceSpec::LocalLog` profile variant), NOT a new MCP tool or CLI subcommand: the locked surface remains exactly 5 MCP tools (`log_tail` / `log_grep` operate over it unchanged) and 6 CLI subcommands. There is no shell-string interpolation and no remote command — the file is opened read-only directly — so the SSH command-injection surface does not apply. Operators remain responsible for the local path pointing at the intended file (symlink / permission hygiene is the operator's, mirroring the ssh path-validation posture). The regex / keyword `mode` semantics and the regex raw-text presence-oracle residual risk (see App logs above) are identical to `ssh_log`.
+
+   **Threat model note.** Local file read introduces no new injection surface versus `ssh_log` because it does not construct a shell command or remote argv. The same caps, redaction chokepoint, manifest-first ordering, snapshot retention controls, and FileVault / LUKS disk-encryption assumptions apply.
 
 ## CLI subcommand surface
 
@@ -120,22 +124,22 @@ A new MCP tool or CLI subcommand for observability is not approved by this amend
 v0.2 introduces two profile fields governing snapshot lifecycle. Both are opt-in; v0.1 default-unlimited behavior is preserved when neither is set.
 
 - `snapshot_retention_days: Option<u32>` — when set, snapshots whose ULID-embedded creation timestamp is older than `retention_days * 86_400_000` ms are subject to a startup sweep. `None` (default) = unlimited; manifest remains the operator's audit log of record per D3.
-- `auto_purge: bool` — `false` (default) emits warn-only stderr listings of expired snapshots that would be purged. `true` performs a best-effort `remove_file` on each expired snapshot and writes a `purged_at_ms` tombstone on the corresponding `calls` row. The manifest row is preserved; only `snapshot_ref` is cleared. Replay of a tombstoned row produces a structured `LensError::SnapshotPurged` citing the policy — never a silent FS-only delete.
+- `auto_purge: AutoPurge` — a three-state string enum (`"off"` / `"warn"` / `"purge"`, default `"off"`) governing what the startup sweep does when it finds expired snapshots. `"off"` performs no sweep at all: no manifest open, no filesystem scan, no warning. `"warn"` runs a read-only scan and emits a per-day-suppressed stderr listing of the expired snapshots that *would* be purged (a `tracing` debug event fires on every sweep). `"purge"` performs a best-effort `remove_file` on each expired snapshot and writes a `purged_at_ms` tombstone on the corresponding `calls` row — the manifest row is preserved; only `snapshot_ref` is cleared — then emits a non-suppressed info-level count. Replay of a tombstoned row produces a structured `LensError::SnapshotPurged` citing the policy — never a silent FS-only delete.
 
-**Profile merge rule (destructive-default default-deny).** When merging a project profile file with a user profile file, the resolved `auto_purge` is
+**Profile merge rule (least-destructive default-deny).** When merging a project profile file with a user profile file, the resolved `auto_purge` is the **least-destructive** of the two values under the total ordering `off < warn < purge`:
 
 ```text
-merged_auto_purge = project.auto_purge && user.auto_purge
+merged_auto_purge = min(project.auto_purge, user.auto_purge)   // over off < warn < purge
 ```
 
-Plain conjunction. If the project file does not enable `auto_purge`, the user file cannot override to `true`. If the project file enables `auto_purge`, the user file may downgrade to warn-only by setting `auto_purge = false`. Consent for a destructive operational policy must be expressed at the team-shared (project) layer.
+The project file sets the ceiling; the user file may opt **down** to a less destructive mode but can never escalate above what the project authorizes. The merge can never silently raise the policy to a more destructive mode than the project opted into. A profile defined **only** in the user file is forced to `off` regardless of any value set there — consent for a destructive operational policy must be expressed at the team-shared (project) layer.
 
-`snapshot_retention_days` itself merges by user-overrides-project (standard merge); the destructive-conjunction rule applies only to `auto_purge`.
+`snapshot_retention_days` itself merges by user-overrides-project (standard merge); the least-destructive `min` rule applies only to `auto_purge`.
 
 **Multi-profile process retention bound.** When `gaze-lens serve` loads multiple profiles, snapshot retention is bound by the most-restrictive policy across loaded profiles, computed in addition to the per-profile project×user merge:
 
 - `snapshot_retention_days = min(days)` over the loaded set; `None` is treated as +∞.
-- `auto_purge` is a plain conjunction across loaded profiles; if any loaded profile resolves `auto_purge = false`, the process runs warn-only.
+- `auto_purge` is the least-destructive value across loaded profiles (`min` over `off < warn < purge`); the process runs at the policy of the loaded profile that authorizes the least destruction.
 
 Shared snapshot_dir means the sweep affects all profiles' replay. Most-restrictive merge is the only safe boundary — never escalate destructiveness silently.
 
@@ -165,10 +169,10 @@ Shared snapshot_dir means the sweep affects all profiles' replay. Most-restricti
 
 ## Sibling products in the gaze-* family
 
-- **gaze** — open-source pseudonymization engine. The substrate `gaze-lens` and every other EmpireTwo product builds on.
+- **gaze** — open-source pseudonymization engine. The substrate `gaze-lens` and every other CertaMesh product builds on.
 - **gaze-laravel** — Laravel adapter for the Gaze engine. Already in development.
 - **`gaze-lens`** (this product) — laptop-side, agent reaches OUT to prod via SSH/DB.
-- **Future server-side companion (name TBD).** Installable on the prod box itself; inspects incoming SSH access to enable team-wide PII-safe access without each engineer running their own `gaze-lens`. Deferred: scoped + named in a separate session when ready. Likely repo `EmpireTwo/gaze-<X>`.
+- **Future server-side companion (name TBD).** Installable on the prod box itself; inspects incoming SSH access to enable team-wide PII-safe access without each engineer running their own `gaze-lens`. Deferred: scoped + named in a separate session when ready. Likely repo `CertaMesh/gaze-<X>`.
 
 ## Explicitly out of roadmap
 

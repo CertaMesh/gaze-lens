@@ -120,39 +120,41 @@ Names are raw by default; `schema_tokenize`/`schema_allowlist` apply the same pr
 
 ## `log_tail`
 
-Tail a configured SSH log source. Class: `log`.
+Tail a configured log source. Class: `log`. Works with both `ssh_log` and `local_log` profiles.
 
 ### Arguments (`LogTailArgs`)
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `profile` | string | yes | Configured `ssh_log` profile name. |
+| `profile` | string | yes | Configured log profile name (`ssh_log` or `local_log`). |
 | `lines` | u32 | no | Number of trailing lines to fetch. |
 
 ### Behavior
 
-`gaze-lens` shells out from the laptop using the fixed `ssh -- <host> tail -n <N> -- <quoted_path>` form with validated host arguments (no shell-string interpolation; `-`-prefixed hosts rejected). Output is redacted per Gaze policy before return.
+For `ssh_log`, `gaze-lens` shells out from the laptop using the fixed `ssh -- <host> tail -n <N> -- <quoted_path>` form with validated host arguments (no shell-string interpolation; `-`-prefixed hosts rejected). For `local_log`, it opens the configured local file path read-only and does not construct a shell command. Both sources route output through the same redaction, manifest, line-cap, and truncation path before return.
 
 ---
 
 ## `log_grep`
 
-Search a configured SSH log source. Class: `log`.
+Search a configured log source. Class: `log`. Works with both `ssh_log` and `local_log` profiles.
 
 ### Arguments (`LogGrepArgs`)
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `profile` | string | yes | — | Configured `ssh_log` profile name. |
-| `pattern` | string | yes | — | Search expression. In `regex` mode, a Rust regex applied to the log window. In `keyword` mode, split into literal terms and AND-matched. |
+| `profile` | string | yes | — | Configured log profile name (`ssh_log` or `local_log`). |
+| `pattern` | string | yes | — | Search expression. In `regex` mode, a Rust regex matched over raw log text before displayed lines are redacted. In `keyword` mode, whitespace-separated literal terms AND-matched over redacted text; token queries require the complete `<hash:Name_N>` token, and partial fragments return 0 hits. |
 | `level` | string | no | (none) | Optional log-level filter. |
 | `limit` | u32 | no | (none) | Cap on returned matching lines. |
 | `mode` | string | no | `regex` | `regex` or `keyword`. Unknown modes fail closed as invalid args. |
-| `refresh` | bool | no | `false` | `true` busts the keyword cache and re-tails the bounded SSH window. |
+| `refresh` | bool | no | `false` | `true` busts the keyword cache and re-reads the bounded log window. Ignored by `regex` mode. |
 
 ### `regex` mode (default)
 
 Byte-identical to v0.4. The match predicate runs over the **raw** log text while only displayed lines are redacted. No raw value is ever returned, but the boolean match result is a **one-bit-per-query oracle** over raw data (an agent can confirm presence/absence of a raw substring by crafting a regex). The searched bounded window is fully manifested (audit records data accessed, not only data returned). This residual risk is preserved deliberately for v0.4 compatibility.
+
+For profiles marked `production = true`, a regex `log_grep` emits a runtime warning recommending `mode: "keyword"`. The default still remains `regex` for compatibility.
 
 ### `keyword` mode
 
@@ -160,7 +162,7 @@ The `pattern` is interpreted as whitespace-separated keyword terms. Matching is 
 
 The keyword index is an in-memory derived cache over redacted text only, scoped to the process and bounded by a short TTL. A cache hit reuses the prior fetch's snapshot; `refresh: true` or TTL expiry forces a new bounded-window fetch and snapshot. The keyword-mode manifest and snapshot intentionally cover the full redacted bounded window searched (a superset of the matched response), governed by the existing snapshot retention / `auto_purge` controls.
 
-Prefer `keyword` mode for sensitive or `production`-tier logs. The tool description surfaces this caveat to agents. See [search-logs.md](../how-to/search-logs.md) and [threat-model.md](../explanation/threat-model.md).
+Prefer `keyword` mode for sensitive or `production`-tier logs. The served MCP schema and tool description surface this caveat to agents, including the complete-token requirement for keyword token searches. See [search-logs.md](../how-to/search-logs.md) and [threat-model.md](../explanation/threat-model.md).
 
 ---
 

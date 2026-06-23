@@ -42,7 +42,7 @@ impl DiscoveredDbMeta {
         self.port.or(match kind {
             SourceKind::Mysql => Some(3306),
             SourceKind::Postgres => Some(5432),
-            SourceKind::Sqlite | SourceKind::SshLog => None,
+            SourceKind::Sqlite | SourceKind::SshLog | SourceKind::LocalLog => None,
         })
     }
 }

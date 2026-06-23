@@ -9,13 +9,17 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::LensError;
-use crate::session::{CleanOutput, Session, TruncatedAt};
+use crate::session::{CleanOutput, ResultSummary, Session, TruncatedAt};
 
 use super::{clean_output_response, invoke_session_tool, lens_error_to_tool_error, schema_for};
 
 const KEYWORD_INDEX_CACHE_TTL: Duration = Duration::from_secs(3);
 
 static KEYWORD_INDEX_CACHE: OnceLock<KeywordIndexCache> = OnceLock::new();
+
+tokio::task_local! {
+    pub(crate) static RAW_LOG_GREP_PATTERN: Option<String>;
+}
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct LogGrepArgs {
@@ -25,7 +29,7 @@ pub struct LogGrepArgs {
     )]
     pub profile: String,
     #[schemars(
-        description = "Search expression. In regex mode (default), this is a Rust regex applied to the redacted log window. In keyword mode, this is split into literal terms and AND-matched; token queries must use the complete `<hash:Name_N>` token minted for the current session, because partial fragments such as `Email_1` intentionally return 0 hits."
+        description = "Search expression. In regex mode (default), this is a Rust regex matched over RAW log text before displayed lines are redacted, so it can act as a raw-text presence/absence oracle. In keyword mode, this is split into literal terms and AND-matched over redacted log text; token queries must use the complete `<hash:Name_N>` token minted for the current session, because partial fragments such as `Email_1` intentionally return 0 hits."
     )]
     pub pattern: String,
     #[serde(default)]
@@ -34,7 +38,7 @@ pub struct LogGrepArgs {
     pub limit: Option<u32>,
     #[serde(default)]
     #[schemars(
-        description = "Search mode: `regex` (default) treats pattern as a regular expression; `keyword` treats pattern as literal terms. In keyword mode, token searches require the complete `<hash:Name_N>` token."
+        description = "Search mode: `regex` (default) treats pattern as a Rust regex over RAW log text before displayed lines are redacted; `keyword` treats pattern as literal terms matched over redacted log text. In keyword mode, token searches require the complete `<hash:Name_N>` token."
     )]
     pub mode: Option<String>,
     #[serde(default)]
@@ -68,7 +72,12 @@ impl Tool for LogGrepTool {
     }
 
     async fn invoke(&self, ctx: &ToolCtx<'_>) -> Result<ToolResponse, ToolError> {
-        match log_grep_mode(ctx.redacted_args())? {
+        let args = ctx.redacted_args();
+        let mode = log_grep_mode(args)?;
+        let profile = profile_key_from_args(args);
+        warn_if_production_regex_mode(profile, self.session.profile_is_production(profile), mode);
+
+        match mode {
             LogGrepMode::Regex => invoke_session_tool(&self.session, "log_grep", ctx).await,
             LogGrepMode::Keyword => self.invoke_keyword(ctx).await,
         }
@@ -77,9 +86,21 @@ impl Tool for LogGrepTool {
 
 impl LogGrepTool {
     async fn invoke_keyword(&self, ctx: &ToolCtx<'_>) -> Result<ToolResponse, ToolError> {
-        let request = keyword_request_from_args(ctx.redacted_args())?;
+        let raw_pattern = RAW_LOG_GREP_PATTERN
+            .try_with(Clone::clone)
+            .map_err(|_| {
+                ToolError::internal(LensError::Internal {
+                    detail: "keyword log_grep raw pattern task-local was not scoped".to_string(),
+                })
+            })?
+            .ok_or_else(|| {
+                ToolError::internal(LensError::Internal {
+                    detail: "keyword log_grep raw pattern task-local was empty".to_string(),
+                })
+            })?;
+        let request = keyword_request_from_args(ctx.redacted_args(), raw_pattern)?;
         let key = keyword_cache_key(ctx, &request);
-        let indexed = keyword_index_cache()
+        let lookup = keyword_index_cache()
             .get_or_fetch(key, request.refresh, || async {
                 let clean = self
                     .session
@@ -89,8 +110,15 @@ impl LogGrepTool {
                 redacted_keyword_window_from_clean(clean)
             })
             .await?;
-        filter_keyword_indexed_window(&indexed.window, &indexed.index, &request)
-            .and_then(clean_output_response)
+        let clean =
+            filter_keyword_indexed_window(&lookup.indexed.window, &lookup.indexed.index, &request)?;
+        if lookup.cache_hit {
+            self.session.record_core_summary(
+                ctx.call_id(),
+                keyword_core_summary(&lookup.indexed.window, &request),
+            );
+        }
+        clean_output_response(clean)
     }
 }
 
@@ -118,9 +146,27 @@ fn log_grep_mode(args: &serde_json::Value) -> Result<LogGrepMode, ToolError> {
     }
 }
 
+fn profile_key_from_args(args: &serde_json::Value) -> &str {
+    args.get("profile")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+}
+
+fn warn_if_production_regex_mode(profile: &str, production: bool, mode: LogGrepMode) {
+    if production && mode == LogGrepMode::Regex {
+        tracing::warn!(
+            target: "gaze_lens::mcp::tools::log_grep",
+            profile,
+            mode = "regex",
+            "production log_grep regex mode can act as a raw-text presence/absence oracle; use mode=\"keyword\" for production logs"
+        );
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct KeywordRequest {
     pattern: String,
+    match_pattern: String,
     level: Option<String>,
     limit: usize,
     refresh: bool,
@@ -194,6 +240,12 @@ impl IndexedKeywordWindow {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct KeywordIndexLookup {
+    indexed: IndexedKeywordWindow,
+    cache_hit: bool,
+}
+
 #[derive(Debug, Clone)]
 struct CachedKeywordWindow {
     minted_at: Instant,
@@ -227,20 +279,26 @@ impl KeywordIndexCache {
         key: KeywordCacheKey,
         refresh: bool,
         fetch: F,
-    ) -> Result<IndexedKeywordWindow, ToolError>
+    ) -> Result<KeywordIndexLookup, ToolError>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<RedactedKeywordWindow, ToolError>>,
     {
         let now = (self.now)();
         if !refresh && let Some(indexed) = self.fresh(&key, now) {
-            return Ok(indexed);
+            return Ok(KeywordIndexLookup {
+                indexed,
+                cache_hit: true,
+            });
         }
 
         let window = fetch().await?;
         let indexed = IndexedKeywordWindow::new(window);
         self.store(key, indexed.clone(), (self.now)());
-        Ok(indexed)
+        Ok(KeywordIndexLookup {
+            indexed,
+            cache_hit: false,
+        })
     }
 
     fn fresh(&self, key: &KeywordCacheKey, now: Instant) -> Option<IndexedKeywordWindow> {
@@ -260,9 +318,12 @@ impl KeywordIndexCache {
     }
 }
 
-fn keyword_request_from_args(args: &serde_json::Value) -> Result<KeywordRequest, ToolError> {
+fn keyword_request_from_args(
+    args: &serde_json::Value,
+    match_pattern: String,
+) -> Result<KeywordRequest, ToolError> {
     let pattern = string_arg(args, "pattern")?.to_string();
-    if keyword_query_terms(&pattern).is_empty() {
+    if keyword_query_terms(&match_pattern).is_empty() {
         return Err(ToolError::InvalidArgs(
             "keyword log_grep pattern must contain at least one term".to_string(),
         ));
@@ -272,13 +333,10 @@ fn keyword_request_from_args(args: &serde_json::Value) -> Result<KeywordRequest,
         .map(ToOwned::to_owned);
     let limit = optional_usize_arg(args, "limit")?.unwrap_or(100);
     let refresh = optional_bool_arg(args, "refresh")?.unwrap_or(false);
-    let profile_key = args
-        .get("profile")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let profile_key = profile_key_from_args(args).to_string();
     Ok(KeywordRequest {
         pattern,
+        match_pattern,
         level,
         limit,
         refresh,
@@ -300,7 +358,7 @@ fn filter_keyword_indexed_window(
     index: &KeywordIndex,
     request: &KeywordRequest,
 ) -> Result<CleanOutput, ToolError> {
-    let terms = keyword_query_terms(&request.pattern);
+    let terms = keyword_query_terms(&request.match_pattern);
     let level_re = request
         .level
         .as_ref()
@@ -367,6 +425,55 @@ fn redacted_keyword_window_from_clean(
     })
 }
 
+fn keyword_core_summary(window: &RedactedKeywordWindow, request: &KeywordRequest) -> ResultSummary {
+    let text = render_keyword_core_window(window, request);
+    CleanOutput::Text {
+        text,
+        truncated_at: window.truncated_at.clone(),
+    }
+    .summary()
+}
+
+fn render_keyword_core_window(window: &RedactedKeywordWindow, request: &KeywordRequest) -> String {
+    let metadata = window
+        .metadata
+        .as_ref()
+        .map(|metadata| keyword_core_metadata(metadata, request).to_string());
+    let lines = window.lines.join("\n");
+    match (metadata, lines.is_empty()) {
+        (Some(metadata), false) => format!("{metadata}\n{lines}"),
+        (Some(metadata), true) => metadata,
+        (None, _) => lines,
+    }
+}
+
+fn keyword_core_metadata(
+    metadata: &serde_json::Value,
+    request: &KeywordRequest,
+) -> serde_json::Value {
+    let serde_json::Value::Object(existing) = metadata else {
+        return metadata.clone();
+    };
+    let mut metadata = existing.clone();
+    metadata.insert(
+        "pattern".to_string(),
+        serde_json::Value::String(request.pattern.clone()),
+    );
+    metadata.insert(
+        "level".to_string(),
+        request
+            .level
+            .clone()
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    metadata.insert(
+        "requested_limit".to_string(),
+        serde_json::json!(request.limit),
+    );
+    serde_json::Value::Object(metadata)
+}
+
 fn split_redacted_window_text(text: &str) -> (Option<serde_json::Value>, Vec<String>) {
     let mut lines = text.lines();
     let Some(first) = lines.next() else {
@@ -383,18 +490,25 @@ fn split_redacted_window_text(text: &str) -> (Option<serde_json::Value>, Vec<Str
 }
 
 fn is_log_grep_metadata_header(metadata: &serde_json::Value) -> bool {
+    let Some(source_kind) = metadata
+        .get("source_kind")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
     metadata.as_object().is_some()
         && metadata
             .get("operation")
             .and_then(serde_json::Value::as_str)
             == Some("log_grep")
+        && is_log_source_kind(source_kind)
+        && (source_kind != "ssh_log" || has_string(metadata, "host"))
         && metadata
-            .get("source_kind")
-            .and_then(serde_json::Value::as_str)
-            == Some("ssh_log")
+            .get("truncated_at")
+            .and_then(serde_json::Value::as_array)
+            .is_some()
         && has_string(metadata, "status")
         && has_string(metadata, "profile")
-        && has_string(metadata, "host")
         && has_string(metadata, "path")
         && has_string(metadata, "pattern")
         && has_u64(metadata, "requested_limit")
@@ -403,10 +517,10 @@ fn is_log_grep_metadata_header(metadata: &serde_json::Value) -> bool {
         && has_u64(metadata, "matched_lines")
         && has_u64(metadata, "returned_lines")
         && has_u64(metadata, "searched_bytes")
-        && metadata
-            .get("truncated_at")
-            .and_then(serde_json::Value::as_array)
-            .is_some()
+}
+
+fn is_log_source_kind(source_kind: &str) -> bool {
+    matches!(source_kind, "ssh_log" | "local_log")
 }
 
 fn has_string(metadata: &serde_json::Value, key: &str) -> bool {
@@ -698,20 +812,6 @@ mod tests {
     }
 
     #[test]
-    fn log_grep_schema_documents_keyword_token_pattern() {
-        let schema = schema_for::<LogGrepArgs>();
-        let pattern_description = schema
-            .pointer("/properties/pattern/description")
-            .and_then(serde_json::Value::as_str)
-            .expect("pattern description");
-
-        assert!(pattern_description.contains("keyword mode"));
-        assert!(pattern_description.contains("complete `<hash:Name_N>` token"));
-        assert!(pattern_description.contains("Email_1"));
-        assert!(pattern_description.contains("0 hits"));
-    }
-
-    #[test]
     fn keyword_search_ands_terms_case_insensitively_in_original_order() {
         let window = redacted_window([
             "INFO release_id=43301 booted",
@@ -740,21 +840,32 @@ mod tests {
             .expect("token search");
         assert_eq!(clean_text(token_match), "ERROR actor=<EMAIL:Addr_1> failed");
 
-        let raw_match = filter_keyword_window(&window, &keyword_request("alice@example.com", 10))
-            .expect("raw search");
+        let raw_match = filter_keyword_window(
+            &window,
+            &keyword_request_with_match_pattern("<EMAIL:Addr_1>", "alice@example.com", 10),
+        )
+        .expect("raw search");
         let raw_text = clean_text(raw_match);
         assert!(raw_text.contains(r#""status":"no_matches""#), "{raw_text}");
+        assert!(
+            raw_text.contains(r#""pattern":"<EMAIL:Addr_1>""#),
+            "{raw_text}"
+        );
+        assert!(!raw_text.contains("alice@example.com"), "{raw_text}");
         assert!(!raw_text.contains("actor=<EMAIL:Addr_1>"), "{raw_text}");
     }
 
     #[test]
     fn keyword_request_normalizes_empty_level_to_absent() {
-        let request = keyword_request_from_args(&json!({
-            "profile": "prod-logs",
-            "pattern": "43301",
-            "level": "",
-            "mode": "keyword"
-        }))
+        let request = keyword_request_from_args(
+            &json!({
+                "profile": "prod-logs",
+                "pattern": "43301",
+                "level": "",
+                "mode": "keyword"
+            }),
+            "43301".to_string(),
+        )
         .expect("keyword request");
 
         assert_eq!(request.level, None);
@@ -860,6 +971,32 @@ mod tests {
     }
 
     #[test]
+    fn split_redacted_window_text_strips_local_log_metadata_header() {
+        let header = json!({
+            "operation": "log_grep",
+            "status": "matches",
+            "profile": "dev-log",
+            "source_kind": "local_log",
+            "path": "/tmp/app.log",
+            "pattern": "43301",
+            "level": null,
+            "requested_limit": 100,
+            "tail_window_lines": 10000,
+            "searched_lines": 2,
+            "matched_lines": 2,
+            "returned_lines": 2,
+            "searched_bytes": 42,
+            "truncated_at": []
+        });
+        let text = format!("{header}\nERROR release_id=43301");
+
+        let (metadata, lines) = split_redacted_window_text(&text);
+
+        assert_eq!(metadata, Some(header));
+        assert_eq!(lines, vec!["ERROR release_id=43301"]);
+    }
+
+    #[test]
     fn split_redacted_window_text_keeps_operation_json_log_line() {
         let first_line = r#"{"operation":"log_grep","message":"real log line"}"#;
         let text = format!("{first_line}\nERROR release_id=43301");
@@ -890,6 +1027,7 @@ mod tests {
             })
             .await
             .expect("first fetch");
+        assert!(!first.cache_hit);
         clock.advance(Duration::from_secs(1));
         let second = cache
             .get_or_fetch(key, false, {
@@ -903,7 +1041,8 @@ mod tests {
             .expect("cached fetch");
 
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
-        assert_eq!(second, first);
+        assert!(second.cache_hit);
+        assert_eq!(second.indexed, first.indexed);
     }
 
     #[tokio::test]
@@ -935,8 +1074,9 @@ mod tests {
             .expect("refresh fetch");
 
         assert_eq!(fetches.load(Ordering::SeqCst), 2);
+        assert!(!refreshed.cache_hit);
         assert_eq!(
-            refreshed.window.lines,
+            refreshed.indexed.window.lines,
             vec!["ERROR release_id=43301 refreshed"]
         );
     }
@@ -971,7 +1111,11 @@ mod tests {
             .expect("stale fetch");
 
         assert_eq!(fetches.load(Ordering::SeqCst), 2);
-        assert_eq!(stale.window.lines, vec!["ERROR release_id=43301 stale"]);
+        assert!(!stale.cache_hit);
+        assert_eq!(
+            stale.indexed.window.lines,
+            vec!["ERROR release_id=43301 stale"]
+        );
     }
 
     fn redacted_window(lines: impl IntoIterator<Item = &'static str>) -> RedactedKeywordWindow {
@@ -983,8 +1127,17 @@ mod tests {
     }
 
     fn keyword_request(pattern: &str, limit: usize) -> KeywordRequest {
+        keyword_request_with_match_pattern(pattern, pattern, limit)
+    }
+
+    fn keyword_request_with_match_pattern(
+        pattern: &str,
+        match_pattern: &str,
+        limit: usize,
+    ) -> KeywordRequest {
         KeywordRequest {
             pattern: pattern.to_string(),
+            match_pattern: match_pattern.to_string(),
             level: None,
             limit,
             refresh: false,

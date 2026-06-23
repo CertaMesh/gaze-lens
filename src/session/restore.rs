@@ -93,6 +93,7 @@ pub fn restore_whole_session(
 
     let mut calls = Vec::new();
     let mut restore_telemetry_summary = RestoreTelemetrySummary::default();
+    let pipeline = super::default_pipeline()?;
     for row in rows {
         let (call_id, tool_name, redacted_args_json, snapshot_ref, purged_at_ms) =
             row.map_err(|err| LensError::ReplayUnavailable {
@@ -140,8 +141,12 @@ pub fn restore_whole_session(
                     detail: err.to_string(),
                 }
             })?;
-        let (restored_args_json, restore_telemetry) =
-            restore_tokens(lens_session_id, &gaze_session, &redacted_args.json)?;
+        let (restored_args_json, restore_telemetry) = restore_tokens(
+            lens_session_id,
+            &pipeline,
+            &gaze_session,
+            &redacted_args.json,
+        )?;
         restore_telemetry_summary.record(&restore_telemetry);
         calls.push(RestoredCall {
             call_id,
@@ -172,10 +177,10 @@ fn format_iso8601_ms(ms: i64) -> String {
 
 fn restore_tokens(
     lens_session_id: &str,
+    pipeline: &gaze::Pipeline,
     gaze_session: &gaze::Session,
     input: &str,
 ) -> Result<(String, gaze::RestoreTelemetry), LensError> {
-    let pipeline = super::default_pipeline()?;
     let (restored, telemetry) = pipeline
         .restore_with_policy_telemetry(gaze_session, input, gaze::RestorePolicy::Strict)
         .map_err(|err| LensError::ReplayUnavailable {

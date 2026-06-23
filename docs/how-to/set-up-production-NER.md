@@ -5,14 +5,13 @@ A production profile **must** configure a named-entity-recognition (NER) model;
 without one, `gaze-lens` refuses to start the session — before any data is read.
 This recipe enables that posture.
 
-This is the honest fix for the nested-JSON person-name leak class. For *why* it
-works and what it does and does not guarantee, see
-[explanation/threat-model.md](../explanation/threat-model.md) and
-[explanation/gaze-0.11-adoption.md](../explanation/gaze-0.11-adoption.md) §3.2.
+This is the fix for the nested-JSON person-name leak class. For what it does and
+does not guarantee, see [explanation/threat-model.md](../explanation/threat-model.md)
+and [reference/policy-schema.md](../reference/policy-schema.md).
 
 ## Prerequisites
 
-- A working database or `ssh_log` profile (see
+- A working database, `ssh_log`, or `local_log` profile (see
   [configure-profiles.md](./configure-profiles.md)).
 - A NER model directory on the laptop — the expected family is a Davlan mBERT
   model. `gaze-lens` bundles no default model; you supply the directory.
@@ -92,5 +91,6 @@ JSON name fields in the policy file.
 - The profile sets `production = true` and its policy file sets `[ner].model_dir`.
 - `gaze-lens check --profile prod` **refuses** when the model is missing and
   **succeeds** once it is configured.
-- For `ssh_log` production profiles, `log_grep` defaults to the safer keyword mode
-  in your workflow — see [search-logs.md](./search-logs.md).
+- For production log profiles, regex `log_grep` emits a runtime warning and your
+  workflow uses `mode: "keyword"` for sensitive searches — see
+  [search-logs.md](./search-logs.md).

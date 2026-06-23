@@ -26,7 +26,7 @@ point to the how-to guides and reference.
 Download the latest prebuilt binary and unpack it:
 
 ```sh
-curl -L https://github.com/EmpireTwo/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
 ```
 
 This drops a `gaze-lens` executable in the current directory. Move it onto your
@@ -37,7 +37,7 @@ This drops a `gaze-lens` executable in the current directory. Move it onto your
 > 1.89 or newer:
 >
 > ```sh
-> git clone https://github.com/EmpireTwo/gaze-lens
+> git clone https://github.com/CertaMesh/gaze-lens
 > cd gaze-lens
 > cargo build --release
 > ```

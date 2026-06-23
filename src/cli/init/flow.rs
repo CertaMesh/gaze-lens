@@ -8,7 +8,7 @@
 //! ## Flow order (interactive)
 //!
 //! 1. Profile name (text, default "dev").
-//! 2. Source kind (select 4: mysql / postgres / sqlite / ssh-log).
+//! 2. Source kind (select 5: mysql / postgres / sqlite / ssh-log / local-log).
 //! 3. Source params (per-kind: path / host+port+db+user+passenv+optional tunnel / host+path).
 //! 4. Scope (select 3: user / project / project-auto-purge).
 //! 5. Destructive consent (only for `project-auto-purge`). Decline → Err.
@@ -101,7 +101,7 @@ pub fn resolve_profile_path(scope: InitScope, env: &InitEnv) -> PathBuf {
     }
 }
 
-const SOURCE_KINDS: &[&str] = &["mysql", "postgres", "sqlite", "ssh-log"];
+const SOURCE_KINDS: &[&str] = &["mysql", "postgres", "sqlite", "ssh-log", "local-log"];
 const SCOPES: &[&str] = &[
     "user - local-only config in ~/.gaze-lens/profiles.toml; good for personal experiments or machine-specific access; not committed to repo",
     "project - shared project config in .gaze-lens.toml; good for team policy/profile defaults; secrets still come from env/keyring",
@@ -253,7 +253,8 @@ fn kind_from_index(i: usize) -> SourceKind {
         0 => SourceKind::Mysql,
         1 => SourceKind::Postgres,
         2 => SourceKind::Sqlite,
-        _ => SourceKind::SshLog,
+        3 => SourceKind::SshLog,
+        _ => SourceKind::LocalLog,
     }
 }
 
@@ -433,6 +434,13 @@ fn populate_source_params<P: Prompter>(
             if section.source_path.is_none() {
                 require_interactive(args, "ssh_log path", "--source-path")?;
                 let s = p.input("Remote log path?", None).map_err(prompt_to_lens)?;
+                section.source_path = Some(PathBuf::from(s));
+            }
+        }
+        SourceKind::LocalLog => {
+            if section.source_path.is_none() {
+                require_interactive(args, "local_log path", "--source-path")?;
+                let s = p.input("Local log path?", None).map_err(prompt_to_lens)?;
                 section.source_path = Some(PathBuf::from(s));
             }
         }
@@ -646,7 +654,7 @@ fn build_agents_md_patch<P: Prompter>(
 /// - `SourceKind::{Mysql, Postgres}` with `source_ssh_host` set: validate the
 ///   tunnel jump host (TOML field `ssh_host`). The DB host (`source_host`)
 ///   is not an SSH target so it's not run through this validator.
-/// - `SourceKind::Sqlite`: no host fields; nothing to validate.
+/// - `SourceKind::{Sqlite, LocalLog}`: no host fields; nothing to validate.
 fn validate_section_hosts(section: &ProfileSection) -> Result<(), LensError> {
     match section.source_kind {
         SourceKind::SshLog => {
@@ -667,7 +675,7 @@ fn validate_section_hosts(section: &ProfileSection) -> Result<(), LensError> {
                 })?;
             }
         }
-        SourceKind::Sqlite => {}
+        SourceKind::Sqlite | SourceKind::LocalLog => {}
     }
     Ok(())
 }
@@ -727,6 +735,7 @@ fn kind_to_toml_str(k: SourceKind) -> &'static str {
         SourceKind::Postgres => "postgres",
         SourceKind::Sqlite => "sqlite",
         SourceKind::SshLog => "ssh_log",
+        SourceKind::LocalLog => "local_log",
     }
 }
 

@@ -3,8 +3,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use clap::{Arg, ArgAction, ArgMatches, Command, Error, FromArgMatches};
+use clap::Args;
 use serde::Serialize;
+use tracing_subscriber::EnvFilter;
 
 use crate::errors::LensError;
 use crate::frontend::mcp::McpFrontend;
@@ -18,82 +19,34 @@ use crate::session::{OutputCaps, Session, SourceClass, schema_hash};
 use crate::source::db::TableSchema;
 use crate::source::db::connect_db_source;
 use crate::source::db::schema::SchemaTokenizer;
-use crate::source::log::SshLogSourceWrapper;
+use crate::source::log::local_log::{LocalLogCaps, LocalLogSource};
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
+use crate::source::log::{LocalLogSourceWrapper, SshLogSourceWrapper};
 use crate::source::{DbSourceWrapper, SchemaPresentation, Source};
 
-const PRINT_DISCOVERY_SENTINEL: &str = "\0gaze-lens-print-discovery";
-
-#[derive(Debug)]
+#[derive(Debug, Args)]
 pub struct ServeArgs {
+    #[arg(long, value_name = "PROFILE")]
     pub profile: Vec<String>,
+    #[arg(
+        long,
+        env = "GAZE_LENS_MANIFEST",
+        default_value = "~/.gaze-lens/manifest.sqlite"
+    )]
     pub manifest: PathBuf,
+    #[arg(
+        long,
+        env = "GAZE_LENS_SNAPSHOT_DIR",
+        default_value = "~/.gaze-lens/snapshots"
+    )]
     pub snapshot_dir: PathBuf,
-}
-
-impl FromArgMatches for ServeArgs {
-    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
-        let mut profile = matches
-            .get_many::<String>("profile")
-            .map(|values| values.cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-        if matches.get_flag("print_discovery") {
-            profile.push(PRINT_DISCOVERY_SENTINEL.to_string());
-        }
-        let manifest = matches
-            .get_one::<PathBuf>("manifest")
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from("~/.gaze-lens/manifest.sqlite"));
-        let snapshot_dir = matches
-            .get_one::<PathBuf>("snapshot_dir")
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from("~/.gaze-lens/snapshots"));
-        Ok(Self {
-            profile,
-            manifest,
-            snapshot_dir,
-        })
-    }
-
-    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
-        *self = Self::from_arg_matches(matches)?;
-        Ok(())
-    }
-}
-
-impl clap::Args for ServeArgs {
-    fn augment_args(cmd: Command) -> Command {
-        cmd.arg(
-            Arg::new("profile")
-                .long("profile")
-                .value_name("PROFILE")
-                .action(ArgAction::Append),
-        )
-        .arg(
-            Arg::new("manifest")
-                .long("manifest")
-                .env("GAZE_LENS_MANIFEST")
-                .default_value("~/.gaze-lens/manifest.sqlite")
-                .value_parser(clap::value_parser!(PathBuf)),
-        )
-        .arg(
-            Arg::new("snapshot_dir")
-                .long("snapshot-dir")
-                .env("GAZE_LENS_SNAPSHOT_DIR")
-                .default_value("~/.gaze-lens/snapshots")
-                .value_parser(clap::value_parser!(PathBuf)),
-        )
-        .arg(
-            Arg::new("print_discovery")
-                .long("print-discovery")
-                .help("Print configured profile discovery inventory as JSON and exit without starting MCP")
-                .action(ArgAction::SetTrue),
-        )
-    }
-
-    fn augment_args_for_update(cmd: Command) -> Command {
-        Self::augment_args(cmd)
-    }
+    #[arg(
+        long,
+        help = "Print configured profile discovery inventory as JSON and exit without starting MCP"
+    )]
+    pub print_discovery: bool,
+    #[arg(long, value_name = "FILTER")]
+    pub log: Option<String>,
 }
 
 #[doc(hidden)]
@@ -107,6 +60,7 @@ pub async fn run(
     project_config: Option<&Path>,
     user_config: Option<&Path>,
 ) -> Result<(), LensError> {
+    init_tracing(args.log.as_deref())?;
     if print_discovery_requested(&args) {
         return print_discovery_inventory(&args, project_config, user_config).await;
     }
@@ -118,6 +72,47 @@ pub async fn run(
         wait_for_shutdown_signal(),
     )
     .await
+}
+
+fn init_tracing(log: Option<&str>) -> Result<(), LensError> {
+    let filter = serve_log_filter(log)?;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
+    Ok(())
+}
+
+fn serve_log_filter(log: Option<&str>) -> Result<EnvFilter, LensError> {
+    let rust_log = rust_log_env()?;
+    build_serve_log_filter(log, rust_log.as_deref())
+}
+
+fn rust_log_env() -> Result<Option<String>, LensError> {
+    match std::env::var("RUST_LOG") {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(LensError::Profile {
+            detail: "RUST_LOG is not valid Unicode".to_string(),
+        }),
+    }
+}
+
+fn build_serve_log_filter(
+    explicit_log: Option<&str>,
+    rust_log: Option<&str>,
+) -> Result<EnvFilter, LensError> {
+    let (source, filter) = if let Some(filter) = explicit_log {
+        ("--log", filter)
+    } else if let Some(filter) = rust_log {
+        ("RUST_LOG", filter)
+    } else {
+        ("default", "info")
+    };
+    EnvFilter::try_new(filter).map_err(|err| LensError::Profile {
+        detail: format!("invalid {source} tracing filter `{filter}`: {err}"),
+    })
 }
 
 fn prepare_session(
@@ -149,6 +144,7 @@ fn prepare_session(
     for (profile, (_policy, pipeline, column_actions)) in runtime {
         session.register_pipeline(profile.name.clone(), Arc::new(pipeline))?;
         session.register_column_action_policy(profile.name.clone(), column_actions)?;
+        session.register_profile_production(profile.name.clone(), profile.production)?;
         register_lazy_source(&session, profile);
     }
 
@@ -222,7 +218,7 @@ fn register_lazy_source(session: &Arc<Session>, profile: Profile) {
                 }),
             );
         }
-        SourceSpec::SshLog { .. } => {
+        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
             session.register_source_lazy(
                 SourceClass::Log,
                 profile.name.clone(),
@@ -334,14 +330,16 @@ async fn discover_profile(profile: &Profile) -> Result<ProfileDiscovery, LensErr
             discover_database_profile(profile).await
         }
         SourceSpec::SshLog { host, path } => discover_log_profile(profile, host, path),
+        SourceSpec::LocalLog { path } => {
+            discover_log_profile(profile, "local", &path.to_string_lossy())
+        }
     }
 }
 
 async fn discover_database_profile(profile: &Profile) -> Result<ProfileDiscovery, LensError> {
     let source_class = SourceClass::Database;
     let supported_tools = supported_tools(source_class);
-    let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
-    let source = connect_db_source(profile, limit_cap).await?;
+    let source = connect_db_source(profile, default_db_limit_cap()).await?;
     let mut raw_tables = source.list_tables().await?;
     raw_tables.sort();
 
@@ -451,26 +449,19 @@ fn presented_table_name(schema: &TableSchema) -> String {
 }
 
 fn print_discovery_requested(args: &ServeArgs) -> bool {
-    args.profile
-        .iter()
-        .any(|profile| profile == PRINT_DISCOVERY_SENTINEL)
+    args.print_discovery
 }
 
 fn selected_profile_names(args: &ServeArgs) -> Vec<String> {
-    args.profile
-        .iter()
-        .filter(|profile| profile.as_str() != PRINT_DISCOVERY_SENTINEL)
-        .cloned()
-        .collect()
+    args.profile.clone()
 }
 
 async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
-    let limit_cap = OutputCaps::default().rows.min(u32::MAX as usize) as u32;
     let db_source = match &profile.source {
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
-            connect_db_source(&profile, limit_cap).await?
+            connect_db_source(&profile, default_db_limit_cap()).await?
         }
-        SourceSpec::SshLog { .. } => {
+        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
             return Err(LensError::Profile {
                 detail: format!("profile `{}` is not a database source", profile.name),
             });
@@ -489,24 +480,44 @@ async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError>
     )))
 }
 
+fn default_db_limit_cap() -> u32 {
+    OutputCaps::default().rows.min(u32::MAX as usize) as u32
+}
+
 fn build_log_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
-    let SourceSpec::SshLog { host, path } = &profile.source else {
-        return Err(LensError::Profile {
-            detail: format!("profile `{}` is not a log source", profile.name),
-        });
-    };
     let caps = OutputCaps::default();
-    let log_source = Arc::new(SshLogSource::new(
-        profile.name.clone(),
-        host.clone(),
-        path.clone(),
-        SshLogCaps {
-            line_bytes: caps.line_bytes,
-            bytes: caps.bytes,
-            timeout: caps.timeout,
-        },
-    )?);
-    Ok(Arc::new(SshLogSourceWrapper::new(log_source)))
+    match &profile.source {
+        SourceSpec::SshLog { host, path } => {
+            let log_source = Arc::new(SshLogSource::new(
+                profile.name.clone(),
+                host.clone(),
+                path.clone(),
+                SshLogCaps {
+                    line_bytes: caps.line_bytes,
+                    bytes: caps.bytes,
+                    timeout: caps.timeout,
+                },
+            )?);
+            Ok(Arc::new(SshLogSourceWrapper::new(log_source)))
+        }
+        SourceSpec::LocalLog { path } => {
+            let log_source = Arc::new(LocalLogSource::new(
+                profile.name.clone(),
+                path.clone(),
+                LocalLogCaps {
+                    line_bytes: caps.line_bytes,
+                    bytes: caps.bytes,
+                    timeout: caps.timeout,
+                },
+            )?);
+            Ok(Arc::new(LocalLogSourceWrapper::new(log_source)))
+        }
+        SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
+            Err(LensError::Profile {
+                detail: format!("profile `{}` is not a log source", profile.name),
+            })
+        }
+    }
 }
 
 #[doc(hidden)]
@@ -646,4 +657,27 @@ fn expand_path(path: &Path) -> Result<PathBuf, LensError> {
         .map_err(|err| LensError::Profile {
             detail: err.to_string(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_serve_log_filter;
+
+    #[test]
+    fn serve_log_filter_prefers_explicit_log() {
+        let filter = build_serve_log_filter(Some("gaze_lens=debug"), Some("warn")).expect("filter");
+        assert_eq!(filter.to_string(), "gaze_lens=debug");
+    }
+
+    #[test]
+    fn serve_log_filter_uses_rust_log_when_log_absent() {
+        let filter = build_serve_log_filter(None, Some("warn")).expect("filter");
+        assert_eq!(filter.to_string(), "warn");
+    }
+
+    #[test]
+    fn serve_log_filter_defaults_to_info() {
+        let filter = build_serve_log_filter(None, None).expect("filter");
+        assert_eq!(filter.to_string(), "info");
+    }
 }

@@ -1,6 +1,6 @@
 ## gaze-lens
 
-This project uses [gaze-lens](https://github.com/EmpireTwo/gaze-lens) for
+This project uses [gaze-lens](https://github.com/CertaMesh/gaze-lens) for
 PII-safe read-only investigation against live production data. AI agents
 reach the 6 CLI subcommands (`serve`, `init`, `query`, `replay`, `check`,
 `demo`) and the 5 MCP tools (`query`, `schema`, `list_tables`, `log_tail`,

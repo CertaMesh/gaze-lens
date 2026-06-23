@@ -6,8 +6,10 @@ use crate::errors::LensError;
 use crate::session::ToolCall;
 use crate::source::{Source, SourceOutput};
 
+pub mod local_log;
 pub mod ssh_log;
 
+use local_log::LocalLogSource;
 use ssh_log::SshLogSource;
 
 pub struct SshLogSourceWrapper {
@@ -72,6 +74,71 @@ impl Source for SshLogSourceWrapper {
     }
 }
 
+pub struct LocalLogSourceWrapper {
+    inner: Arc<LocalLogSource>,
+}
+
+impl LocalLogSourceWrapper {
+    pub fn new(inner: Arc<LocalLogSource>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl Source for LocalLogSourceWrapper {
+    async fn dispatch(&self, call: &ToolCall) -> Result<SourceOutput, LensError> {
+        match call.tool_name.as_str() {
+            "log_tail" => {
+                let args: LogTailArgs = serde_json::from_value(call.args.0.clone())
+                    .map_err(|err| source_error(self.inner.profile_name(), err.to_string()))?;
+                let lines = args.lines.unwrap_or(100);
+                self.inner
+                    .tail(lines)
+                    .await
+                    .and_then(text_output_from_local_log)
+            }
+            "log_grep" => {
+                let args: LogGrepArgs =
+                    serde_json::from_value(call.args.0.clone()).map_err(|_| {
+                        source_error(
+                            self.inner.profile_name(),
+                            "invalid log_grep args".to_string(),
+                        )
+                    })?;
+                match args.mode.as_deref().unwrap_or("regex") {
+                    "regex" => self
+                        .inner
+                        .grep(
+                            &args.pattern,
+                            args.level.as_deref(),
+                            args.limit.unwrap_or(100),
+                        )
+                        .await
+                        .and_then(text_output_from_local_log),
+                    "keyword" => self
+                        .inner
+                        .grep_window(
+                            &args.pattern,
+                            args.level.as_deref(),
+                            args.limit.unwrap_or(100),
+                            args.refresh.unwrap_or(false),
+                        )
+                        .await
+                        .and_then(text_output_from_local_log),
+                    other => Err(source_error(
+                        self.inner.profile_name(),
+                        format!("invalid log_grep mode `{other}`; expected `regex` or `keyword`"),
+                    )),
+                }
+            }
+            other => Err(source_error(
+                self.inner.profile_name(),
+                format!("unsupported tool {other} on log source"),
+            )),
+        }
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct LogTailArgs {
     lines: Option<usize>,
@@ -101,4 +168,14 @@ fn text_output_from_log(output: ssh_log::SshLogOutput) -> SourceOutput {
         text: output.into_text(),
         truncated_at,
     }
+}
+
+fn text_output_from_local_log(
+    output: local_log::LocalLogOutput,
+) -> Result<SourceOutput, LensError> {
+    let truncated_at = output.truncated_at.clone();
+    Ok(SourceOutput::TextWithTruncation {
+        text: output.into_text()?,
+        truncated_at,
+    })
 }

@@ -3,7 +3,7 @@ compile_error!(
     "gaze-lens v0.1 is Unix-only. Snapshot file privacy (0600/0700) is enforced via Unix file modes; no equivalent guarantee on non-Unix platforms. See SPEC.md §threat-model."
 );
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -18,7 +18,7 @@ use crate::errors::LensError;
 use crate::manifest::gaze_mcp_adapter::GazeMcpManifestAdapter;
 use crate::mcp::auth::LensAuthHook;
 use crate::mcp::tools::list_tables::ListTablesTool;
-use crate::mcp::tools::log_grep::LogGrepTool;
+use crate::mcp::tools::log_grep::{LogGrepTool, RAW_LOG_GREP_PATTERN};
 use crate::mcp::tools::log_tail::LogTailTool;
 use crate::mcp::tools::query::QueryTool;
 use crate::mcp::tools::schema::SchemaTool;
@@ -49,6 +49,7 @@ struct SessionInner {
     snapshot_dir: PathBuf,
     sources: Mutex<HashMap<(SourceClass, String), Arc<LazySource>>>,
     legacy_sources: Mutex<HashMap<String, Arc<dyn Source>>>,
+    production_profiles: Mutex<HashSet<String>>,
     schema_tokenizer: SchemaTokenizer,
     caps: OutputCaps,
 }
@@ -369,6 +370,7 @@ impl Session {
                 snapshot_dir,
                 sources: Mutex::new(HashMap::new()),
                 legacy_sources: Mutex::new(HashMap::new()),
+                production_profiles: Mutex::new(HashSet::new()),
                 schema_tokenizer: SchemaTokenizer::default(),
                 caps,
             }),
@@ -413,12 +415,21 @@ impl Session {
             &[],
             &session_id_policy,
         );
-        let response = envelope
-            .dispatch(
-                &gaze_mcp_core::Principal::new("lens-agent"),
-                &call.tool_name,
-                call.args.0,
-                None,
+        let raw_log_grep_pattern = call
+            .args
+            .0
+            .get("pattern")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let response = RAW_LOG_GREP_PATTERN
+            .scope(
+                raw_log_grep_pattern,
+                envelope.dispatch(
+                    &gaze_mcp_core::Principal::new("lens-agent"),
+                    &call.tool_name,
+                    call.args.0,
+                    None,
+                ),
             )
             .await
             .map_err(dispatch_error_to_lens_error)?;
@@ -491,12 +502,16 @@ impl Session {
         })
         .await
         .map_err(|_| operation_timeout("redaction", &call.tool_name, self.inner.caps.timeout))??;
+        self.record_core_summary(call_id, clean.summary());
+        Ok(clean)
+    }
+
+    pub(crate) fn record_core_summary(&self, call_id: ulid::Ulid, summary: ResultSummary) {
         self.inner
             .core_summaries
             .lock()
             .expect("core summary map lock")
-            .insert(call.call_id.clone(), clean.summary());
-        Ok(clean)
+            .insert(call_id.to_string(), summary);
     }
 
     pub fn register_source(&self, name: impl Into<String>, source: Arc<dyn Source>) {
@@ -594,6 +609,57 @@ impl Session {
                 policies.insert(profile_name, policy);
                 Ok(())
             }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn register_profile_production(
+        &self,
+        profile_name: impl Into<String>,
+        production: bool,
+    ) -> Result<(), LensError> {
+        let profile_name = profile_name.into();
+        self.ensure_profile_registered(&profile_name)?;
+        let mut profiles = self
+            .inner
+            .production_profiles
+            .lock()
+            .expect("production profile set lock");
+        if production {
+            profiles.insert(profile_name);
+        } else {
+            profiles.remove(&profile_name);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn profile_is_production(&self, profile_name: &str) -> bool {
+        self.inner
+            .production_profiles
+            .lock()
+            .expect("production profile set lock")
+            .contains(profile_name)
+    }
+
+    fn ensure_profile_registered(&self, profile_name: &str) -> Result<(), LensError> {
+        let mode = self.inner.pipeline_mode.lock().expect("pipeline mode lock");
+        match &*mode {
+            PipelineMode::SingleProfile { name, .. } if name == profile_name => Ok(()),
+            PipelineMode::SingleProfile { name, .. } => Err(LensError::ProfileMismatch {
+                profile: profile_name.to_string(),
+                tool: "profile metadata".to_string(),
+                required: name.clone(),
+                actual: "different".to_string(),
+            }),
+            PipelineMode::MultiProfile(pipelines) if pipelines.contains_key(profile_name) => Ok(()),
+            PipelineMode::MultiProfile(pipelines) => Err(LensError::ProfileUnknown {
+                profile: profile_name.to_string(),
+                loaded: {
+                    let mut loaded = pipelines.keys().cloned().collect::<Vec<_>>();
+                    loaded.sort();
+                    loaded
+                },
+            }),
         }
     }
 

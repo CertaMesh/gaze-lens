@@ -1,18 +1,17 @@
 # Configure a profile
 
-A profile tells `gaze-lens` what source to read (database or SSH log), which PII
-policy to apply, and how to resolve the database secret. This recipe configures
-one and validates it. It assumes you have a working binary (see the
-[getting-started tutorial](../tutorials/getting-started.md)).
+A profile tells `gaze-lens` what source to read (database or app log), which PII
+policy to apply, and, for database profiles, how to resolve the secret. This
+recipe configures one and validates it. It assumes you have a working binary
+(see the [getting-started tutorial](../tutorials/getting-started.md)).
 
 For the full field-by-field schema and merge-rule table, see
-[reference/profile-schema.md](../reference/profile-schema.md). This page is the
-task recipe.
+[reference/profile-schema.md](../reference/profile-schema.md).
 
 ## Prerequisites
 
 - A `gaze-lens` binary on `PATH`.
-- A read-only database user, **or** an SSH-reachable host with app logs.
+- A read-only database user, **or** an SSH-reachable host or local file with app logs.
 - The database password available as an environment variable or in your OS
   keyring (never as a literal in TOML — `gaze-lens` rejects `password = "..."`).
 
@@ -24,8 +23,8 @@ Profiles load from two files and merge by role:
   `schema_tokenize`, `schema_allowlist`, database name, username, secret
   reference, `readonly_required`. Commit this so the team shares one policy.
 - **User file** `~/.gaze-lens/profiles.toml` — owns laptop-specific transport:
-  `host`, `port`, SSH host, local forwarded port, local SQLite path. Keep this
-  out of version control.
+  `host`, `port`, SSH host, local forwarded port, local SQLite path, local log
+  path. Keep this out of version control.
 
 When both files define a profile of the same name, project wins for policy/identity
 and user wins for transport. This lets you commit policy while each operator keeps
@@ -40,11 +39,11 @@ their own connection details.
    gaze-lens init --profile prod
    ```
 
-   `init` prompts for source kind (`mysql`, `postgres`, `sqlite`, `ssh-log`),
-   connection details, and where to write the file. Use `--scope project` or
-   `--scope user` to force a destination; init **refuses** to write transport
-   overrides into a project file and **refuses** to write policy into a user file,
-   enforcing the role split above.
+   `init` prompts for source kind (`mysql`, `postgres`, `sqlite`, `ssh-log`,
+   `local-log`), connection details, and where to write the file. Use
+   `--scope project` or `--scope user` to force a destination; init **refuses**
+   to write transport overrides into a project file and **refuses** to write
+   policy into a user file, enforcing the role split above.
 
 2. **Set the database secret.** Pick exactly one backend (a profile that sets both,
    or neither for a DB source, is rejected at load):
@@ -89,9 +88,9 @@ their own connection details.
    gaze-lens --project-config .gaze-lens.toml check --profile prod
    ```
 
-   The secret line reads `secret: ok`, `NOT FOUND`, `ACCESS DENIED`, or
-   `BACKEND UNAVAILABLE` (locator only — never password bytes). Add
-   `--explain-risk` for a local trust report of what the profile exposes.
+   The secret line reads `secret: [REDACTED:API key param]`, `NOT FOUND`,
+   `ACCESS DENIED`, or `BACKEND UNAVAILABLE` (locator only — never password bytes).
+   Add `--explain-risk` for a local trust report of what the profile exposes.
 
 ## Re-running init is safe (merge semantics)
 
@@ -117,7 +116,7 @@ value set there.
 
 ## Done when
 
-- `gaze-lens check --profile prod` reports `secret: ok` and a successful source
-  ping (or, for `ssh_log`, successful command-construction validation).
+- `gaze-lens check --profile prod` reports a successful source ping (or, for a
+  log profile, successful log-source validation).
 - The PII policy lives in the committed project file and your laptop-specific
   transport lives in `~/.gaze-lens/profiles.toml`.

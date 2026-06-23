@@ -233,6 +233,9 @@ fn source_error_hint(source: &SourceSpec) -> &'static str {
         SourceSpec::SshLog { .. } => {
             "verify the SSH host is reachable (`ssh <host>`), the remote log path exists and is readable, and the host is defined in ~/.ssh/config; rerun `gaze-lens init` to reconfigure the log source."
         }
+        SourceSpec::LocalLog { .. } => {
+            "verify the local log path exists and is readable; rerun `gaze-lens init` to reconfigure the log source."
+        }
     }
 }
 
@@ -329,6 +332,7 @@ fn should_warn_email_regex_only_redaction(
                 | SourceSpec::Postgres { .. }
                 | SourceSpec::Sqlite { .. }
                 | SourceSpec::SshLog { .. }
+                | SourceSpec::LocalLog { .. }
         )
 }
 
@@ -336,7 +340,10 @@ fn email_regex_only_redaction_warning(
     profile: &crate::profile::Profile,
     policy: &PolicyFile,
 ) -> String {
-    let is_log_profile = matches!(profile.source, SourceSpec::SshLog { .. });
+    let is_log_profile = matches!(
+        profile.source,
+        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. }
+    );
     let high_risk = is_log_profile || profile.production;
     let severity = if high_risk {
         "CRITICAL WARNING"
@@ -412,6 +419,24 @@ async fn validate_source(
             )?;
             let _ = source.tail(1).await?;
         }
+        SourceSpec::LocalLog { path } => {
+            if path.as_os_str().is_empty() {
+                return Err(LensError::SourceError {
+                    source_name: profile.name.clone(),
+                    detail: "local_log path must not be empty".to_string(),
+                    sql: None,
+                    stderr: None,
+                });
+            }
+            let _ = tokio::fs::File::open(path)
+                .await
+                .map_err(|err| LensError::SourceError {
+                    source_name: profile.name.clone(),
+                    detail: format!("failed to open local log {}: {err}", path.display()),
+                    sql: None,
+                    stderr: None,
+                })?;
+        }
     }
     Ok(())
 }
@@ -483,13 +508,15 @@ async fn validate_secret_for_check(
                 db_password: Some(password),
             })
         }
-        SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } => Ok(ValidatedSecret {
-            metadata: SecretMetadata {
-                backend: "none",
-                identity: "not required".to_string(),
-            },
-            db_password: None,
-        }),
+        SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
+            Ok(ValidatedSecret {
+                metadata: SecretMetadata {
+                    backend: "none",
+                    identity: "not required".to_string(),
+                },
+                db_password: None,
+            })
+        }
     }
 }
 
