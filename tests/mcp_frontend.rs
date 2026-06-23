@@ -245,7 +245,10 @@ async fn test_production_log_grep_regex_warning_is_server_log_only() {
         call_log_grep_with_warning_capture(true, None).await;
     assert!(
         production_warnings.iter().any(|warning| {
-            warning.contains("production log_grep regex mode")
+            warning.contains("gaze_lens::mcp::tools::log_grep")
+                && warning.contains("profile=test")
+                && warning.contains("mode=regex")
+                && warning.contains("production log_grep regex mode")
                 && warning.contains("raw-text presence/absence oracle")
                 && warning.contains("mode=\"keyword\"")
         }),

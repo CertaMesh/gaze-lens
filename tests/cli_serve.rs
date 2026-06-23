@@ -52,12 +52,15 @@ fn test_serve_parses_profile_and_paths() {
         "/tmp/manifest.sqlite",
         "--snapshot-dir",
         "/tmp/snapshots",
+        "--log",
+        "gaze_lens=debug",
     ]);
     let Cmd::Serve(args) = cli.cmd else {
         panic!("expected serve command");
     };
     assert_eq!(args.profile, vec!["prod".to_string()]);
     assert!(!args.print_discovery);
+    assert_eq!(args.log.as_deref(), Some("gaze_lens=debug"));
     assert_eq!(
         cli.project_config.as_deref(),
         Some(std::path::Path::new("project.toml"))
@@ -65,6 +68,34 @@ fn test_serve_parses_profile_and_paths() {
     assert_eq!(
         cli.user_config.as_deref(),
         Some(std::path::Path::new("user.toml"))
+    );
+}
+
+#[tokio::test]
+async fn test_serve_installs_tracing_before_session_prepare_errors() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project_config = temp.path().join("profiles.toml");
+    std::fs::write(&project_config, "[[profiles]\n").expect("malformed profile");
+
+    let err = run(
+        ServeArgs {
+            profile: Vec::new(),
+            manifest: temp.path().join("manifest.sqlite"),
+            snapshot_dir: temp.path().join("snapshots"),
+            print_discovery: false,
+            log: Some("warn".to_string()),
+        },
+        Some(&project_config),
+        Some(&empty_user_config(&temp)),
+    )
+    .await
+    .expect_err("malformed profile should fail session preparation");
+
+    let msg = err.to_string();
+    assert!(msg.contains("line "), "{msg}");
+    assert!(
+        tracing::subscriber::set_global_default(tracing_subscriber::registry()).is_err(),
+        "serve did not install a global tracing subscriber before preparing the session"
     );
 }
 
@@ -100,6 +131,7 @@ readonly_required = true
             manifest: temp.path().join("manifest.sqlite"),
             snapshot_dir: temp.path().join("snapshots"),
             print_discovery: false,
+            log: None,
         },
         Some(&project_config),
         Some(&empty_user_config(&temp)),
@@ -398,6 +430,7 @@ fn serve_args(temp: &tempfile::TempDir, profiles: &[&str]) -> ServeArgs {
         manifest: temp.path().join("manifest.sqlite"),
         snapshot_dir: temp.path().join("snapshots"),
         print_discovery: false,
+        log: None,
     }
 }
 
