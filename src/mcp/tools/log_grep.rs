@@ -93,11 +93,7 @@ impl LogGrepTool {
                     detail: "keyword log_grep raw pattern task-local was not scoped".to_string(),
                 })
             })?
-            .ok_or_else(|| {
-                ToolError::internal(LensError::Internal {
-                    detail: "keyword log_grep raw pattern task-local was empty".to_string(),
-                })
-            })?;
+            .ok_or_else(|| ToolError::InvalidArgs("log_grep `pattern` is required".to_string()))?;
         let request = keyword_request_from_args(ctx.redacted_args(), raw_pattern)?;
         let key = keyword_cache_key(ctx, &request);
         let lookup = keyword_index_cache()
@@ -771,7 +767,14 @@ fn optional_bool_arg(args: &serde_json::Value, key: &str) -> Result<Option<bool>
 
 #[cfg(test)]
 mod tests {
-    use gaze_mcp_core::ToolError;
+    use async_trait::async_trait;
+    use gaze_mcp_core::manifest::{
+        BeginCallContext, CallHandle, FailureReason, ManifestError, ManifestStore, SnapshotRef,
+    };
+    use gaze_mcp_core::{
+        AuthError, AuthHook, DispatchError, PiiEnvelope, Principal, SessionIdPolicy, ToolError,
+        ToolRegistry,
+    };
     use serde_json::json;
     use std::sync::{
         Arc, Mutex,
@@ -808,6 +811,60 @@ mod tests {
                 if message.contains("invalid log_grep mode")
                     && message.contains("regex")
                     && message.contains("keyword")
+        ));
+    }
+
+    #[tokio::test]
+    async fn keyword_invoke_missing_scoped_pattern_returns_invalid_args() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest_path = temp.path().join("manifest.sqlite");
+        let snapshot_dir = temp.path().join("snapshots");
+        let mut policy = gaze::Policy::default();
+        policy.session.scope = gaze::SessionScope::Conversation;
+        policy.rulepacks.bundled = vec!["core".to_string()];
+        let lens_session =
+            Session::new_with_pipeline(&policy, test_pipeline(), &manifest_path, &snapshot_dir)
+                .expect("lens session");
+        let tool = LogGrepTool::new(Arc::new(lens_session));
+        let mut registry = ToolRegistry::new();
+        registry.register(tool).expect("register log_grep");
+        let auth = AllowAgentAuth;
+        let manifest = NoopManifest;
+        let pipeline = test_pipeline();
+        let gaze_session =
+            gaze::Session::new(gaze::Scope::Conversation(ulid::Ulid::new().to_string()))
+                .expect("gaze session");
+        let session_id_policy = SessionIdPolicy::default_strict();
+        let envelope = PiiEnvelope::new(
+            &registry,
+            &auth,
+            &manifest,
+            &pipeline,
+            &gaze_session,
+            &[],
+            &session_id_policy,
+        );
+
+        let err = RAW_LOG_GREP_PATTERN
+            .scope(
+                None,
+                envelope.dispatch(
+                    &Principal::new("test-agent"),
+                    "log_grep",
+                    json!({
+                        "profile": "default",
+                        "mode": "keyword"
+                    }),
+                    None,
+                ),
+            )
+            .await
+            .expect_err("missing pattern");
+
+        assert!(matches!(
+            err,
+            DispatchError::ToolError(ToolError::InvalidArgs(message))
+                if message == "log_grep `pattern` is required"
         ));
     }
 
@@ -1162,6 +1219,56 @@ mod tests {
     fn test_clock() -> TestClock {
         TestClock {
             now: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    fn test_pipeline() -> gaze::Pipeline {
+        gaze::Pipeline::builder().build().expect("pipeline build")
+    }
+
+    struct AllowAgentAuth;
+
+    #[async_trait]
+    impl AuthHook for AllowAgentAuth {
+        async fn authorize_agent(
+            &self,
+            _principal: &Principal,
+            _tool_name: &str,
+        ) -> Result<(), AuthError> {
+            Ok(())
+        }
+
+        async fn authorize_operator(
+            &self,
+            _principal: &Principal,
+            _tool_name: &str,
+        ) -> Result<(), AuthError> {
+            Err(AuthError::Denied("agent-only test hook".to_string()))
+        }
+    }
+
+    struct NoopManifest;
+
+    #[async_trait]
+    impl ManifestStore for NoopManifest {
+        async fn begin_call(&self, ctx: BeginCallContext<'_>) -> Result<CallHandle, ManifestError> {
+            Ok(CallHandle::new(ctx.call_id))
+        }
+
+        async fn finish_call(
+            &self,
+            _handle: CallHandle,
+            _snapshot: SnapshotRef,
+        ) -> Result<(), ManifestError> {
+            Ok(())
+        }
+
+        async fn fail_call(
+            &self,
+            _handle: CallHandle,
+            _reason: FailureReason,
+        ) -> Result<(), ManifestError> {
+            Ok(())
         }
     }
 
