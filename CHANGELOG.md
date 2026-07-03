@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- Pinned the Gaze family (`gaze-pii`, `gaze-recognizers`, `gaze-mcp-core`) to
+  upstream `0.11.3` as the security floor. This adopts the upstream axis-1
+  email-boundary leak fixes, SafetyNet fail-closed behavior, and locale
+  fallback absent from `0.10.0` through `0.11.2` (#353); strict-restore
+  rejection of Unicode-digit token ordinals (#355); and the restore-regex
+  session cache (#356).
+
 ## [0.5.3] — 2026-06-23
 
 Adopter-driven release: dogfood-found fixes, a no-SSH local log source, and a
