@@ -87,7 +87,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -98,7 +98,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1063,7 +1063,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1191,7 +1191,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1439,9 +1439,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-assembly"
-version = "0.11.0"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78e364a4b117918f39d3ee9083bdf93cd8043f7df61036c4d9427b9dd0270161"
+checksum = "4ee7eb7747b097cc0fe67d2d337e1b3241ad3aaa838214379dc9db9b3c9762dd"
 dependencies = [
  "gaze-pii",
  "gaze-recognizers",
@@ -1490,9 +1490,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-mcp-core"
-version = "0.11.0"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc03b1882059263b2468eb3eec050e0d78e278b303f6bf9bd1253f0a240297f8"
+checksum = "49fbf2cfbfebba84a59b6c6c2dbd72d4c7bf2ae67ef6aa48c893b25485c95ae5"
 dependencies = [
  "async-trait",
  "gaze-assembly",
@@ -1510,9 +1510,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-pii"
-version = "0.11.0"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2802392ebfc14bc2cf4fe64acbdfbd643a4d2f03d828a090460117a71e8bd6b1"
+checksum = "9b77b0afc1c18c9c5938f4681f67f480ebc7e3770febf21512d0201a8d00b040"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1537,9 +1537,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-recognizers"
-version = "0.11.0"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbcf4a04bff75ea55dc1640579c41a65bd074eb49e1f77bb39358b77da9104b0"
+checksum = "fdd746b0c1e32cc4c64883263389e1bd0f154cdab303fd2aad71d880af195c17"
 dependencies = [
  "aho-corasick",
  "gaze-types",
@@ -1560,9 +1560,9 @@ dependencies = [
 
 [[package]]
 name = "gaze-types"
-version = "0.11.0"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45582fd918472bce7c13a3ba2a2a3d839493c9318241c3179f61ed92e5840a3f"
+checksum = "ea439f9683d0ad42e85f40c67e7202f7a0e6ba1406cd2619fe4093b4cd035794"
 dependencies = [
  "phonenumber",
  "serde",
@@ -2412,7 +2412,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3262,7 +3262,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3680,7 +3680,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4044,7 +4044,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4516,7 +4516,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
