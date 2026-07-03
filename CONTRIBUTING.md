@@ -84,7 +84,7 @@ Before making the repository public or announcing a public release, confirm the 
 
 Reasons:
 - Each backend's offline metadata cache is per-DB-version per-CI-pipeline; cost scales with the matrix.
-- Reference adapter at `reference/debug-proxy/src/adapter/mysql.rs:51,114,125,143` already uses dynamic `sqlx::query`/`query_as`; that pattern is the production path.
+- The predecessor crate's reference adapter (`reference/debug-proxy/src/adapter/mysql.rs`, removed from the tree 2026-07 — recover via `git log --follow -- reference/debug-proxy/`) already used dynamic `sqlx::query`/`query_as`; that pattern is the production path.
 
 Exceptions:
 - Internal manifest schema queries against gaze-lens's own SQLite may use compile-time macros, since the DB schema is owned and stable.
