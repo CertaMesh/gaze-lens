@@ -2,7 +2,7 @@ use gaze_lens::cli::serve::{ServeArgs, prepare_session_for_test};
 use gaze_lens::frontend::mcp::McpFrontend;
 use gaze_lens::session::{CleanOutput, ToolCall};
 use gaze_lens::source::ToolArgs;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::{CallToolRequestParams, JsonObject};
 use rmcp::{ClientHandler, ServiceExt};
 
 #[derive(Clone, Default)]
@@ -147,12 +147,10 @@ async fn local_log_keyword_grep_rejects_raw_pii_but_matches_held_tokens_over_mcp
     let client = TestClient.serve(client_transport).await.expect("client");
 
     let tail = client
-        .call_tool(CallToolRequestParam {
-            name: "log_tail".into(),
-            arguments: serde_json::json!({"profile": "dev-log", "lines": 10})
-                .as_object()
-                .cloned(),
-        })
+        .call_tool(tool_request(
+            "log_tail",
+            serde_json::json!({"profile": "dev-log", "lines": 10}),
+        ))
         .await
         .expect("log_tail");
     let tail_text = tool_result_text(&tail);
@@ -160,18 +158,16 @@ async fn local_log_keyword_grep_rejects_raw_pii_but_matches_held_tokens_over_mcp
     let token = first_gaze_token(&tail_text).to_string();
 
     let raw_grep = client
-        .call_tool(CallToolRequestParam {
-            name: "log_grep".into(),
-            arguments: serde_json::json!({
+        .call_tool(tool_request(
+            "log_grep",
+            serde_json::json!({
                 "profile": "dev-log",
                 "pattern": "bob@example.com",
                 "mode": "keyword",
                 "limit": 5,
                 "refresh": true
-            })
-            .as_object()
-            .cloned(),
-        })
+            }),
+        ))
         .await
         .expect("log_grep raw keyword");
     let raw_grep_text = tool_result_text(&raw_grep);
@@ -191,18 +187,16 @@ async fn local_log_keyword_grep_rejects_raw_pii_but_matches_held_tokens_over_mcp
     );
 
     let grep = client
-        .call_tool(CallToolRequestParam {
-            name: "log_grep".into(),
-            arguments: serde_json::json!({
+        .call_tool(tool_request(
+            "log_grep",
+            serde_json::json!({
                 "profile": "dev-log",
                 "pattern": token,
                 "mode": "keyword",
                 "limit": 5,
                 "refresh": true
-            })
-            .as_object()
-            .cloned(),
-        })
+            }),
+        ))
         .await
         .expect("log_grep keyword");
     let grep_text = tool_result_text(&grep);
@@ -320,10 +314,18 @@ fn tool_result_text(result: &rmcp::model::CallToolResult) -> String {
     result
         .content
         .first()
-        .and_then(|content| content.raw.as_text())
+        .and_then(|content| content.as_text())
         .map(|text| text.text.as_str())
         .expect("text result")
         .to_string()
+}
+
+fn tool_request(name: &'static str, arguments: serde_json::Value) -> CallToolRequestParams {
+    CallToolRequestParams::new(name).with_arguments(json_object(arguments))
+}
+
+fn json_object(value: serde_json::Value) -> JsonObject {
+    value.as_object().expect("object arguments").clone()
 }
 
 fn first_gaze_token(text: &str) -> &str {

@@ -8,7 +8,7 @@ use gaze_lens::source::db::query::CannedQuery;
 use gaze_lens::source::db::{ColumnInfo, DbKind, DbSource, TableSchema};
 use gaze_lens::source::{DbSourceWrapper, FakeSource, SourceOutput, ToolArgs};
 use gaze_lens::value::{LensRow, LensValue};
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::{CallToolRequestParams, JsonObject};
 use rmcp::{ClientHandler, ServiceExt};
 
 #[derive(Clone, Default)]
@@ -66,23 +66,21 @@ async fn mcp_duplex_query_roundtrips_manifest_and_snapshot() {
     );
 
     let result = client
-        .call_tool(CallToolRequestParam {
-            name: "query".into(),
-            arguments: serde_json::json!({
+        .call_tool(tool_request(
+            "query",
+            serde_json::json!({
                 "profile": "default",
                 "table": "users",
                 "columns": ["email"],
                 "limit": 1
-            })
-            .as_object()
-            .cloned(),
-        })
+            }),
+        ))
         .await
         .expect("call tool");
     let result_text = result
         .content
         .first()
-        .and_then(|content| content.raw.as_text())
+        .and_then(|content| content.as_text())
         .map(|text| text.text.as_str())
         .expect("text result");
     assert!(!result_text.contains("alice@example.com"));
@@ -92,12 +90,10 @@ async fn mcp_duplex_query_roundtrips_manifest_and_snapshot() {
     assert!(snapshot_path.exists(), "snapshot should exist");
 
     let tail = client
-        .call_tool(CallToolRequestParam {
-            name: "log_tail".into(),
-            arguments: serde_json::json!({"profile": "default", "lines": 10})
-                .as_object()
-                .cloned(),
-        })
+        .call_tool(tool_request(
+            "log_tail",
+            serde_json::json!({"profile": "default", "lines": 10}),
+        ))
         .await
         .expect("log_tail");
     let tail_text = tool_result_text(&tail);
@@ -105,17 +101,15 @@ async fn mcp_duplex_query_roundtrips_manifest_and_snapshot() {
     assert!(!tail_text.contains("bob@example.com"));
 
     let grep = client
-        .call_tool(CallToolRequestParam {
-            name: "log_grep".into(),
-            arguments: serde_json::json!({
+        .call_tool(tool_request(
+            "log_grep",
+            serde_json::json!({
                 "profile": "default",
                 "pattern": "bob@example.com",
                 "level": "ERROR",
                 "limit": 5
-            })
-            .as_object()
-            .cloned(),
-        })
+            }),
+        ))
         .await
         .expect("log_grep");
     let grep_text = tool_result_text(&grep);
@@ -152,10 +146,18 @@ fn tool_result_text(result: &rmcp::model::CallToolResult) -> String {
     result
         .content
         .first()
-        .and_then(|content| content.raw.as_text())
+        .and_then(|content| content.as_text())
         .map(|text| text.text.as_str())
         .expect("text result")
         .to_string()
+}
+
+fn tool_request(name: &'static str, arguments: serde_json::Value) -> CallToolRequestParams {
+    CallToolRequestParams::new(name).with_arguments(json_object(arguments))
+}
+
+fn json_object(value: serde_json::Value) -> JsonObject {
+    value.as_object().expect("object arguments").clone()
 }
 
 fn log_lines() -> Vec<String> {
