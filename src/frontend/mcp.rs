@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::tool::Parameters;
-use rmcp::model::{CallToolResult, Content, ErrorData};
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{CallToolResult, ContentBlock, ErrorData};
 use rmcp::transport::stdio;
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
@@ -197,7 +197,7 @@ impl McpFrontend {
         let args = args.map_err(|err| ErrorData::internal_error(err.to_string(), None))?;
         match self.dispatch(tool_name, args).await {
             Ok(result) => serde_json::to_string(&result)
-                .map(|json| CallToolResult::success(vec![Content::text(json)]))
+                .map(|json| CallToolResult::success(vec![ContentBlock::text(json)]))
                 .map_err(|err| ErrorData::internal_error(err.to_string(), None)),
             Err(err) if err.is_invalid_params() => {
                 Err(ErrorData::invalid_params(sanitize_error(&err), None))
