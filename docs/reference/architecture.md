@@ -185,9 +185,9 @@ PR3:
 - New frontends behind `Frontend` trait — additive only (e.g. v2 HTTP intake daemon per SDK ingest).
 - Coupling source==frontend is forbidden; v2 daemon mode must reuse the same redaction path.
 
-## Historical reference: `reference/debug-proxy/`
+## Historical reference: `reference/debug-proxy/` (removed)
 
-`reference/debug-proxy/` is the historical predecessor crate extracted from the Gaze monorepo (`crates/debug-proxy/`). It is retained for archaeology only — the [file-by-file mining verdict](#file-by-file-mining-verdict-debug-proxy--gaze-lens) above records what was lifted, hardened, restructured, or dropped from it. It is excluded from the published package and is not part of the active public source or build.
+`reference/debug-proxy/` was the historical predecessor crate extracted from the Gaze monorepo (`crates/debug-proxy/`). It was retained in-tree for archaeology through v0.5.3 and removed in 2026-07; recover it via `git log --follow -- reference/debug-proxy/`. The [file-by-file mining verdict](#file-by-file-mining-verdict-debug-proxy--gaze-lens) above records what was lifted, hardened, restructured, or dropped from it. It was never part of the published package or the active public source or build.
 
 ## See also
 
