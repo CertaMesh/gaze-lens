@@ -699,7 +699,7 @@ fn validate_structured_key(key: &str) -> Option<&str> {
 fn value_after_separator(line: &str, value_start: usize) -> Option<&str> {
     let after = line[value_start..].trim_start();
     let value = if let Some(quoted) = after.strip_prefix('"') {
-        let end = quoted.find('"')?;
+        let end = closing_json_quote_index(quoted)?;
         &quoted[..end]
     } else {
         let first = after.chars().next()?;
@@ -713,6 +713,18 @@ fn value_after_separator(line: &str, value_start: usize) -> Option<&str> {
         &after[..end]
     };
     validate_structured_value(value)
+}
+
+fn closing_json_quote_index(quoted: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (index, ch) in quoted.char_indices() {
+        match ch {
+            '"' if !escaped => return Some(index),
+            '\\' if !escaped => escaped = true,
+            _ => escaped = false,
+        }
+    }
+    None
 }
 
 fn validate_structured_value(value: &str) -> Option<&str> {
@@ -735,7 +747,7 @@ fn is_structured_value_start(ch: char) -> bool {
 }
 
 fn is_unquoted_value_terminator(ch: char) -> bool {
-    ch.is_whitespace() || matches!(ch, ',' | ';' | ')' | '}' | ']')
+    ch.is_whitespace() || matches!(ch, '&' | '"' | ',' | ';' | ')' | '}' | ']')
 }
 
 fn collect_gaze_tokens(chunk: &str, terms: &mut BTreeSet<String>) {
@@ -1002,6 +1014,39 @@ mod tests {
     }
 
     #[test]
+    fn keyword_search_does_not_match_truncated_escaped_json_value_term() {
+        let escaped_line = r#"INFO {"msg":"foo\"bar","status":"escaped"}"#;
+        let exact_line = r#"INFO {"msg":"foo","status":"exact"}"#;
+        let window = redacted_window([escaped_line, exact_line]);
+
+        let clean = filter_keyword_window(&window, &keyword_request("msg:foo", 10))
+            .expect("keyword search");
+
+        let (metadata, lines) = clean_text_parts(clean);
+        assert_eq!(metadata["status"], "matches");
+        assert_eq!(metadata["matched_lines"], 1);
+        assert_eq!(metadata["returned_lines"], 1);
+        assert_eq!(lines, vec![exact_line]);
+    }
+
+    #[test]
+    fn keyword_search_matches_url_query_string_key_value_terms() {
+        let release_line = r#"INFO url="https://example.test/callback?release_id=43301&album_id=9000" status=queued"#;
+        let album_line =
+            r#"ERROR url="https://example.test/callback?album_id=43301" status=wrong_field"#;
+        let window = redacted_window([release_line, album_line]);
+
+        let clean = filter_keyword_window(&window, &keyword_request("release_id:43301", 10))
+            .expect("keyword search");
+
+        let (metadata, lines) = clean_text_parts(clean);
+        assert_eq!(metadata["status"], "matches");
+        assert_eq!(metadata["matched_lines"], 1);
+        assert_eq!(metadata["returned_lines"], 1);
+        assert_eq!(lines, vec![release_line]);
+    }
+
+    #[test]
     fn keyword_search_does_not_cross_bind_key_value_terms() {
         let album_line = r#"ERROR {"context":{"album_id":43301},"status":"wrong_field"}"#;
         let window = redacted_window([album_line]);
@@ -1027,6 +1072,26 @@ mod tests {
         assert!(terms.contains("actor:<email:addr_1>"), "{terms:?}");
         assert!(terms.contains("release_id"), "{terms:?}");
         assert!(terms.contains("43301"), "{terms:?}");
+    }
+
+    #[test]
+    fn indexed_line_terms_keep_escaped_json_quotes_inside_values() {
+        let terms = indexed_line_terms(r#"INFO {"msg":"foo\"bar","status":"queued"}"#);
+
+        assert!(terms.contains(r#"msg:foo\"bar"#), "{terms:?}");
+        assert!(!terms.contains("msg:foo"), "{terms:?}");
+        assert!(terms.contains("status:queued"), "{terms:?}");
+    }
+
+    #[test]
+    fn indexed_line_terms_split_url_query_string_values() {
+        let terms = indexed_line_terms(
+            r#"INFO url="https://example.test/callback?release_id=43301&album_id=9000" status=queued"#,
+        );
+
+        assert!(terms.contains("release_id:43301"), "{terms:?}");
+        assert!(terms.contains("album_id:9000"), "{terms:?}");
+        assert!(terms.contains("status:queued"), "{terms:?}");
     }
 
     #[test]
