@@ -269,6 +269,7 @@ fn scope_from_index(i: usize) -> InitScope {
 fn build_profile_section_skeleton(args: &InitArgs, name: &str, kind: SourceKind) -> ProfileSection {
     ProfileSection {
         name: name.to_string(),
+        production: args.production,
         source_kind: kind,
         source_host: args.source_host.clone(),
         source_port: args.source_port,
@@ -695,6 +696,9 @@ pub fn render_preview(plan: &InitPlan) -> String {
         scope_label(plan.profile_scope)
     ));
     out.push_str(&format!("name = {:?}\n", plan.profile_section.name));
+    if plan.profile_section.production {
+        out.push_str("production = true\n");
+    }
     out.push_str(&format!(
         "kind = {}\n",
         kind_to_toml_str(plan.profile_section.source_kind)

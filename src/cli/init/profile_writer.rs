@@ -121,6 +121,9 @@ pub fn render_profile_toml(
 fn build_profile_table(s: &ProfileSection) -> Table {
     let mut t = Table::new();
     t.insert("name", toml_edit::value(s.name.as_str()));
+    if s.production {
+        t.insert("production", toml_edit::value(true));
+    }
     if let Some(p) = &s.policy_path {
         t.insert("policy", toml_edit::value(p.to_string_lossy().into_owned()));
     }
