@@ -804,7 +804,7 @@ fn check_explain_risk_text_appends_after_status_lines() {
     let stdout = stdout(&output);
     assert!(
         stdout.starts_with(&format!(
-            "profile: ok (local)\npolicy: ok\n{LOCAL_PRESERVE_WARNING}\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
+            "profile: ok (local)\npolicy: ok\n{LOCAL_PRESERVE_WARNING}\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: skipped (--explain-risk local-only)\n"
         )),
         "{stdout}"
     );

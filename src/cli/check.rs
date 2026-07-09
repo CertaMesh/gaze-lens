@@ -90,6 +90,16 @@ async fn run_with_writer_and_verifier(
     }
 
     let validated_policy = load_policy_only(&profile)?;
+    let pipeline_built = if should_build_pipeline_before_policy_status(
+        &profile,
+        args.explain_risk,
+        model_check_mode,
+    ) {
+        let _pipeline = build_pipeline_late(&validated_policy.policy)?;
+        true
+    } else {
+        false
+    };
     write_status_line(json_mode, out, stderr, "policy: ok")?;
     verify_model_if_required(
         ModelVerification {
@@ -125,7 +135,12 @@ async fn run_with_writer_and_verifier(
             stderr,
             "source: skipped (--explain-risk local-only)",
         )?;
-        write_status_line(json_mode, out, stderr, "pipeline: ok")?;
+        write_status_line(
+            json_mode,
+            out,
+            stderr,
+            "pipeline: skipped (--explain-risk local-only)",
+        )?;
 
         let manifest = default_manifest_path();
         let snapshot_dir = default_snapshot_dir();
@@ -181,7 +196,9 @@ async fn run_with_writer_and_verifier(
     writeln!(out, "source: ok").map_err(write_error)?;
 
     if matches!(model_check_mode, ModelCheckMode::Full) {
-        let _pipeline = build_pipeline_late(&validated_policy.policy)?;
+        if !pipeline_built {
+            let _pipeline = build_pipeline_late(&validated_policy.policy)?;
+        }
         writeln!(out, "pipeline: ok").map_err(write_error)?;
     }
     Ok(())
@@ -355,6 +372,14 @@ struct ModelVerification<'a> {
     verifier: &'a dyn BundleVerifier,
     explain_risk: bool,
     mode: ModelCheckMode,
+}
+
+fn should_build_pipeline_before_policy_status(
+    profile: &crate::profile::Profile,
+    explain_risk: bool,
+    model_check_mode: ModelCheckMode,
+) -> bool {
+    !profile.production && !explain_risk && matches!(model_check_mode, ModelCheckMode::Full)
 }
 
 fn load_policy_only(profile: &crate::profile::Profile) -> Result<ValidatedPolicy, LensError> {
