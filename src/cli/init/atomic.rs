@@ -15,7 +15,7 @@
 compile_error!("gaze-lens v0.2.1 supports Unix only; Windows tracked for v0.2.2");
 
 use std::fs::{File, OpenOptions, Permissions};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
@@ -79,11 +79,17 @@ pub fn atomic_write(dest: &Path, contents: &[u8]) -> Result<(), LensError> {
 }
 
 /// Returns true iff writing `new` to `dest` would change the file's bytes.
-/// Read failure (missing file) → true (write needed).
-pub fn would_write(dest: &Path, new: &[u8]) -> bool {
+/// Missing file → true (write needed); other read errors fail closed.
+pub fn would_write(dest: &Path, new: &[u8]) -> Result<bool, LensError> {
     match std::fs::read(dest) {
-        Ok(existing) => existing != new,
-        Err(_) => true,
+        Ok(existing) => Ok(existing != new),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(LensError::Profile {
+            detail: format!(
+                "failed to read existing destination {} before atomic write: {err}",
+                dest.display()
+            ),
+        }),
     }
 }
 

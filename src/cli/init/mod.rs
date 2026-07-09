@@ -1,6 +1,5 @@
 use std::cell::RefCell;
-use std::io::IsTerminal;
-use std::io::Write;
+use std::io::{ErrorKind, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{ArgAction, Args, ValueEnum};
@@ -477,7 +476,7 @@ fn commit_plan_with_prompter(
 
     for write in &writes {
         ensure_parent_dir_for_write(&write.path, plan)?;
-        if atomic::would_write(&write.path, &write.bytes) {
+        if atomic::would_write(&write.path, &write.bytes)? {
             if let Err(err) = write_one(w, &mut applied, &mut pending, &write.path, &write.bytes) {
                 if let Some((service, account)) = &keyring_entry_committed {
                     emit_orphan_warning(format!(
@@ -590,6 +589,25 @@ struct RenderedWrite {
     bytes: Vec<u8>,
 }
 
+fn read_existing_production_policy(path: &Path) -> Result<Option<String>, LensError> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) if err.kind() == ErrorKind::InvalidData => Err(LensError::Profile {
+            detail: format!(
+                "malformed production policy {}: existing policy is not valid UTF-8",
+                path.display()
+            ),
+        }),
+        Err(err) => Err(LensError::Profile {
+            detail: format!(
+                "failed to read existing production policy {}: {err}",
+                path.display()
+            ),
+        }),
+    }
+}
+
 fn render_plan_writes(
     args: &InitArgs,
     plan: &plan::InitPlan,
@@ -631,7 +649,7 @@ fn render_plan_writes(
     });
 
     if let Some(intent) = &plan.policy_write {
-        let existing_policy = std::fs::read_to_string(&intent.path).ok();
+        let existing_policy = read_existing_production_policy(&intent.path)?;
         let outcome = policy_writer::render_production_policy_for_path(
             existing_policy.as_deref(),
             &intent.model_dir,
