@@ -44,6 +44,8 @@ This default CI path must stay self-contained: no Docker, no live database, no p
 
 `Cargo.toml` pins `gaze` to crates.io `gaze-pii` through Cargo's `package = "gaze-pii"` alias, plus `gaze-recognizers` and `gaze-mcp-core` from crates.io. Do not silently float these dependencies. When adopting new Gaze features, bump the crates.io versions together in `Cargo.toml`, run `cargo update -p gaze-pii -p gaze-recognizers -p gaze-mcp-core`, and bump the gaze-lens version in the same PR.
 
+For Gaze version-bump PRs, keep the lockfile update targeted to the Gaze family only: never run bare `cargo update`. Unrelated resolver drift, such as the `windows-sys` churn carried by PR #109, makes `Cargo.lock` diffs harder to review.
+
 During an in-flight v0.x.y release cycle, Gaze dependency bumps inside that cycle do not require an immediate gaze-lens patch version bump; the release cut rolls up the Gaze bump with the rest of the cycle's changes. For patches to an already-shipped release line, bump the gaze-lens patch version in the same PR as the Gaze dependency change.
 
 Local development can use a local Gaze checkout through a per-developer Cargo patch. Add this to `~/.cargo/config.toml` and do not commit it:
