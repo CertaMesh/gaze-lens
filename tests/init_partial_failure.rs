@@ -32,7 +32,7 @@ fn batch_partial_when_mcp_write_fails_after_profile_succeeds() {
     // FailingWriter passes through 1 write (profile lands), then fails on
     // the second (MCP target).
     let mut w = FailingWriter::new(1);
-    let err = commit_plan_for_test(&args, &plan, &mut w).expect_err("must fail");
+    let err = commit_plan_for_test(&args, &plan, &mut w, None).expect_err("must fail");
 
     match err {
         LensError::BatchPartial {

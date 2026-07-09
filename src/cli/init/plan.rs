@@ -120,11 +120,24 @@ pub struct AgentsMdPatch {
     pub also_claude_md: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyWriteIntent {
+    pub path: PathBuf,
+    pub model_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchIntent {
+    pub model_dir: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone)]
 pub struct InitPlan {
     pub profile_path: PathBuf,
     pub profile_scope: InitScope,
     pub profile_section: ProfileSection,
+    pub policy_write: Option<PolicyWriteIntent>,
+    pub fetch_intent: Option<FetchIntent>,
     pub mcp_targets: Vec<McpTarget>,
     pub agents_md: Option<AgentsMdPatch>,
     /// In-memory password value for the smoke-check phase. Never persisted to

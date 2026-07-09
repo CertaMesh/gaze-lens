@@ -66,8 +66,23 @@ fn would_write_returns_false_when_bytes_match() {
     create_dir_0700_if_missing(&parent).unwrap();
     let target = parent.join("a.toml");
     atomic_write(&target, b"same").unwrap();
-    assert!(!would_write(&target, b"same"));
-    assert!(would_write(&target, b"different"));
+    assert!(!would_write(&target, b"same").unwrap());
+    assert!(would_write(&target, b"different").unwrap());
+}
+
+#[test]
+fn would_write_fails_closed_when_existing_destination_cannot_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("destination-as-directory");
+    std::fs::create_dir(&target).unwrap();
+
+    let err = would_write(&target, b"different").expect_err("read error must fail closed");
+
+    assert!(
+        err.to_string()
+            .contains("failed to read existing destination"),
+        "{err}"
+    );
 }
 
 #[test]

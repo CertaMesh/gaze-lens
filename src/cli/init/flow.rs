@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::init::discovery::{DISCOVERY_PATH_CHOICES, DISCOVERY_PATH_PROMPT, DiscoveryPath};
 use crate::cli::init::plan::{
     AgentsMdPatch, AutoPurgeChoice, CredentialClass, InitPlan, McpTarget, PlannedSecret,
-    ProfileSection,
+    PolicyWriteIntent, ProfileSection,
 };
 use crate::cli::init::prompter::{PromptError, Prompter};
 use crate::cli::init::ssh_exec::SshExec;
@@ -210,6 +210,19 @@ pub fn run_guided<P: Prompter>(
         _ => AutoPurgeChoice::Off,
     };
 
+    let mut policy_write = None;
+    if should_configure_production(args, p)? {
+        section.production = true;
+        let model_dir =
+            crate::cli::init::model_fetch::resolve_model_dir(args.model_dir.as_deref())?;
+        let policy_path = resolve_policy_path(scope, &name, env);
+        section.policy_path = Some(policy_path.clone());
+        policy_write = Some(PolicyWriteIntent {
+            path: policy_path,
+            model_dir,
+        });
+    }
+
     // Step 6 — MCP targets.
     let mcp_targets = if args.no_mcp_config {
         Vec::new()
@@ -229,6 +242,8 @@ pub fn run_guided<P: Prompter>(
         profile_path,
         profile_scope: scope,
         profile_section: section,
+        policy_write,
+        fetch_intent: None,
         mcp_targets,
         agents_md,
         smoke_check_password_env_value: None,
@@ -269,7 +284,7 @@ fn scope_from_index(i: usize) -> InitScope {
 fn build_profile_section_skeleton(args: &InitArgs, name: &str, kind: SourceKind) -> ProfileSection {
     ProfileSection {
         name: name.to_string(),
-        production: args.production,
+        production: false,
         source_kind: kind,
         source_host: args.source_host.clone(),
         source_port: args.source_port,
@@ -290,6 +305,27 @@ fn build_profile_section_skeleton(args: &InitArgs, name: &str, kind: SourceKind)
         discovered_ssh_host_key_fingerprint: None,
         credential_class: CredentialClass::ManuallyEntered,
         auto_purge: AutoPurgeChoice::Off,
+    }
+}
+
+fn should_configure_production<P: Prompter>(args: &InitArgs, p: &mut P) -> Result<bool, LensError> {
+    if args.production {
+        return Ok(true);
+    }
+    if args.non_interactive {
+        return Ok(false);
+    }
+    p.confirm("Is this a production data source?", false)
+        .map_err(prompt_to_lens)
+}
+
+fn resolve_policy_path(scope: InitScope, profile_name: &str, env: &InitEnv) -> PathBuf {
+    match scope {
+        InitScope::Project | InitScope::ProjectAutoPurge => env.cwd.join("gaze-policy.toml"),
+        InitScope::User => env
+            .home
+            .join(".gaze-lens")
+            .join(format!("{profile_name}-policy.toml")),
     }
 }
 
@@ -711,6 +747,13 @@ pub fn render_preview(plan: &InitPlan) -> String {
     }
     if matches!(plan.profile_section.auto_purge, AutoPurgeChoice::Purge) {
         out.push_str("auto_purge = \"purge\"\n");
+    }
+    if let Some(intent) = &plan.policy_write {
+        out.push_str(&format!("policy -> {}\n", intent.path.display()));
+        out.push_str(&format!(
+            "model: not installed yet ({}) - provisioning deferred; run with --fetch-model after the gaze-model-setup release or run gaze setup\n",
+            intent.model_dir.display()
+        ));
     }
     out.push_str(&format!(
         "--- mcp targets ({}) ---\n",
