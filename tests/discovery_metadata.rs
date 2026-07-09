@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
-use assert_cmd::Command;
+use assert_cmd::cargo::CommandCargoExt;
 use async_trait::async_trait;
 use gaze_lens::frontend::mcp::McpFrontend;
 use gaze_lens::session::manifest::{LensManifestStore, SnapshotRef};
@@ -239,6 +240,7 @@ fn serve_print_discovery_lists_db_and_log_profiles_without_starting_mcp() {
                 .to_str()
                 .expect("snapshot dir"),
         ])
+        .stdin(Stdio::null())
         .output()
         .expect("serve --print-discovery");
 
@@ -306,6 +308,7 @@ fn serve_print_discovery_schema_tokenize_does_not_leak_raw_labels() {
                 .to_str()
                 .expect("snapshot dir"),
         ])
+        .stdin(Stdio::null())
         .output()
         .expect("serve --print-discovery");
 
