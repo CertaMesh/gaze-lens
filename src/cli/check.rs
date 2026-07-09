@@ -4,8 +4,12 @@ use std::path::Path;
 use clap::Args;
 use zeroize::Zeroizing;
 
+use crate::cli::init::model_fetch::BundleVerifier;
 use crate::errors::LensError;
-use crate::policy::{PolicyFile, build_pipeline, enforce_production_ner};
+use crate::policy::{
+    PolicyFile, build_pipeline as build_policy_pipeline, enforce_production_ner,
+    validate_policy_file,
+};
 use crate::profile::{SourceSpec, load_profile};
 use crate::source::db::connect_db_source_with_password;
 use crate::source::log::ssh_log::{SshLogCaps, SshLogSource};
@@ -41,6 +45,28 @@ async fn run_with_writer(
     out: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<(), LensError> {
+    let verifier = DeferredBundleVerifier;
+    run_with_writer_and_verifier(
+        args,
+        project_config,
+        user_config,
+        out,
+        stderr,
+        &verifier,
+        ModelCheckMode::Full,
+    )
+    .await
+}
+
+async fn run_with_writer_and_verifier(
+    args: CheckArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+    out: &mut dyn Write,
+    stderr: &mut dyn Write,
+    verifier: &dyn BundleVerifier,
+    model_check_mode: ModelCheckMode,
+) -> Result<(), LensError> {
     let profile = load_profile(&args.profile, project_config, user_config)?;
     let json_mode = args.explain_risk && matches!(args.format, TrustFormat::Json);
     write_status_line(
@@ -63,8 +89,30 @@ async fn run_with_writer(
         )?;
     }
 
-    let validated_policy = validate_policy(&profile)?;
+    let validated_policy = load_policy_only(&profile)?;
+    let pipeline_built = if should_build_pipeline_before_policy_status(
+        &profile,
+        args.explain_risk,
+        model_check_mode,
+    ) {
+        let _pipeline = build_pipeline_late(&validated_policy.policy)?;
+        true
+    } else {
+        false
+    };
     write_status_line(json_mode, out, stderr, "policy: ok")?;
+    verify_model_if_required(
+        ModelVerification {
+            json_mode,
+            profile: &profile,
+            policy: &validated_policy.policy,
+            verifier,
+            explain_risk: args.explain_risk,
+            mode: model_check_mode,
+        },
+        out,
+        stderr,
+    )?;
     if should_warn_email_regex_only_redaction(&profile, &validated_policy.policy) {
         write_status_line(
             json_mode,
@@ -87,7 +135,12 @@ async fn run_with_writer(
             stderr,
             "source: skipped (--explain-risk local-only)",
         )?;
-        write_status_line(json_mode, out, stderr, "pipeline: ok")?;
+        write_status_line(
+            json_mode,
+            out,
+            stderr,
+            "pipeline: skipped (--explain-risk local-only)",
+        )?;
 
         let manifest = default_manifest_path();
         let snapshot_dir = default_snapshot_dir();
@@ -142,8 +195,12 @@ async fn run_with_writer(
     }
     writeln!(out, "source: ok").map_err(write_error)?;
 
-    let _pipeline = validated_policy.pipeline;
-    writeln!(out, "pipeline: ok").map_err(write_error)?;
+    if matches!(model_check_mode, ModelCheckMode::Full) {
+        if !pipeline_built {
+            let _pipeline = build_pipeline_late(&validated_policy.policy)?;
+        }
+        writeln!(out, "pipeline: ok").map_err(write_error)?;
+    }
     Ok(())
 }
 
@@ -167,6 +224,47 @@ pub async fn run_with_writers_for_test(
     stderr: &mut dyn Write,
 ) -> Result<(), LensError> {
     run_with_writer(args, project_config, user_config, out, stderr).await
+}
+
+#[doc(hidden)]
+pub async fn run_with_verifier_for_test(
+    args: CheckArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+    out: &mut dyn Write,
+    stderr: &mut dyn Write,
+    verifier: &dyn BundleVerifier,
+) -> Result<(), LensError> {
+    run_with_writer_and_verifier(
+        args,
+        project_config,
+        user_config,
+        out,
+        stderr,
+        verifier,
+        ModelCheckMode::Full,
+    )
+    .await
+}
+
+pub(crate) async fn run_deferred_model_smoke_check_with_writer(
+    args: CheckArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+    out: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<(), LensError> {
+    let verifier = DeferredBundleVerifier;
+    run_with_writer_and_verifier(
+        args,
+        project_config,
+        user_config,
+        out,
+        stderr,
+        &verifier,
+        ModelCheckMode::Deferred,
+    )
+    .await
 }
 
 fn write_error(err: std::io::Error) -> LensError {
@@ -239,10 +337,26 @@ fn source_error_hint(source: &SourceSpec) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelCheckMode {
+    Full,
+    Deferred,
+}
+
+struct DeferredBundleVerifier;
+
+impl BundleVerifier for DeferredBundleVerifier {
+    fn verify(&self, _model_dir: &Path) -> Result<(), LensError> {
+        Err(LensError::FeatureDeferred(
+            "model bundle verification is deferred until --fetch-model ships with gaze-model-setup"
+                .into(),
+        ))
+    }
+}
+
 struct ValidatedPolicy {
     parsed: Option<ParsedPolicy>,
     policy: PolicyFile,
-    pipeline: gaze::Pipeline,
 }
 
 struct ParsedPolicy {
@@ -251,13 +365,30 @@ struct ParsedPolicy {
     toml: toml::Value,
 }
 
-fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy, LensError> {
+struct ModelVerification<'a> {
+    json_mode: bool,
+    profile: &'a crate::profile::Profile,
+    policy: &'a PolicyFile,
+    verifier: &'a dyn BundleVerifier,
+    explain_risk: bool,
+    mode: ModelCheckMode,
+}
+
+fn should_build_pipeline_before_policy_status(
+    profile: &crate::profile::Profile,
+    explain_risk: bool,
+    model_check_mode: ModelCheckMode,
+) -> bool {
+    !profile.production && !explain_risk && matches!(model_check_mode, ModelCheckMode::Full)
+}
+
+fn load_policy_only(profile: &crate::profile::Profile) -> Result<ValidatedPolicy, LensError> {
     let Some(path) = &profile.policy else {
         let policy =
             PolicyFile::from_toml("[policy.database]\n").map_err(|err| LensError::Profile {
                 detail: format!("failed to parse policy: {err}"),
             })?;
-        let _ = policy.to_gaze_policy().map_err(|err| LensError::Profile {
+        validate_policy_file(&policy).map_err(|err| LensError::Profile {
             detail: err.to_string(),
         })?;
         enforce_production_ner(&profile.name, profile.production, &policy).map_err(|err| {
@@ -265,13 +396,9 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
                 detail: err.to_string(),
             }
         })?;
-        let pipeline = build_pipeline(&policy).map_err(|err| LensError::Profile {
-            detail: format!("failed to build policy pipeline: {err}"),
-        })?;
         return Ok(ValidatedPolicy {
             parsed: None,
             policy,
-            pipeline,
         });
     };
     let path = shellexpand::full(&path.to_string_lossy())
@@ -291,16 +418,13 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
     let policy: PolicyFile = toml.clone().try_into().map_err(|err| LensError::Profile {
         detail: format!("failed to parse policy: {err}"),
     })?;
-    let _ = policy.to_gaze_policy().map_err(|err| LensError::Profile {
+    validate_policy_file(&policy).map_err(|err| LensError::Profile {
         detail: err.to_string(),
     })?;
     enforce_production_ner(&profile.name, profile.production, &policy).map_err(|err| {
         LensError::Profile {
             detail: err.to_string(),
         }
-    })?;
-    let pipeline = build_pipeline(&policy).map_err(|err| LensError::Profile {
-        detail: format!("failed to build policy pipeline: {err}"),
     })?;
     Ok(ValidatedPolicy {
         parsed: Some(ParsedPolicy {
@@ -309,7 +433,62 @@ fn validate_policy(profile: &crate::profile::Profile) -> Result<ValidatedPolicy,
             toml,
         }),
         policy,
-        pipeline,
+    })
+}
+
+fn verify_model_if_required(
+    check: ModelVerification<'_>,
+    out: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<(), LensError> {
+    if !check.profile.production {
+        return Ok(());
+    }
+    let Some(model_dir) = check.policy.ner.model_dir.as_deref() else {
+        return Ok(());
+    };
+
+    if check.explain_risk {
+        return write_status_line(
+            check.json_mode,
+            out,
+            stderr,
+            "model: skipped (--explain-risk local-only)",
+        );
+    }
+
+    if matches!(check.mode, ModelCheckMode::Deferred) {
+        return write_status_line(
+            check.json_mode,
+            out,
+            stderr,
+            "model: deferred (not installed) - run `gaze-lens init --production --fetch-model` after the gaze-model-setup release or run `gaze setup`",
+        );
+    }
+
+    match check.verifier.verify(model_dir) {
+        Ok(()) => writeln!(out, "model: ok ({})", model_dir.display()).map_err(write_error),
+        Err(err) => {
+            writeln!(
+                stderr,
+                "model: NOT PROVISIONED ({}): {}; run `gaze-lens init --production --fetch-model` after the gaze-model-setup release or run `gaze setup`",
+                model_dir.display(),
+                err
+            )
+            .map_err(write_error)?;
+            Err(LensError::Profile {
+                detail: format!(
+                    "production NER model is not provisioned at {}; run `gaze-lens init --production --fetch-model` after the gaze-model-setup release or run `gaze setup`",
+                    model_dir.display()
+                ),
+            })
+        }
+    }
+}
+
+fn build_pipeline_late(policy: &PolicyFile) -> Result<gaze::Pipeline, LensError> {
+    build_policy_pipeline(policy).map_err(|err| LensError::Profile {
+        detail: format!("failed to build policy pipeline: {err}"),
     })
 }
 

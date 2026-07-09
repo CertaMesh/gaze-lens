@@ -804,7 +804,7 @@ fn check_explain_risk_text_appends_after_status_lines() {
     let stdout = stdout(&output);
     assert!(
         stdout.starts_with(&format!(
-            "profile: ok (local)\npolicy: ok\n{LOCAL_PRESERVE_WARNING}\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: ok\n"
+            "profile: ok (local)\npolicy: ok\n{LOCAL_PRESERVE_WARNING}\nsecret: skipped (--explain-risk local-only)\nsource: skipped (--explain-risk local-only)\npipeline: skipped (--explain-risk local-only)\n"
         )),
         "{stdout}"
     );
@@ -962,7 +962,7 @@ fn check_explain_risk_does_not_call_resolve_password() {
 }
 
 #[test]
-fn check_explain_risk_json_fails_loudly_when_pipeline_build_fails() {
+fn check_explain_risk_json_fails_loudly_when_policy_validation_fails() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
     let project = temp.path().join("project.toml");
@@ -998,7 +998,7 @@ fn check_explain_risk_json_fails_loudly_when_pipeline_build_fails() {
 
     assert!(!output.status.success(), "stdout: {}", stdout(&output));
     assert!(output.stdout.is_empty(), "stdout: {}", stdout(&output));
-    assert!(stderr(&output).contains("failed to build policy pipeline"));
+    assert!(stderr(&output).contains("invalid action"));
 }
 
 #[tokio::test]

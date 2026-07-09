@@ -18,7 +18,7 @@ fn default_no_appends_when_declined() {
     args.scope = Some(InitScope::User);
     args.no_mcp_config = true;
     // Default-N: user declines AGENTS.md append.
-    let mut p = FakePrompter::new().with_confirm(false);
+    let mut p = FakePrompter::new().with_confirm(false).with_confirm(false);
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     assert!(
         plan.agents_md.is_none(),

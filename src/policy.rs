@@ -176,6 +176,36 @@ impl PolicyFile {
     }
 }
 
+pub fn validate_policy_file(policy: &PolicyFile) -> Result<(), PolicyError> {
+    let _ = policy.to_gaze_policy()?;
+    let _ = ColumnActionPolicy::from_policy_file(policy)?;
+
+    let _ = parse_action(
+        policy
+            .policy
+            .default_action
+            .as_deref()
+            .unwrap_or("preserve"),
+        "policy.default_action",
+    )?;
+
+    if let Some(logs) = &policy.policy.logs {
+        for (index, pattern) in logs.strip_patterns.iter().enumerate() {
+            let _ = RegexDetector::with_source(
+                pattern,
+                PiiClass::custom("log_strip"),
+                &format!("log-strip-{index}"),
+            )
+            .map_err(|err| PolicyError::Recognizer(err.to_string()))?;
+        }
+        if !logs.strip_patterns.is_empty() {
+            let _ = parse_log_strip_action(logs.action.as_deref())?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn build_pipeline(policy: &PolicyFile) -> Result<Pipeline, PolicyError> {
     let mut builder = Pipeline::builder()
         .detector(RegexDetector::emails().map_err(|err| PolicyError::Recognizer(err.to_string()))?);
