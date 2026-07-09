@@ -14,6 +14,7 @@ pub mod discovery;
 pub mod flow;
 pub mod mcp_writer;
 pub mod plan;
+pub mod policy_writer;
 pub mod profile_writer;
 pub mod prompter;
 pub mod ssh_exec;
