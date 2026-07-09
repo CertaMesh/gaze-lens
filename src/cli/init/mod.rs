@@ -885,6 +885,19 @@ fn run_smoke_check_with_writer(
     let runtime = tokio::runtime::Runtime::new().map_err(|err| LensError::Internal {
         detail: err.to_string(),
     })?;
+    if plan.profile_section.production && plan.policy_write.is_some() && plan.fetch_intent.is_none()
+    {
+        let mut stderr = std::io::stderr();
+        return runtime.block_on(
+            crate::cli::check::run_deferred_model_smoke_check_with_writer(
+                check_args,
+                project_config,
+                user_config,
+                out,
+                &mut stderr,
+            ),
+        );
+    }
     runtime.block_on(crate::cli::check::run_with_writer_for_test(
         check_args,
         project_config,

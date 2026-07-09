@@ -47,3 +47,51 @@ fn non_interactive_sqlite_init_then_smoke_check_succeeds() {
         "smoke-check should have run check::run; stdout: {stdout}"
     );
 }
+
+#[test]
+fn production_sqlite_init_smoke_check_defers_model_and_succeeds() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&repo).unwrap();
+    let db = temp.path().join("lens.db");
+    std::fs::write(&db, b"").unwrap();
+    let model_dir = temp.path().join("models").join("kiji");
+
+    let out = Command::cargo_bin("gaze-lens")
+        .unwrap()
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .args([
+            "init",
+            "--non-interactive",
+            "--profile",
+            "prod",
+            "--source-kind",
+            "sqlite",
+            "--source-path",
+            db.to_str().unwrap(),
+            "--scope",
+            "project",
+            "--production",
+            "--model-dir",
+            model_dir.to_str().unwrap(),
+            "--no-mcp-config",
+            "--no-agents-md",
+            "--write-all",
+            "--smoke-check",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("model: deferred"), "{stdout}");
+    assert!(stdout.contains("source: ok"), "{stdout}");
+    assert!(!stdout.contains("pipeline: ok"), "{stdout}");
+}
