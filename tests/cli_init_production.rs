@@ -5,9 +5,41 @@ use gaze_lens::cli::init::model_fetch::FakeProvisioner;
 use gaze_lens::cli::init::plan::FetchIntent;
 use gaze_lens::cli::init::prompter::FakePrompter;
 use gaze_lens::cli::init::{InitArgs, InitScope, SourceKind, commit_plan_for_test};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::Output;
 
 fn bin() -> Command {
     Command::cargo_bin("gaze-lens").unwrap()
+}
+
+fn run_production_init_with_policy(cwd: &Path, project: &Path, allow_overwrite: bool) -> Output {
+    let model_dir = cwd.join("models").join("kiji");
+    let mut cmd = bin();
+    cmd.current_dir(cwd).args([
+        "--project-config",
+        project.to_str().expect("project path"),
+        "init",
+        "--non-interactive",
+        "--profile",
+        "prod",
+        "--source-kind",
+        "sqlite",
+        "--source-path",
+        "/tmp/prod.db",
+        "--scope",
+        "project",
+        "--production",
+        "--model-dir",
+        model_dir.to_str().expect("model path"),
+        "--no-mcp-config",
+        "--no-agents-md",
+    ]);
+    if allow_overwrite {
+        cmd.arg("--allow-policy-overwrite");
+    }
+    cmd.output().expect("run init")
 }
 
 #[test]
@@ -134,6 +166,85 @@ fn production_noninteractive_writes_profile_and_policy_deferred() {
         policy_toml.contains("default_action = \"tokenize\""),
         "{policy_toml}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn production_existing_policy_unreadable_refuses_even_with_policy_overwrite_flag() {
+    for allow_overwrite in [false, true] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path();
+        let project = cwd.join(".gaze-lens.toml");
+        let policy = cwd.join("gaze-policy.toml");
+        let original = "[policy]\ndefault_action = \"preserve\"\n";
+        std::fs::write(&policy, original).expect("policy");
+        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod policy");
+
+        let output = run_production_init_with_policy(cwd, &project, allow_overwrite);
+
+        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600))
+            .expect("restore policy mode");
+        assert!(
+            !output.status.success(),
+            "allow_overwrite={allow_overwrite} stdout: {} stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("failed to read existing production policy"),
+            "allow_overwrite={allow_overwrite} stderr: {stderr}"
+        );
+        assert!(
+            !project.exists(),
+            "profile must not be written after unreadable policy"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&policy).expect("policy"),
+            original,
+            "policy must remain untouched"
+        );
+    }
+}
+
+#[test]
+fn production_existing_policy_invalid_utf8_refuses_even_with_policy_overwrite_flag() {
+    for allow_overwrite in [false, true] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cwd = temp.path();
+        let project = cwd.join(".gaze-lens.toml");
+        let policy = cwd.join("gaze-policy.toml");
+        let original = b"\xff\xfe[policy]\n";
+        std::fs::write(&policy, original).expect("policy");
+
+        let output = run_production_init_with_policy(cwd, &project, allow_overwrite);
+
+        assert!(
+            !output.status.success(),
+            "allow_overwrite={allow_overwrite} stdout: {} stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("malformed production policy"),
+            "allow_overwrite={allow_overwrite} stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("not valid UTF-8"),
+            "allow_overwrite={allow_overwrite} stderr: {stderr}"
+        );
+        assert!(
+            !project.exists(),
+            "profile must not be written after malformed policy"
+        );
+        assert_eq!(
+            std::fs::read(&policy).expect("policy"),
+            original,
+            "policy must remain untouched"
+        );
+    }
 }
 
 #[test]
