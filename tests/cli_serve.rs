@@ -1,18 +1,21 @@
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use assert_cmd::cargo::CommandCargoExt;
 use async_trait::async_trait;
 use clap::Parser;
 use gaze_lens::cli::serve::{
-    ServeArgs, loaded_profiles_banner, prepare_session_for_test, run, run_frontend_until_shutdown,
+    ServeArgs, loaded_profiles_banner, prepare_session_for_test, run_frontend_until_shutdown,
 };
 use gaze_lens::cli::{Cli, Cmd};
-use gaze_lens::errors::LensError;
 use gaze_lens::frontend::mcp::McpFrontend;
 use gaze_lens::frontend::{Frontend, FrontendError, ShutdownToken};
 use gaze_lens::session::Session;
 use rmcp::model::ErrorCode;
 use rusqlite::Connection;
+
+mod support;
 
 struct ShutdownObservingFrontend {
     observed: Arc<AtomicBool>,
@@ -71,8 +74,8 @@ fn test_serve_parses_profile_and_paths() {
     );
 }
 
-#[tokio::test]
-async fn test_serve_mysql_profile_defers_password_until_first_call() {
+#[test]
+fn test_serve_mysql_profile_defers_password_until_first_call() {
     let temp = tempfile::tempdir().expect("tempdir");
     let project_config = temp.path().join("project.toml");
     let missing_env = format!("GAZE_LENS_TEST_MISSING_{}", ulid::Ulid::new());
@@ -97,21 +100,26 @@ readonly_required = true
     )
     .expect("write profile");
 
-    let err = run(
-        ServeArgs {
-            profile: vec!["prod".to_string()],
-            manifest: temp.path().join("manifest.sqlite"),
-            snapshot_dir: temp.path().join("snapshots"),
-            print_discovery: false,
-            log: None,
-        },
-        Some(&project_config),
-        Some(&empty_user_config(&temp)),
-    )
-    .await
-    .expect_err("stdio frontend exits in test harness");
+    let user_config = empty_user_config(&temp);
+    let output = support::serve_output(
+        Command::cargo_bin("gaze-lens")
+            .expect("binary")
+            .arg("--project-config")
+            .arg(&project_config)
+            .arg("--user-config")
+            .arg(&user_config)
+            .arg("serve")
+            .arg("--profile")
+            .arg("prod")
+            .arg("--manifest")
+            .arg(temp.path().join("manifest.sqlite"))
+            .arg("--snapshot-dir")
+            .arg(temp.path().join("snapshots")),
+    );
 
-    assert!(!matches!(err, LensError::ProfileEnvMissing { .. }));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("ProfileEnvMissing"), "{stderr}");
+    assert!(!stderr.contains(&missing_env), "{stderr}");
 }
 
 #[tokio::test]
