@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Arc;
 
 use assert_cmd::cargo::CommandCargoExt;
@@ -14,6 +14,8 @@ use gaze_lens::source::db::{ColumnInfo, DbKind, DbSource, TableSchema};
 use gaze_lens::source::{DbSourceWrapper, SchemaPresentation};
 use gaze_lens::value::LensRow;
 use rusqlite::Connection;
+
+mod support;
 
 fn policy() -> gaze::Policy {
     let mut policy = gaze::Policy::default();
@@ -222,9 +224,8 @@ fn serve_print_discovery_lists_db_and_log_profiles_without_starting_mcp() {
     seed_sqlite(&db);
     write_profiles(&project, &db);
 
-    let output = Command::cargo_bin("gaze-lens")
-        .expect("binary")
-        .args([
+    let output = support::serve_output(
+        Command::cargo_bin("gaze-lens").expect("binary").args([
             "--project-config",
             project.to_str().expect("project path"),
             "serve",
@@ -239,10 +240,8 @@ fn serve_print_discovery_lists_db_and_log_profiles_without_starting_mcp() {
                 .join("snapshots")
                 .to_str()
                 .expect("snapshot dir"),
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .expect("serve --print-discovery");
+        ]),
+    );
 
     assert!(
         output.status.success(),
@@ -290,9 +289,8 @@ fn serve_print_discovery_schema_tokenize_does_not_leak_raw_labels() {
     seed_tokenized_sqlite(&db);
     write_tokenized_profiles(&project, &db);
 
-    let output = Command::cargo_bin("gaze-lens")
-        .expect("binary")
-        .args([
+    let output = support::serve_output(
+        Command::cargo_bin("gaze-lens").expect("binary").args([
             "--project-config",
             project.to_str().expect("project path"),
             "serve",
@@ -307,10 +305,8 @@ fn serve_print_discovery_schema_tokenize_does_not_leak_raw_labels() {
                 .join("snapshots")
                 .to_str()
                 .expect("snapshot dir"),
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .expect("serve --print-discovery");
+        ]),
+    );
 
     assert!(
         output.status.success(),

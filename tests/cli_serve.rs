@@ -1,4 +1,4 @@
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -14,6 +14,8 @@ use gaze_lens::frontend::{Frontend, FrontendError, ShutdownToken};
 use gaze_lens::session::Session;
 use rmcp::model::ErrorCode;
 use rusqlite::Connection;
+
+mod support;
 
 struct ShutdownObservingFrontend {
     observed: Arc<AtomicBool>,
@@ -99,22 +101,21 @@ readonly_required = true
     .expect("write profile");
 
     let user_config = empty_user_config(&temp);
-    let output = Command::cargo_bin("gaze-lens")
-        .expect("binary")
-        .arg("--project-config")
-        .arg(&project_config)
-        .arg("--user-config")
-        .arg(&user_config)
-        .arg("serve")
-        .arg("--profile")
-        .arg("prod")
-        .arg("--manifest")
-        .arg(temp.path().join("manifest.sqlite"))
-        .arg("--snapshot-dir")
-        .arg(temp.path().join("snapshots"))
-        .stdin(Stdio::null())
-        .output()
-        .expect("serve with closed stdin");
+    let output = support::serve_output(
+        Command::cargo_bin("gaze-lens")
+            .expect("binary")
+            .arg("--project-config")
+            .arg(&project_config)
+            .arg("--user-config")
+            .arg(&user_config)
+            .arg("serve")
+            .arg("--profile")
+            .arg("prod")
+            .arg("--manifest")
+            .arg(temp.path().join("manifest.sqlite"))
+            .arg("--snapshot-dir")
+            .arg(temp.path().join("snapshots")),
+    );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("ProfileEnvMissing"), "{stderr}");
