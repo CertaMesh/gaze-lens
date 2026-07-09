@@ -581,8 +581,8 @@ fn non_empty_level(level: Option<&str>) -> Option<&str> {
     level.filter(|value| !value.is_empty())
 }
 
-fn grep_metadata_required(matched_lines: usize, truncated_at: &[TruncatedAt]) -> bool {
-    matched_lines == 0 || !truncated_at.is_empty()
+fn grep_metadata_required(_: usize, _: &[TruncatedAt]) -> bool {
+    true
 }
 
 fn grep_status(matched_lines: usize, truncated_at: &[TruncatedAt]) -> &'static str {
@@ -957,6 +957,41 @@ mod tests {
         assert!(text.contains("\"searched_lines\":1"), "{text}");
         assert!(text.contains("\"matched_lines\":0"), "{text}");
         assert!(text.contains("\"searched_bytes\":18"), "{text}");
+    }
+
+    #[test]
+    fn matched_grep_renders_metadata_before_matches() {
+        let source = test_source();
+        let re = regex::Regex::new("43301").expect("regex");
+
+        let output = source.filter_grep_output(
+            "43301",
+            None,
+            100,
+            SshLogOutput {
+                lines: vec!["ERROR release_id=43301 first".to_string()],
+                truncated_at: Vec::new(),
+                bytes: 29,
+                metadata: None,
+            },
+            &re,
+            None,
+        );
+
+        assert_eq!(output.lines, vec!["ERROR release_id=43301 first"]);
+        assert!(output.truncated_at.is_empty());
+        let metadata = output.metadata.as_ref().expect("metadata");
+        assert_eq!(metadata.status, "matches");
+        assert_eq!(metadata.matched_lines, 1);
+        assert_eq!(metadata.returned_lines, 1);
+        let text = output.into_text();
+        let mut lines = text.lines();
+        let metadata = lines.next().expect("metadata line");
+        assert!(metadata.contains("\"status\":\"matches\""), "{metadata}");
+        assert!(metadata.contains("\"matched_lines\":1"), "{metadata}");
+        assert!(metadata.contains("\"returned_lines\":1"), "{metadata}");
+        assert_eq!(lines.next(), Some("ERROR release_id=43301 first"));
+        assert_eq!(lines.next(), None);
     }
 
     #[test]
