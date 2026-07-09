@@ -14,6 +14,7 @@ use crate::session::{CleanOutput, ResultSummary, Session, TruncatedAt};
 use super::{clean_output_response, invoke_session_tool, lens_error_to_tool_error, schema_for};
 
 const KEYWORD_INDEX_CACHE_TTL: Duration = Duration::from_secs(3);
+const KEY_VALUE_TERM_MAX_VALUE_CHARS: usize = 64;
 
 static KEYWORD_INDEX_CACHE: OnceLock<KeywordIndexCache> = OnceLock::new();
 
@@ -556,9 +557,6 @@ fn keyword_metadata(
     matched_lines: usize,
     truncated_at: &[TruncatedAt],
 ) -> Result<Option<String>, ToolError> {
-    if matched_lines != 0 && truncated_at.is_empty() {
-        return Ok(None);
-    }
     let returned_lines = lines.len();
     let status = keyword_status(matched_lines, truncated_at);
     let value = if let Some(serde_json::Value::Object(existing)) = metadata {
@@ -637,6 +635,7 @@ fn keyword_query_terms(pattern: &str) -> Vec<String> {
 
 fn indexed_line_terms(line: &str) -> BTreeSet<String> {
     let mut terms = BTreeSet::new();
+    collect_key_value_terms(line, &mut terms);
     for chunk in line.split_whitespace() {
         if let Some(term) = normalize_keyword_term(chunk) {
             terms.insert(term);
@@ -645,6 +644,98 @@ fn indexed_line_terms(line: &str) -> BTreeSet<String> {
         collect_keyword_segments(chunk, &mut terms);
     }
     terms
+}
+
+fn collect_key_value_terms(line: &str, terms: &mut BTreeSet<String>) {
+    let mut in_gaze_token = false;
+    for (index, ch) in line.char_indices() {
+        match ch {
+            '<' => in_gaze_token = true,
+            '>' if in_gaze_token => in_gaze_token = false,
+            ':' | '=' if !in_gaze_token => {
+                if let Some(term) = canonical_key_value_term(line, index, ch) {
+                    terms.insert(term);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn canonical_key_value_term(line: &str, separator_index: usize, separator: char) -> Option<String> {
+    let key = key_before_separator(line, separator_index)?;
+    let value = value_after_separator(line, separator_index + separator.len_utf8())?;
+    normalize_keyword_term(&format!("{key}:{value}"))
+}
+
+fn key_before_separator(line: &str, separator_index: usize) -> Option<&str> {
+    let before = line[..separator_index].trim_end();
+    if let Some(quoted) = before.strip_suffix('"') {
+        let start = quoted.rfind('"')?;
+        return validate_structured_key(&quoted[start + 1..]);
+    }
+
+    let key_end = before.len();
+    let mut key_start = key_end;
+    for (index, ch) in before.char_indices().rev() {
+        if is_structured_key_char(ch) {
+            key_start = index;
+        } else {
+            break;
+        }
+    }
+    if key_start == key_end {
+        return None;
+    }
+    validate_structured_key(&before[key_start..key_end])
+}
+
+fn validate_structured_key(key: &str) -> Option<&str> {
+    let mut chars = key.chars();
+    let first = chars.next()?;
+    (is_structured_key_start(first) && chars.all(is_structured_key_char)).then_some(key)
+}
+
+fn value_after_separator(line: &str, value_start: usize) -> Option<&str> {
+    let after = line[value_start..].trim_start();
+    let value = if let Some(quoted) = after.strip_prefix('"') {
+        let end = quoted.find('"')?;
+        &quoted[..end]
+    } else {
+        let first = after.chars().next()?;
+        if !is_structured_value_start(first) {
+            return None;
+        }
+        let end = after
+            .char_indices()
+            .find_map(|(index, ch)| is_unquoted_value_terminator(ch).then_some(index))
+            .unwrap_or(after.len());
+        &after[..end]
+    };
+    validate_structured_value(value)
+}
+
+fn validate_structured_value(value: &str) -> Option<&str> {
+    (!value.is_empty()
+        && value.chars().count() <= KEY_VALUE_TERM_MAX_VALUE_CHARS
+        && !value.chars().any(char::is_whitespace))
+    .then_some(value)
+}
+
+fn is_structured_key_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+fn is_structured_key_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')
+}
+
+fn is_structured_value_start(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '<' | '_' | '-' | '.')
+}
+
+fn is_unquoted_value_terminator(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, ',' | ';' | ')' | '}' | ']')
 }
 
 fn collect_gaze_tokens(chunk: &str, terms: &mut BTreeSet<String>) {
@@ -880,10 +971,62 @@ mod tests {
         let clean = filter_keyword_window(&window, &keyword_request("ERROR 43301", 10))
             .expect("keyword search");
 
+        let (metadata, lines) = clean_text_parts(clean);
+        assert_eq!(metadata["status"], "matches");
+        assert_eq!(metadata["matched_lines"], 2);
+        assert_eq!(metadata["returned_lines"], 2);
         assert_eq!(
-            clean_text(clean),
-            "ERROR release_id=43301 first failure\nerror release_id=43301 second failure"
+            lines,
+            vec![
+                "ERROR release_id=43301 first failure",
+                "error release_id=43301 second failure"
+            ]
         );
+    }
+
+    #[test]
+    fn keyword_search_matches_structured_json_key_value_terms() {
+        let release_line =
+            r#"INFO {"context":{"release_id":43301,"album_id":9000},"status":"queued"}"#;
+        let album_line = r#"ERROR {"context":{"album_id":43301},"status":"wrong_field"}"#;
+        let window = redacted_window([release_line, album_line]);
+
+        let clean = filter_keyword_window(&window, &keyword_request("release_id:43301", 10))
+            .expect("keyword search");
+
+        let (metadata, lines) = clean_text_parts(clean);
+        assert_eq!(metadata["status"], "matches");
+        assert_eq!(metadata["matched_lines"], 1);
+        assert_eq!(metadata["returned_lines"], 1);
+        assert_eq!(lines, vec![release_line]);
+    }
+
+    #[test]
+    fn keyword_search_does_not_cross_bind_key_value_terms() {
+        let album_line = r#"ERROR {"context":{"album_id":43301},"status":"wrong_field"}"#;
+        let window = redacted_window([album_line]);
+
+        let clean = filter_keyword_window(&window, &keyword_request("release_id:43301", 10))
+            .expect("keyword search");
+
+        let (metadata, lines) = clean_text_parts(clean);
+        assert_eq!(metadata["status"], "no_matches");
+        assert_eq!(metadata["matched_lines"], 0);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn indexed_line_terms_include_structured_key_value_shapes() {
+        let terms = indexed_line_terms(
+            r#"INFO release_id: 43301 album_id=9000 "status":"QUEUED" actor="<EMAIL:Addr_1>""#,
+        );
+
+        assert!(terms.contains("release_id:43301"), "{terms:?}");
+        assert!(terms.contains("album_id:9000"), "{terms:?}");
+        assert!(terms.contains("status:queued"), "{terms:?}");
+        assert!(terms.contains("actor:<email:addr_1>"), "{terms:?}");
+        assert!(terms.contains("release_id"), "{terms:?}");
+        assert!(terms.contains("43301"), "{terms:?}");
     }
 
     #[test]
@@ -895,7 +1038,9 @@ mod tests {
 
         let token_match = filter_keyword_window(&window, &keyword_request("<EMAIL:Addr_1>", 10))
             .expect("token search");
-        assert_eq!(clean_text(token_match), "ERROR actor=<EMAIL:Addr_1> failed");
+        let (metadata, lines) = clean_text_parts(token_match);
+        assert_eq!(metadata["status"], "matches");
+        assert_eq!(lines, vec!["ERROR actor=<EMAIL:Addr_1> failed"]);
 
         let raw_match = filter_keyword_window(
             &window,
@@ -910,6 +1055,7 @@ mod tests {
         );
         assert!(!raw_text.contains("alice@example.com"), "{raw_text}");
         assert!(!raw_text.contains("actor=<EMAIL:Addr_1>"), "{raw_text}");
+        assert_eq!(raw_text.lines().count(), 1, "{raw_text}");
     }
 
     #[test]
@@ -933,9 +1079,15 @@ mod tests {
         ]);
         let clean = filter_keyword_window(&window, &request).expect("keyword search");
 
+        let (metadata, lines) = clean_text_parts(clean);
+        assert_eq!(metadata["status"], "matches");
+        assert_eq!(metadata["level"], serde_json::Value::Null);
         assert_eq!(
-            clean_text(clean),
-            "INFO release_id=43301 booted\nERROR release_id=43301 failed"
+            lines,
+            vec![
+                "INFO release_id=43301 booted",
+                "ERROR release_id=43301 failed"
+            ]
         );
     }
 
@@ -1207,6 +1359,14 @@ mod tests {
             crate::session::CleanOutput::Text { text, .. } => text,
             other => panic!("expected text output, got {other:?}"),
         }
+    }
+
+    fn clean_text_parts(clean: crate::session::CleanOutput) -> (serde_json::Value, Vec<String>) {
+        let text = clean_text(clean);
+        let mut lines = text.lines();
+        let metadata =
+            serde_json::from_str(lines.next().expect("metadata")).expect("metadata json");
+        (metadata, lines.map(ToOwned::to_owned).collect::<Vec<_>>())
     }
 
     fn clean_truncated_at(clean: crate::session::CleanOutput) -> Vec<crate::session::TruncatedAt> {

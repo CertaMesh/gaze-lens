@@ -511,8 +511,8 @@ fn non_empty_level(level: Option<&str>) -> Option<&str> {
     level.filter(|value| !value.is_empty())
 }
 
-fn grep_metadata_required(matched_lines: usize, truncated_at: &[TruncatedAt]) -> bool {
-    matched_lines == 0 || !truncated_at.is_empty()
+fn grep_metadata_required(_: usize, _: &[TruncatedAt]) -> bool {
+    true
 }
 
 fn grep_status(matched_lines: usize, truncated_at: &[TruncatedAt]) -> &'static str {
@@ -704,6 +704,45 @@ mod tests {
         assert!(metadata.contains(r#""matched_lines":2"#), "{metadata}");
         assert!(metadata.contains(r#""returned_lines":1"#), "{metadata}");
         assert_eq!(text.lines().nth(1), Some("ERROR first@example.com failed"));
+    }
+
+    #[tokio::test]
+    async fn matched_grep_renders_local_metadata_before_matches() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("app.log");
+        tokio::fs::write(&path, "INFO booted\nERROR release_id=43301 failed\n")
+            .await
+            .expect("write log");
+        let source = LocalLogSource::new(
+            "dev-log",
+            path,
+            LocalLogCaps {
+                line_bytes: 1024,
+                bytes: 4096,
+                timeout: Duration::from_secs(1),
+            },
+        )
+        .expect("source");
+
+        let output = source.grep("43301", None, 100).await.expect("grep");
+
+        assert_eq!(output.lines, vec!["ERROR release_id=43301 failed"]);
+        assert!(output.truncated_at.is_empty());
+        let metadata = output.metadata.as_ref().expect("metadata");
+        assert_eq!(metadata.status, "matches");
+        assert_eq!(metadata.matched_lines, 1);
+        assert_eq!(metadata.returned_lines, 1);
+        let text = output.into_text().expect("text");
+        let mut lines = text.lines();
+        let metadata = lines.next().expect("metadata");
+        assert!(
+            metadata.contains(r#""source_kind":"local_log""#),
+            "{metadata}"
+        );
+        assert!(metadata.contains(r#""status":"matches""#), "{metadata}");
+        assert!(metadata.contains(r#""matched_lines":1"#), "{metadata}");
+        assert_eq!(lines.next(), Some("ERROR release_id=43301 failed"));
+        assert_eq!(lines.next(), None);
     }
 
     #[tokio::test]
