@@ -5,6 +5,7 @@ use gaze_lens::cli::init::profile_writer::{RenderError, render_profile_toml};
 fn section(name: &str, kind: SourceKind) -> ProfileSection {
     ProfileSection {
         name: name.into(),
+        production: false,
         source_kind: kind,
         source_path: Some("/tmp/x.db".into()),
         source_host: None,
@@ -26,6 +27,15 @@ fn section(name: &str, kind: SourceKind) -> ProfileSection {
         credential_class: CredentialClass::ManuallyEntered,
         auto_purge: AutoPurgeChoice::Off,
     }
+}
+
+#[test]
+fn production_true_is_rendered() {
+    let mut s = section("prod", SourceKind::Sqlite);
+    s.production = true;
+
+    let out = render_profile_toml(None, &s, false).unwrap();
+    assert!(out.contains("production = true"), "got: {out}");
 }
 
 #[test]

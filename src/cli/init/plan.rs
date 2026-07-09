@@ -18,6 +18,7 @@ pub enum CredentialClass {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSection {
     pub name: String,
+    pub production: bool,
     pub source_kind: SourceKind,
     pub source_host: Option<String>,
     pub source_port: Option<u16>,

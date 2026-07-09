@@ -186,6 +186,61 @@ fn source_json_text_columns_flag_accepted_as_csv() {
 }
 
 #[test]
+fn model_dir_without_production_is_rejected() {
+    let out = bin()
+        .args([
+            "init",
+            "--print-only",
+            "--non-interactive",
+            "--profile",
+            "x",
+            "--source-kind",
+            "sqlite",
+            "--source-path",
+            "/tmp/x.db",
+            "--scope",
+            "project",
+            "--model-dir",
+            "/tmp/gaze-model",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn fetch_model_is_not_registered_in_phase_1a() {
+    let out = bin()
+        .args([
+            "init",
+            "--print-only",
+            "--non-interactive",
+            "--profile",
+            "x",
+            "--source-kind",
+            "sqlite",
+            "--source-path",
+            "/tmp/x.db",
+            "--scope",
+            "project",
+            "--fetch-model",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn secret_backend_env_default() {
     let args = InitArgs::default_for_test();
     assert_eq!(args.secret_backend, SecretBackendChoice::Env);

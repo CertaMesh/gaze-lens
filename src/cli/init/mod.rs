@@ -14,6 +14,7 @@ pub mod discovery;
 pub mod flow;
 pub mod mcp_writer;
 pub mod plan;
+pub mod policy_writer;
 pub mod profile_writer;
 pub mod prompter;
 pub mod ssh_exec;
@@ -132,6 +133,15 @@ pub struct InitArgs {
     /// Allow overwriting an existing profile / MCP entry of the same name.
     #[arg(long)]
     pub allow_overwrite: bool,
+    /// Mark the generated profile as production and require a production policy.
+    #[arg(long)]
+    pub production: bool,
+    /// Directory containing the pinned production NER model bundle.
+    #[arg(long, requires = "production")]
+    pub model_dir: Option<PathBuf>,
+    /// Allow init to merge a below-floor production policy up to the minimum.
+    #[arg(long)]
+    pub allow_policy_overwrite: bool,
     /// Run without prompts. Missing required input → exit 1.
     #[arg(long)]
     pub non_interactive: bool,
@@ -289,6 +299,9 @@ impl InitArgs {
             no_agents_md: false,
             also_claude_md: false,
             allow_overwrite: false,
+            production: false,
+            model_dir: None,
+            allow_policy_overwrite: false,
             non_interactive: false,
             print_only: false,
             write_all: false,
