@@ -18,6 +18,7 @@ fn guided_sqlite_user_scope_yields_expected_plan() {
         .with_select(2) // kind = sqlite
         .with_text("/tmp/x.db")
         .with_select(0) // scope = User
+        .with_confirm(false) // production
         .with_confirm(true) // MCP
         .with_confirm(true); // AGENTS.md
     let plan = run_guided(&args, &mut p, &env).expect("plan");
@@ -133,7 +134,7 @@ fn profile_scope_prompt_explains_each_scope_impact() {
     args.source_path = Some("/tmp/x.db".into());
     args.no_mcp_config = true;
     args.no_agents_md = true;
-    let mut p = FakePrompter::new().with_select(0);
+    let mut p = FakePrompter::new().with_select(0).with_confirm(false);
     let _plan = run_guided(&args, &mut p, &env).expect("plan");
     let choices = p.last_select_choices.expect("scope choices");
     let joined = choices.join("\n");

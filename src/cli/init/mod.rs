@@ -13,6 +13,7 @@ pub mod batch;
 pub mod discovery;
 pub mod flow;
 pub mod mcp_writer;
+pub mod model_fetch;
 pub mod plan;
 pub mod policy_writer;
 pub mod profile_writer;
@@ -374,7 +375,13 @@ fn run_with_prompter_and_env<P: prompter::Prompter>(
         commit_plan(args, &plan, &mut writer)?;
     } else {
         let mut migration_prompter = prompter::DialoguerPrompter::new();
-        commit_plan_with_prompter(args, &plan, &mut writer, Some(&mut migration_prompter))?;
+        commit_plan_with_prompter(
+            args,
+            &plan,
+            &mut writer,
+            Some(&mut migration_prompter),
+            None,
+        )?;
     }
 
     if args.smoke_check {
@@ -446,7 +453,7 @@ pub(crate) fn commit_plan(
     plan: &plan::InitPlan,
     w: &mut dyn batch::BatchWriter,
 ) -> Result<(), LensError> {
-    commit_plan_with_prompter(args, plan, w, None)
+    commit_plan_with_prompter(args, plan, w, None, None)
 }
 
 fn commit_plan_with_prompter(
@@ -454,6 +461,7 @@ fn commit_plan_with_prompter(
     plan: &plan::InitPlan,
     w: &mut dyn batch::BatchWriter,
     mut migration_prompter: Option<&mut dyn prompter::Prompter>,
+    provisioner: Option<&dyn model_fetch::ModelProvisioner>,
 ) -> Result<(), LensError> {
     // Phase A: render + validate every candidate destination before the first
     // write. This is the atomicity contract for parse/collision failures:
@@ -496,6 +504,15 @@ fn commit_plan_with_prompter(
     }
     if applied.is_empty() && unchanged.len() == total && total > 0 {
         println!("no changes");
+    }
+    if let Some(fetch) = &plan.fetch_intent {
+        let provisioner = provisioner.ok_or_else(|| {
+            LensError::FeatureDeferred(
+                "model provisioning is deferred until --fetch-model ships with gaze-model-setup"
+                    .into(),
+            )
+        })?;
+        provisioner.provision(fetch.model_dir.as_deref())?;
     }
     Ok(())
 }
@@ -612,6 +629,25 @@ fn render_plan_writes(
         path: plan.profile_path.clone(),
         bytes: new_profile_bytes,
     });
+
+    if let Some(intent) = &plan.policy_write {
+        let existing_policy = std::fs::read_to_string(&intent.path).ok();
+        let outcome = policy_writer::render_production_policy_for_path(
+            existing_policy.as_deref(),
+            &intent.model_dir,
+            args.allow_policy_overwrite,
+            &intent.path,
+        )
+        .map_err(|err| LensError::Profile {
+            detail: err.to_string(),
+        })?;
+        if let Some(bytes) = outcome.bytes {
+            writes.push(RenderedWrite {
+                path: intent.path.clone(),
+                bytes,
+            });
+        }
+    }
 
     // MCP JSON/TOML render validates existing config parse and entry collisions.
     for target in &plan.mcp_targets {
@@ -866,8 +902,9 @@ pub fn commit_plan_for_test(
     args: &InitArgs,
     plan: &plan::InitPlan,
     w: &mut dyn batch::BatchWriter,
+    provisioner: Option<&dyn model_fetch::ModelProvisioner>,
 ) -> Result<(), LensError> {
-    commit_plan(args, plan, w)
+    commit_plan_with_prompter(args, plan, w, None, provisioner)
 }
 
 /// `#[doc(hidden)] pub` test entry-point for integration tests that must drive

@@ -87,11 +87,12 @@ fn commit_plan_for_test_with_keyring_writes_entry_and_no_password_on_disk() {
     let account = args.source_password_keyring_account.clone().unwrap();
     let mut p = FakePrompter::new()
         .with_confirm(true)
-        .with_password("hunter2-disk-test");
+        .with_password("hunter2-disk-test")
+        .with_confirm(false);
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     let mut writer = RealBatchWriter;
 
-    commit_plan_for_test(&args, &plan, &mut writer).expect("commit");
+    commit_plan_for_test(&args, &plan, &mut writer, None).expect("commit");
 
     assert_eq!(
         get_secret(&service, &account).as_deref(),
@@ -115,11 +116,12 @@ fn existing_keyring_entry_without_allow_overwrite_rejects_before_file_write() {
     set_secret(&service, &account, "old-value");
     let mut p = FakePrompter::new()
         .with_confirm(true)
-        .with_password("new-value");
+        .with_password("new-value")
+        .with_confirm(false);
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     let mut writer = RealBatchWriter;
 
-    let err = commit_plan_for_test(&args, &plan, &mut writer).expect_err("reject overwrite");
+    let err = commit_plan_for_test(&args, &plan, &mut writer, None).expect_err("reject overwrite");
 
     assert!(err.to_string().contains("--allow-overwrite"), "{err}");
     assert_eq!(get_secret(&service, &account).as_deref(), Some("old-value"));
@@ -140,11 +142,12 @@ fn existing_keyring_entry_with_allow_overwrite_replaces() {
     set_secret(&service, &account, "old-value");
     let mut p = FakePrompter::new()
         .with_confirm(true)
-        .with_password("new-value");
+        .with_password("new-value")
+        .with_confirm(false);
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     let mut writer = RealBatchWriter;
 
-    commit_plan_for_test(&args, &plan, &mut writer).expect("commit");
+    commit_plan_for_test(&args, &plan, &mut writer, None).expect("commit");
 
     assert_eq!(get_secret(&service, &account).as_deref(), Some("new-value"));
     assert!(plan.profile_path.exists(), "profile file must be written");
@@ -160,11 +163,12 @@ fn existing_keyring_entry_with_equal_value_is_idempotent_noop() {
     set_secret(&service, &account, "same-value");
     let mut p = FakePrompter::new()
         .with_confirm(true)
-        .with_password("same-value");
+        .with_password("same-value")
+        .with_confirm(false);
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     let mut writer = RealBatchWriter;
 
-    commit_plan_for_test(&args, &plan, &mut writer).expect("commit");
+    commit_plan_for_test(&args, &plan, &mut writer, None).expect("commit");
 
     assert_eq!(
         get_secret(&service, &account).as_deref(),
@@ -190,6 +194,7 @@ fn existing_keyring_entry_interactive_decline_leaves_old_value() {
     let mut p = FakePrompter::new()
         .with_confirm(true)
         .with_password("new-value")
+        .with_confirm(false)
         .with_confirm(false);
     let mut out = Vec::new();
 
@@ -213,12 +218,13 @@ fn keyring_real_write_then_file_commit_fail_emits_orphan_warning() {
     let account = args.source_password_keyring_account.clone().unwrap();
     let mut p = FakePrompter::new()
         .with_confirm(true)
-        .with_password("orphan-warning-secret");
+        .with_password("orphan-warning-secret")
+        .with_confirm(false);
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     let mut writer = FailingWriter::new(0);
     let _ = take_orphan_warnings_for_test();
 
-    let err = commit_plan_for_test(&args, &plan, &mut writer).expect_err("file commit fails");
+    let err = commit_plan_for_test(&args, &plan, &mut writer, None).expect_err("file commit fails");
     let warnings = take_orphan_warnings_for_test();
     let warning = warnings.join("\n");
 
@@ -258,7 +264,8 @@ fn run_print_only_with_keyring_performs_zero_side_effects() {
     let account = args.source_password_keyring_account.clone().unwrap();
     let mut p = FakePrompter::new()
         .with_confirm(true)
-        .with_password("print-only-secret");
+        .with_password("print-only-secret")
+        .with_confirm(false);
     let mut out = Vec::new();
 
     run_with_prompter_for_test(&args, &env, &mut p, &mut out).expect("print-only run");

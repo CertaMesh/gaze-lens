@@ -43,7 +43,8 @@ fn flow_keyring_branch_prompts_password_and_captures_via_planned_secret() {
         .with_text("gaze-lens")
         .with_text("prod")
         .with_confirm(true)
-        .with_password("hunter2-flow");
+        .with_password("hunter2-flow")
+        .with_confirm(false);
 
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     match plan.profile_section.source_secret {
@@ -78,7 +79,7 @@ fn flow_keyring_branch_with_no_keyring_write_skips_password_prompt() {
     args.scope = Some(InitScope::User);
     args.no_mcp_config = true;
     args.no_agents_md = true;
-    let mut p = FakePrompter::new();
+    let mut p = FakePrompter::new().with_confirm(false);
 
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     match plan.profile_section.source_secret {
@@ -121,7 +122,8 @@ fn smoke_check_with_keyring_and_write_value_reports_secret_ok() {
     args.smoke_check = true;
     let mut p = FakePrompter::new()
         .with_confirm(true)
-        .with_password("smoke-secret");
+        .with_password("smoke-secret")
+        .with_confirm(false);
     let mut out = Vec::new();
 
     let result = run_with_prompter_for_test(&args, &env, &mut p, &mut out);
@@ -166,7 +168,7 @@ fn smoke_check_with_keyring_no_keyring_write_reports_not_found() {
     args.no_mcp_config = true;
     args.no_agents_md = true;
     args.smoke_check = true;
-    let mut p = FakePrompter::new();
+    let mut p = FakePrompter::new().with_confirm(false);
     let mut out = Vec::new();
 
     let err =

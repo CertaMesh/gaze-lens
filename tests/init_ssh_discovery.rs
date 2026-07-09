@@ -46,7 +46,8 @@ fn discover_path_b_uses_operator_credential_and_drops_discovered_password() {
     let mut p = FakePrompter::new()
         .with_select(0)
         .with_text("readonly_user")
-        .with_password("readonly-secret");
+        .with_password("readonly-secret")
+        .with_confirm(false);
 
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     let section = &plan.profile_section;
@@ -77,7 +78,10 @@ fn discover_path_a_writes_keyring_value_when_username_typeback_matches() {
     );
     let env = env_with_ssh(ssh);
     let args = discovery_args();
-    let mut p = FakePrompter::new().with_select(1).with_text("prod_user");
+    let mut p = FakePrompter::new()
+        .with_select(1)
+        .with_text("prod_user")
+        .with_confirm(false);
     let plan = run_guided(&args, &mut p, &env).expect("plan");
     assert_eq!(
         plan.profile_section.credential_class,
