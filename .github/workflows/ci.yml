@@ -18,9 +18,9 @@ env:
 
 jobs:
   rust:
-    name: fmt, clippy, test
-    # Keep public PR CI on the supported release platform until Linux/Windows
-    # build proof lands; see docs/public-readiness.md.
+    name: fmt, check, clippy, test
+    # Keep public PR CI on the supported release platform; Linux release proof
+    # lives in the linux-proof matrix below. See docs/explanation/cross-platform-roadmap.md.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
@@ -38,8 +38,121 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Check
+        run: cargo check --all-targets
+
       - name: Clippy
         run: cargo clippy --all-targets --no-deps -- -D warnings
 
       - name: Test
         run: cargo test --all-targets
+
+  linux-proof:
+    name: linux proof (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libdbus-1-dev
+
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@193d6aa1dbbc28bd2c0a6b0e327cfdce68baaf6e # 1.89
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Cargo check (Linux)
+        run: cargo check --all-targets
+
+      - name: Cargo test (Linux default suite; Docker integration features excluded)
+        run: cargo test --all-targets
+
+      - name: Build CLI binary
+        run: cargo build --bin gaze-lens
+
+      - name: Run demo from built binary
+        run: ./target/debug/gaze-lens demo
+
+      - name: Check keyring failure without DBus session
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+
+          cat > "$tmpdir/profiles.toml" <<'TOML'
+          [[profiles]]
+          name = "linux-keyring-proof"
+
+          [profiles.source]
+          kind = "mysql"
+          host = "127.0.0.1"
+          port = 3306
+          database = "app"
+          username = "gaze_ro"
+          secret = { type = "keyring", service = "gaze-lens-ci", account = "linux-proof" }
+          readonly_required = true
+          TOML
+
+          env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR \
+            bash -c 'test -z "${DBUS_SESSION_BUS_ADDRESS:-}" && test -z "${XDG_RUNTIME_DIR:-}"'
+
+          set +e
+          output="$(
+            env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR \
+              ./target/debug/gaze-lens --project-config "$tmpdir/profiles.toml" check --profile linux-keyring-proof 2>&1
+          )"
+          status=$?
+          set -e
+
+          printf '%s\n' "$output"
+
+          if [ "$status" -eq 0 ]; then
+            echo "expected keyring-backed check to fail without a DBus/Secret Service session"
+            exit 1
+          fi
+
+          if ! grep -Eq 'secret: (BACKEND UNAVAILABLE|ACCESS DENIED)' <<<"$output"; then
+            echo "expected BACKEND UNAVAILABLE or ACCESS DENIED keyring diagnostic"
+            exit 1
+          fi
+
+          env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR \
+            bash -c 'test -z "${DBUS_SESSION_BUS_ADDRESS:-}" && test -z "${XDG_RUNTIME_DIR:-}"'
+
+      - name: Install dist 0.31.0
+        shell: bash
+        run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh"
+
+      - name: Stage proposed Linux dist target for proof only
+        shell: bash
+        env:
+          DIST_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          grep -Fx 'targets = ["aarch64-apple-darwin"]' dist-workspace.toml
+          grep -Fx '"aarch64-apple-darwin" = ["gaze-lens"]' dist-workspace.toml
+          sed -i "s|targets = \[\"aarch64-apple-darwin\"\]|targets = [\"aarch64-apple-darwin\", \"${DIST_TARGET}\"]|" dist-workspace.toml
+          sed -i "/^\"aarch64-apple-darwin\" = \[\"gaze-lens\"\]$/a \"${DIST_TARGET}\" = [\"gaze-lens\"]" dist-workspace.toml
+          grep -Fx "targets = [\"aarch64-apple-darwin\", \"${DIST_TARGET}\"]" dist-workspace.toml
+          grep -Fx "\"${DIST_TARGET}\" = [\"gaze-lens\"]" dist-workspace.toml
+
+      - name: Dist plan (${{ matrix.target }})
+        run: dist plan --target "${{ matrix.target }}" --allow-dirty
+
+      - name: Dist local artifact build (${{ matrix.target }})
+        run: dist build --artifacts=local --target "${{ matrix.target }}" --allow-dirty
