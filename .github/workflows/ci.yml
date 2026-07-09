@@ -144,6 +144,11 @@ jobs:
           DIST_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
+          if grep -F "\"${DIST_TARGET}\"" dist-workspace.toml; then
+            grep -Fx "\"${DIST_TARGET}\" = [\"gaze-lens\"]" dist-workspace.toml
+            exit 0
+          fi
+
           grep -Fx 'targets = ["aarch64-apple-darwin"]' dist-workspace.toml
           grep -Fx '"aarch64-apple-darwin" = ["gaze-lens"]' dist-workspace.toml
           sed -i "s|targets = \[\"aarch64-apple-darwin\"\]|targets = [\"aarch64-apple-darwin\", \"${DIST_TARGET}\"]|" dist-workspace.toml
