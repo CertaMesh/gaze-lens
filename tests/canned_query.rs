@@ -299,6 +299,24 @@ fn limit_at_schema_cap_fetches_probe_row_for_truncation_detection() {
 }
 
 #[test]
+fn limit_below_schema_cap_binds_exactly_without_probe_row() {
+    let query = CannedQuery {
+        profile: "test".to_string(),
+        table: "users".to_string(),
+        columns: Some(vec!["id".to_string()]),
+        r#where: None,
+        where_combinator: None,
+        order_by: None,
+        limit: Some(10),
+    };
+
+    let compiled = query.compile_to_sql(&schema()).expect("compile");
+
+    assert_eq!(compiled.sql, "SELECT `id` FROM `users` LIMIT ?");
+    assert_eq!(compiled.binds, vec![QueryValue::U64(10)]);
+}
+
+#[test]
 fn maximum_schema_cap_still_fetches_probe_row() {
     let mut max_schema = schema();
     max_schema.limit_cap = Some(u32::MAX);

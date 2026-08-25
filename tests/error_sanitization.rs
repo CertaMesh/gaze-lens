@@ -94,6 +94,72 @@ fn verbose_source_error_keeps_diagnostics_but_scrubs_credentials() {
 }
 
 #[test]
+fn verbose_source_error_scrubs_dsn_and_all_url_values() {
+    let err = LensError::SourceError {
+        source_name: "postgres-prod".to_string(),
+        detail: "connect postgres://dsn-alice:dsn-password@db.example.test/app?tenant=tenant-canary&mode=mode-canary#fragment-canary failed".to_string(),
+        sql: None,
+        stderr: None,
+    };
+
+    let verbose = format_cli_error(&err, true);
+    assert!(
+        verbose.contains(
+            "postgres://[REDACTED]@db.example.test/app?tenant=[REDACTED]&mode=[REDACTED]#[REDACTED]"
+        ),
+        "{verbose}"
+    );
+    for canary in [
+        "dsn-alice",
+        "dsn-password",
+        "tenant-canary",
+        "mode-canary",
+        "fragment-canary",
+    ] {
+        assert!(
+            !verbose.contains(canary),
+            "verbose error leaked {canary:?}: {verbose}"
+        );
+    }
+}
+
+#[test]
+fn verbose_source_error_scrubs_prefixed_credential_keys() {
+    let err = LensError::SourceError {
+        source_name: "postgres-prod".to_string(),
+        detail: "db_password=db-canary access_token='access canary' client_secret=client-canary"
+            .to_string(),
+        sql: None,
+        stderr: None,
+    };
+
+    let verbose = format_cli_error(&err, true);
+    for canary in ["db-canary", "access canary", "client-canary"] {
+        assert!(
+            !verbose.contains(canary),
+            "verbose error leaked {canary:?}: {verbose}"
+        );
+    }
+}
+
+#[test]
+fn verbose_source_error_scrubs_postgres_double_quoted_username() {
+    let err = LensError::SourceError {
+        source_name: "postgres-prod".to_string(),
+        detail: "password authentication failed for user \"quoted-alice-canary\"".to_string(),
+        sql: None,
+        stderr: None,
+    };
+
+    let verbose = format_cli_error(&err, true);
+    assert!(
+        verbose.contains("password authentication failed for user [REDACTED]"),
+        "{verbose}"
+    );
+    assert!(!verbose.contains("quoted-alice-canary"), "{verbose}");
+}
+
+#[test]
 fn verbose_mode_does_not_expand_non_source_errors() {
     let err = LensError::ManifestBeginFailed {
         call_id: "call-secret".to_string(),

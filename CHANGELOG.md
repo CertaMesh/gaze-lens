@@ -12,11 +12,14 @@ Query diagnostics and correctness hardening, plus reliable SSH tunnel cleanup.
   sanitization remains unchanged when the variable is unset.
 
 ### Fixed
-- MySQL canned-query filters now accept `"value"` as the where-JSON value key.
-- SSH tunnels are torn down on `SIGTERM` and Ctrl-C. An occupied local tunnel
-  port now reports the listener PID when it can be identified safely.
-- CLI queries reject limits above 1000 explicitly, and `Rows` reports
-  truncation truthfully by probing one row beyond the requested cap.
+- Structured database queries now accept `"value"` as an alias for the shared
+  where-clause `"val"` field across CLI and MCP requests.
+- SSH tunnels are torn down on `SIGTERM` and Ctrl-C. `SIGKILL` cannot run
+  cleanup and may leave the detached SSH master behind. An occupied local
+  tunnel port now reports the listener PID when it can be identified safely.
+- CLI and MCP queries reject limits above 1000 explicitly. `Rows` reports
+  hidden safety-cap truncation by probing one row only when the limit is omitted
+  or equals 1000; an explicit lower limit binds exactly the requested count.
 
 ### Security
 - Pinned the Gaze family (`gaze-pii`, `gaze-recognizers`, `gaze-mcp-core`) to

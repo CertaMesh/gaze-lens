@@ -228,30 +228,92 @@ pub fn format_cli_error(err: &LensError, verbose: bool) -> String {
 }
 
 fn scrub_credentials(input: &str) -> String {
-    let mut scrubbed = input.to_string();
+    let Some(mut scrubbed) = scrub_urls(input) else {
+        return scrubber_failure();
+    };
     for (pattern, replacement) in [
         (
-            r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+(?::[^\s/@]*)?@",
-            "$1[REDACTED]@",
-        ),
-        (
-            r#"(?i)\b(user(?:name|[ _-]?id)?|uid|password|passwd|pwd|token|secret|api[ _-]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;&]+)"#,
+            r#"(?i)\b((?:[a-z0-9]+[._-])*(?:user(?:name|[ _-]?id)?|uid|password|passwd|pwd|token|secret|api[ _-]?key))\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;&]+)"#,
             "$1=[REDACTED]",
         ),
         (
             r"(?i)\b(authorization)\s*:\s*(?:bearer|basic)\s+[^\s,;&]+",
             "$1: [REDACTED]",
         ),
-        (r"(?i)\b(user)\s+'[^']+'@'[^']+'", "$1 '[REDACTED]'"),
+        (
+            r#"(?i)\b(user)\s+(?:"[^"]*"|'[^']*')(?:@'[^']*')?"#,
+            "$1 [REDACTED]",
+        ),
     ] {
         // Static patterns are covered by tests. If one is ever invalid, keep
         // the safer already-scrubbed value instead of exposing the raw error.
         let Ok(regex) = regex::Regex::new(pattern) else {
-            return sanitize_error(&LensError::Internal {
-                detail: "invalid credential scrubber pattern".to_string(),
-            });
+            return scrubber_failure();
         };
         scrubbed = regex.replace_all(&scrubbed, replacement).into_owned();
     }
     scrubbed
+}
+
+fn scrub_urls(input: &str) -> Option<String> {
+    let regex = regex::Regex::new(r#"(?i)\b[a-z][a-z0-9+.-]*://[^\s\"'<>]+"#).ok()?;
+    Some(
+        regex
+            .replace_all(input, |captures: &regex::Captures<'_>| {
+                scrub_url(captures.get(0).map_or("", |matched| matched.as_str()))
+            })
+            .into_owned(),
+    )
+}
+
+fn scrub_url(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return "[REDACTED]".to_string();
+    };
+    let fragment_start = url.find('#');
+    let query_start = url[..fragment_start.unwrap_or(url.len())].find('?');
+    let base_end = query_start.or(fragment_start).unwrap_or(url.len());
+    let base = &url[..base_end];
+
+    let authority_start = scheme_end + 3;
+    let authority_end = base[authority_start..]
+        .find('/')
+        .map_or(base.len(), |offset| authority_start + offset);
+    let mut output = if let Some(userinfo_end) = base[authority_start..authority_end].rfind('@') {
+        let userinfo_end = authority_start + userinfo_end;
+        format!(
+            "{}[REDACTED]{}",
+            &base[..authority_start],
+            &base[userinfo_end..]
+        )
+    } else {
+        base.to_string()
+    };
+
+    if let Some(query_start) = query_start {
+        let query_end = fragment_start.unwrap_or(url.len());
+        output.push('?');
+        for parameter in url[query_start + 1..query_end].split_inclusive(['&', ';']) {
+            let (parameter, separator) = parameter
+                .strip_suffix(['&', ';'])
+                .map_or((parameter, ""), |body| (body, &parameter[body.len()..]));
+            if let Some((key, _value)) = parameter.split_once('=') {
+                output.push_str(key);
+                output.push_str("=[REDACTED]");
+            } else {
+                output.push_str("[REDACTED]");
+            }
+            output.push_str(separator);
+        }
+    }
+    if fragment_start.is_some() {
+        output.push_str("#[REDACTED]");
+    }
+    output
+}
+
+fn scrubber_failure() -> String {
+    sanitize_error(&LensError::Internal {
+        detail: "invalid credential scrubber pattern".to_string(),
+    })
 }

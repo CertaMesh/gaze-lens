@@ -251,6 +251,8 @@ impl CannedQuery {
                 cap: hard_cap,
             });
         }
+        // Probe only the hidden safety cap. A lower caller-selected limit is an
+        // intentional result size, so binding cap+1 would return an extra row.
         let limit = match self.limit {
             Some(requested) if requested == hard_cap => u64::from(requested) + 1,
             Some(requested) => u64::from(requested),

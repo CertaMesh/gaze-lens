@@ -69,6 +69,8 @@ impl SshTunnel {
             .args(close_argv_for_control_path(host, &self.control_path)?)
             .status()?;
         if !status.success() {
+            // Keep the socket so the operator retains recovery control over a
+            // master that may still be running.
             return Err(SshError::NonZero(format!(
                 "ssh control exit returned {:?}",
                 status.code()

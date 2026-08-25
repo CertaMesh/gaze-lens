@@ -211,6 +211,11 @@ fn query_verbose_errors_exposes_scrubbed_source_detail() {
         .args([
             "--project-config",
             project.to_str().expect("project path"),
+            "--user-config",
+            temp.path()
+                .join("missing.toml")
+                .to_str()
+                .expect("user path"),
             "query",
             "--profile",
             "local",
@@ -248,6 +253,11 @@ fn query_rejects_limit_above_row_cap_explicitly() {
         .args([
             "--project-config",
             project.to_str().expect("project path"),
+            "--user-config",
+            temp.path()
+                .join("missing.toml")
+                .to_str()
+                .expect("user path"),
             "query",
             "--profile",
             "local",
@@ -310,6 +320,51 @@ fn query_at_row_cap_reports_truncation() {
     let clean = &result["clean"]["Rows"];
     assert_eq!(clean["rows"].as_array().expect("rows").len(), 1000);
     assert_eq!(clean["truncated_at"], serde_json::json!(["Rows"]));
+}
+
+#[test]
+fn query_below_row_cap_returns_exact_limit_without_probe_row() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db = temp.path().join("fixture.sqlite");
+    let project = temp.path().join("project.toml");
+    seed_sqlite_rows(&db, 3);
+    write_profile(&project, &db);
+
+    let mut cmd = Command::cargo_bin("gaze-lens").expect("binary");
+    let output = cmd
+        .args([
+            "--project-config",
+            project.to_str().expect("project path"),
+            "--user-config",
+            temp.path()
+                .join("missing.toml")
+                .to_str()
+                .expect("user path"),
+            "query",
+            "--profile",
+            "local",
+            "--manifest",
+            temp.path()
+                .join("manifest.sqlite")
+                .to_str()
+                .expect("manifest"),
+            "--snapshot-dir",
+            temp.path().join("snapshots").to_str().expect("snapshots"),
+            "--table",
+            "users",
+            "--column",
+            "id",
+            "--limit",
+            "2",
+        ])
+        .output()
+        .expect("run query");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let result: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("tool result");
+    let clean = &result["clean"]["Rows"];
+    assert_eq!(clean["rows"].as_array().expect("rows").len(), 2);
+    assert_eq!(clean["truncated_at"], serde_json::json!([]));
 }
 
 #[test]
