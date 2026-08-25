@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TunnelSpec {
@@ -19,6 +19,10 @@ pub enum SshError {
     Spawn(#[from] std::io::Error),
     #[error("ssh exited non-zero: {0}")]
     NonZero(String),
+    #[error(
+        "local port {local_port} is already in use by pid {owner_pid}; stop that process or configure another local_port"
+    )]
+    LocalPortInUse { local_port: u16, owner_pid: u32 },
 }
 
 pub struct SshTunnel {
@@ -34,6 +38,12 @@ impl SshTunnel {
             .args(open_argv_for_control_path(spec, host, &control_path)?)
             .status()?;
         if !status.success() {
+            if let Some(owner_pid) = listening_pid(spec.local_port) {
+                return Err(SshError::LocalPortInUse {
+                    local_port: spec.local_port,
+                    owner_pid,
+                });
+            }
             return Err(SshError::NonZero(format!(
                 "ssh returned {:?}",
                 status.code()
@@ -55,10 +65,18 @@ impl SshTunnel {
 
     pub fn close(&mut self) -> Result<(), SshError> {
         let host = validate_ssh_login_host(&self.ssh_host)?;
-        let _ = Command::new("ssh")
+        let status = Command::new("ssh")
             .args(close_argv_for_control_path(host, &self.control_path)?)
-            .status();
-        let _ = std::fs::remove_file(&self.control_path);
+            .status()?;
+        if !status.success() {
+            // Keep the socket so the operator retains recovery control over a
+            // master that may still be running.
+            return Err(SshError::NonZero(format!(
+                "ssh control exit returned {:?}",
+                status.code()
+            )));
+        }
+        remove_control_path(&self.control_path)?;
         Ok(())
     }
 }
@@ -229,6 +247,28 @@ fn close_argv_for_control_path(host: &str, control_path: &Path) -> Result<Vec<St
         "--".to_string(),
         host.to_string(),
     ])
+}
+
+fn listening_pid(local_port: u16) -> Option<u32> {
+    let output = Command::new("lsof")
+        .args(["-t", &format!("-iTCP:{local_port}"), "-sTCP:LISTEN"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then_some(output.stdout)?
+        .split(|byte| *byte == b'\n')
+        .find_map(|line| std::str::from_utf8(line).ok()?.trim().parse().ok())
+}
+
+fn remove_control_path(path: &Path) -> Result<(), SshError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(SshError::Spawn(err)),
+    }
 }
 
 fn invalid_host(host: &str, reason: &'static str) -> SshError {

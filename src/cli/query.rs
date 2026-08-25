@@ -76,6 +76,21 @@ pub async fn run(
     project_config: Option<&Path>,
     user_config: Option<&Path>,
 ) -> Result<(), LensError> {
+    tokio::select! {
+        biased;
+        () = wait_for_shutdown_signal() => Err(LensError::Internal {
+            detail: "query interrupted by shutdown signal".to_string(),
+        }),
+        result = run_query(args, project_config, user_config) => result,
+    }
+}
+
+async fn run_query(
+    args: QueryArgs,
+    project_config: Option<&Path>,
+    user_config: Option<&Path>,
+) -> Result<(), LensError> {
+    validate_query_limit(args.limit, default_db_limit_cap())?;
     let query = CannedQuery {
         profile: args.profile.clone(),
         table: args.table,
@@ -113,6 +128,26 @@ pub async fn run(
         .map_err(|err| annotate_source_error(&args.profile, err))?;
     print_tool_result(&result, args.format)?;
     Ok(())
+}
+
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let Ok(mut sigterm) = signal(SignalKind::terminate()) else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn annotate_source_error(profile: &str, err: LensError) -> LensError {
@@ -196,9 +231,7 @@ pub(crate) async fn build_db_session(
         &snapshot_dir,
     )?);
     session.register_column_action_policy(profile.name.clone(), column_actions)?;
-    let limit_cap = crate::session::OutputCaps::default()
-        .rows
-        .min(u32::MAX as usize) as u32;
+    let limit_cap = default_db_limit_cap();
     let db_source = match &profile.source {
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
             connect_db_source(&profile, limit_cap).await?
@@ -226,6 +259,23 @@ pub(crate) async fn build_db_session(
         source.clone(),
     );
     Ok(session)
+}
+
+fn default_db_limit_cap() -> u32 {
+    crate::session::OutputCaps::default()
+        .rows
+        .min(u32::MAX as usize) as u32
+}
+
+fn validate_query_limit(limit: Option<u32>, cap: u32) -> Result<(), LensError> {
+    if let Some(requested) = limit
+        && requested > cap
+    {
+        return Err(LensError::Profile {
+            detail: format!("query limit {requested} exceeds row cap {cap}"),
+        });
+    }
+    Ok(())
 }
 
 fn parse_order_by(input: Option<String>) -> Result<Option<Vec<OrderBy>>, LensError> {

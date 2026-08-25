@@ -221,13 +221,17 @@ fn serve_print_discovery_lists_db_and_log_profiles_without_starting_mcp() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
     let project = temp.path().join("profiles.toml");
+    let user = temp.path().join("user-profiles.toml");
     seed_sqlite(&db);
     write_profiles(&project, &db);
+    std::fs::write(&user, "").expect("empty user profiles");
 
     let output = support::serve_output(
         Command::cargo_bin("gaze-lens").expect("binary").args([
             "--project-config",
             project.to_str().expect("project path"),
+            "--user-config",
+            user.to_str().expect("user path"),
             "serve",
             "--print-discovery",
             "--manifest",
@@ -286,13 +290,17 @@ fn serve_print_discovery_schema_tokenize_does_not_leak_raw_labels() {
     let temp = tempfile::tempdir().expect("tempdir");
     let db = temp.path().join("fixture.sqlite");
     let project = temp.path().join("profiles.toml");
+    let user = temp.path().join("user-profiles.toml");
     seed_tokenized_sqlite(&db);
     write_tokenized_profiles(&project, &db);
+    std::fs::write(&user, "").expect("empty user profiles");
 
     let output = support::serve_output(
         Command::cargo_bin("gaze-lens").expect("binary").args([
             "--project-config",
             project.to_str().expect("project path"),
+            "--user-config",
+            user.to_str().expect("user path"),
             "serve",
             "--print-discovery",
             "--manifest",

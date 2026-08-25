@@ -9,7 +9,7 @@ use crate::source::db::postgres::PostgresSource;
 use crate::source::db::query::{CannedQuery, TableSchema};
 use crate::source::db::sqlite::SqliteSource;
 use crate::source::db::{DbKind, DbSource};
-use crate::source::ssh_tunnel::{SshTunnel, TunnelSpec};
+use crate::source::ssh_tunnel::{SshError, SshTunnel, TunnelSpec};
 use crate::value::LensRow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,12 +60,7 @@ pub(crate) async fn connect_db_source_with_password(
 ) -> Result<Arc<dyn DbSource>, LensError> {
     let plan = runtime_plan(profile)?;
     let tunnel = match &plan.tunnel {
-        Some(spec) => Some(SshTunnel::open(spec).map_err(|err| LensError::SourceError {
-            source_name: profile.name.clone(),
-            detail: format!("ssh tunnel failed: {err}"),
-            sql: None,
-            stderr: None,
-        })?),
+        Some(spec) => Some(SshTunnel::open(spec).map_err(|err| tunnel_error(profile, err))?),
         None => None,
     };
 
@@ -130,6 +125,20 @@ pub(crate) async fn connect_db_source_with_password(
         inner,
         _tunnel: tunnel,
     }))
+}
+
+fn tunnel_error(profile: &Profile, err: SshError) -> LensError {
+    match err {
+        SshError::LocalPortInUse { .. } => LensError::Profile {
+            detail: err.to_string(),
+        },
+        _ => LensError::SourceError {
+            source_name: profile.name.clone(),
+            detail: format!("ssh tunnel failed: {err}"),
+            sql: None,
+            stderr: None,
+        },
+    }
 }
 
 fn db_runtime_plan(
@@ -287,6 +296,23 @@ mod tests {
                 remote_host: "db.internal".to_string(),
                 remote_port: 3306,
             })
+        );
+    }
+
+    #[test]
+    fn occupied_tunnel_port_is_safe_to_show_without_verbose_errors() {
+        let profile = mysql_profile(Some("app01"), Some(13306));
+        let err = tunnel_error(
+            &profile,
+            SshError::LocalPortInUse {
+                local_port: 13306,
+                owner_pid: 4242,
+            },
+        );
+
+        assert_eq!(
+            crate::errors::format_cli_error(&err, false),
+            "Profile: local port 13306 is already in use by pid 4242; stop that process or configure another local_port"
         );
     }
 

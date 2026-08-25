@@ -248,7 +248,19 @@ fn missing_column_allowed_field_deserializes_default_deny() {
 }
 
 #[test]
-fn limit_cap_clamps_to_schema_limit() {
+fn where_clause_accepts_value_as_an_alias_for_val() {
+    let clause: WhereClause = serde_json::from_value(serde_json::json!({
+        "col": "id",
+        "op": "eq",
+        "value": 98876
+    }))
+    .expect("where clause");
+
+    assert_eq!(clause.val, scalar(ScalarValue::I64(98876)));
+}
+
+#[test]
+fn limit_above_schema_cap_is_rejected() {
     let query = CannedQuery {
         profile: "test".to_string(),
         table: "users".to_string(),
@@ -259,10 +271,69 @@ fn limit_cap_clamps_to_schema_limit() {
         limit: Some(500),
     };
 
+    assert_eq!(
+        query.compile_to_sql(&schema()).expect_err("limit cap"),
+        QueryError::LimitExceedsCap {
+            requested: 500,
+            cap: 50
+        }
+    );
+}
+
+#[test]
+fn limit_at_schema_cap_fetches_probe_row_for_truncation_detection() {
+    let query = CannedQuery {
+        profile: "test".to_string(),
+        table: "users".to_string(),
+        columns: Some(vec!["id".to_string()]),
+        r#where: None,
+        where_combinator: None,
+        order_by: None,
+        limit: Some(50),
+    };
+
     let compiled = query.compile_to_sql(&schema()).expect("compile");
 
     assert_eq!(compiled.sql, "SELECT `id` FROM `users` LIMIT ?");
-    assert_eq!(compiled.binds, vec![QueryValue::U64(50)]);
+    assert_eq!(compiled.binds, vec![QueryValue::U64(51)]);
+}
+
+#[test]
+fn limit_below_schema_cap_binds_exactly_without_probe_row() {
+    let query = CannedQuery {
+        profile: "test".to_string(),
+        table: "users".to_string(),
+        columns: Some(vec!["id".to_string()]),
+        r#where: None,
+        where_combinator: None,
+        order_by: None,
+        limit: Some(10),
+    };
+
+    let compiled = query.compile_to_sql(&schema()).expect("compile");
+
+    assert_eq!(compiled.sql, "SELECT `id` FROM `users` LIMIT ?");
+    assert_eq!(compiled.binds, vec![QueryValue::U64(10)]);
+}
+
+#[test]
+fn maximum_schema_cap_still_fetches_probe_row() {
+    let mut max_schema = schema();
+    max_schema.limit_cap = Some(u32::MAX);
+    for limit in [Some(u32::MAX), None] {
+        let query = CannedQuery {
+            profile: "test".to_string(),
+            table: "users".to_string(),
+            columns: Some(vec!["id".to_string()]),
+            r#where: None,
+            where_combinator: None,
+            order_by: None,
+            limit,
+        };
+
+        let compiled = query.compile_to_sql(&max_schema).expect("compile");
+        assert_eq!(compiled.binds, vec![QueryValue::U64(4_294_967_296)]);
+    }
 }
 
 #[test]

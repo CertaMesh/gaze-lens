@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-08-25
+
+Query diagnostics and correctness hardening, plus reliable SSH tunnel cleanup.
+
+### Changed
+- Set `GAZE_LENS_VERBOSE_ERRORS=1` to include sanitized source diagnostics in CLI
+  failures. Credential-shaped values are scrubbed, and default error
+  sanitization remains unchanged when the variable is unset.
+
+### Fixed
+- Structured database queries now accept `"value"` as an alias for the shared
+  where-clause `"val"` field across CLI and MCP requests.
+- SSH tunnels are torn down on `SIGTERM` and Ctrl-C. `SIGKILL` cannot run
+  cleanup and may leave the detached SSH master behind. An occupied local
+  tunnel port now reports the listener PID when it can be identified safely.
+- CLI and MCP queries reject limits above 1000 explicitly. `Rows` reports
+  hidden safety-cap truncation by probing one row only when the limit is omitted
+  or equals 1000; an explicit lower limit binds exactly the requested count.
+
 ### Security
 - Pinned the Gaze family (`gaze-pii`, `gaze-recognizers`, `gaze-mcp-core`) to
   upstream `0.11.3` as the security floor. This adopts the upstream axis-1

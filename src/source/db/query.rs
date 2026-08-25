@@ -46,7 +46,7 @@ pub struct CannedQuery {
 pub struct WhereClause {
     pub col: String,
     pub op: WhereOp,
-    #[serde(default)]
+    #[serde(default, alias = "value")]
     pub val: Option<ScalarOrList>,
 }
 
@@ -150,6 +150,8 @@ pub enum QueryError {
     OperatorRequiresNoValue(WhereOp),
     #[error("operator `{0:?}` requires a value")]
     OperatorRequiresValue(WhereOp),
+    #[error("query limit {requested} exceeds source row cap {cap}")]
+    LimitExceedsCap { requested: u32, cap: u32 },
     #[error("unsafe column identifier `{0}`")]
     UnsafeColumn(String),
 }
@@ -241,10 +243,24 @@ impl CannedQuery {
         }
 
         let hard_cap = table_schema.limit_cap.unwrap_or(u32::MAX);
-        let limit = self.limit.unwrap_or(hard_cap).min(hard_cap);
+        if let Some(requested) = self.limit
+            && requested > hard_cap
+        {
+            return Err(QueryError::LimitExceedsCap {
+                requested,
+                cap: hard_cap,
+            });
+        }
+        // Probe only the hidden safety cap. A lower caller-selected limit is an
+        // intentional result size, so binding cap+1 would return an extra row.
+        let limit = match self.limit {
+            Some(requested) if requested == hard_cap => u64::from(requested) + 1,
+            Some(requested) => u64::from(requested),
+            None => u64::from(hard_cap) + 1,
+        };
         sql.push_str(" LIMIT ");
         sql.push_str(&placeholders.next());
-        binds.push(QueryValue::U64(limit as u64));
+        binds.push(QueryValue::U64(limit));
 
         Ok(CompiledQuery { sql, binds })
     }
