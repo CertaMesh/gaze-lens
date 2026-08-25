@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-08-25
+
+Query diagnostics and correctness hardening, plus reliable SSH tunnel cleanup.
+
+### Changed
+- Set `GAZE_LENS_VERBOSE_ERRORS=1` to include sanitized source diagnostics in CLI
+  failures. Credential-shaped values are scrubbed, and default error
+  sanitization remains unchanged when the variable is unset.
+
+### Fixed
+- MySQL canned-query filters now accept `"value"` as the where-JSON value key.
+- SSH tunnels are torn down on `SIGTERM` and Ctrl-C. An occupied local tunnel
+  port now reports the listener PID when it can be identified safely.
+- CLI queries reject limits above 1000 explicitly, and `Rows` reports
+  truncation truthfully by probing one row beyond the requested cap.
+
 ### Security
 - Pinned the Gaze family (`gaze-pii`, `gaze-recognizers`, `gaze-mcp-core`) to
   upstream `0.11.3` as the security floor. This adopts the upstream axis-1

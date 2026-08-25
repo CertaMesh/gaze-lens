@@ -168,7 +168,7 @@ gaze-lens query --profile <NAME> --table <TABLE> [--column <COL>]... [--where-js
 | `--profile <NAME>` | — | `default` | Profile selecting the DB source. |
 | `--table <TABLE>` | — | (required) | Raw configured table name. |
 | `--column <COL>` | — | (all) | Projected column. Repeatable; omit for all columns. |
-| `--where-json <JSON>` | — | (none) | JSON array of where clauses: `[{"col","op","val"?}]`. Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `like`, `is_null`, `is_not_null`. |
+| `--where-json <JSON>` | — | (none) | JSON array of where clauses: `[{"col","op","val"?}]`. `value` is accepted as an alias for `val`. Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `like`, `is_null`, `is_not_null`. |
 | `--where-combinator <and\|or>` | — | (none) | Combinator joining where clauses. |
 | `--order-by-json <JSON>` | — | (none) | JSON array of order terms: `[{"col","dir"}]` where `dir` is `asc` or `desc`. |
 | `--limit <N>` | — | (none) | Row cap (`u32`). |
@@ -177,6 +177,8 @@ gaze-lens query --profile <NAME> --table <TABLE> [--column <COL>]... [--where-js
 | `--snapshot-dir <PATH>` | `GAZE_LENS_SNAPSHOT_DIR` | `~/.gaze-lens/snapshots` | Snapshot blob directory. |
 
 The canned query shape is `{table, columns?, where?, order_by?, limit?}`; the CLI maps `--column`/`--where-json`/`--order-by-json` onto it. No raw SQL strings are accepted at v1.
+
+CLI errors stay sanitized by default. For local diagnosis, set `GAZE_LENS_VERBOSE_ERRORS=1` to include source and driver details on stderr. This mode still scrubs credential-shaped values and never includes stored SQL or remote stderr; it does not change MCP or manifest error output.
 
 ### Side effects
 

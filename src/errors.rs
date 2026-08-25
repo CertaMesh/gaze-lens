@@ -203,3 +203,55 @@ pub fn sanitize_error(err: &LensError) -> String {
         LensError::Internal { .. } => "Internal: internal error".to_string(),
     }
 }
+
+/// Formats a CLI error with opt-in source diagnostics.
+///
+/// Detailed source errors are intended for local troubleshooting only. SQL and
+/// remote stderr remain excluded, and credential-shaped values are scrubbed.
+pub fn format_cli_error(err: &LensError, verbose: bool) -> String {
+    if !verbose {
+        return sanitize_error(err);
+    }
+
+    match err {
+        LensError::SourceError {
+            source_name,
+            detail,
+            ..
+        } => format!(
+            "SourceError: source error from {}: {}",
+            scrub_credentials(source_name),
+            scrub_credentials(detail)
+        ),
+        _ => sanitize_error(err),
+    }
+}
+
+fn scrub_credentials(input: &str) -> String {
+    let mut scrubbed = input.to_string();
+    for (pattern, replacement) in [
+        (
+            r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+(?::[^\s/@]*)?@",
+            "$1[REDACTED]@",
+        ),
+        (
+            r#"(?i)\b(user(?:name|[ _-]?id)?|uid|password|passwd|pwd|token|secret|api[ _-]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;&]+)"#,
+            "$1=[REDACTED]",
+        ),
+        (
+            r"(?i)\b(authorization)\s*:\s*(?:bearer|basic)\s+[^\s,;&]+",
+            "$1: [REDACTED]",
+        ),
+        (r"(?i)\b(user)\s+'[^']+'@'[^']+'", "$1 '[REDACTED]'"),
+    ] {
+        // Static patterns are covered by tests. If one is ever invalid, keep
+        // the safer already-scrubbed value instead of exposing the raw error.
+        let Ok(regex) = regex::Regex::new(pattern) else {
+            return sanitize_error(&LensError::Internal {
+                detail: "invalid credential scrubber pattern".to_string(),
+            });
+        };
+        scrubbed = regex.replace_all(&scrubbed, replacement).into_owned();
+    }
+    scrubbed
+}
