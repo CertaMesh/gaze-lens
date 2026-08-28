@@ -72,7 +72,7 @@ Releases are tag-driven through [cargo-dist](https://opensource.axo.dev/cargo-di
 3. Create a matching SemVer tag, for example `git tag v0.1.1`.
 4. Push the tag with `git push origin v0.1.1`.
 
-The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured archives, generates installers, and uploads everything to the GitHub release for that tag. The near-term binary target is Apple Silicon macOS (`aarch64-apple-darwin`) only. Intel macOS, Linux, and Windows remain future binary targets until the cross-platform proof in [docs/explanation/cross-platform-roadmap.md](./docs/explanation/cross-platform-roadmap.md) passes in CI.
+The GitHub Actions release workflow runs on `v*.*.*` tags, builds the configured archives, generates installers, and uploads everything to the GitHub release for that tag. The configured prebuilt targets are exactly Apple Silicon macOS (`aarch64-apple-darwin`), Linux x86_64 (`x86_64-unknown-linux-gnu`), and Linux aarch64 (`aarch64-unknown-linux-gnu`). Intel macOS and Windows users build from source; Windows remains a future binary target until the remaining proof in [docs/explanation/cross-platform-roadmap.md](./docs/explanation/cross-platform-roadmap.md) passes in CI.
 
 The release workflow uses public crates.io Gaze packages. When changing the required Gaze revision, bump the dependency versions in `Cargo.toml`, refresh `Cargo.lock`, bump the package version, and call out the crates.io versions in the release PR description.
 

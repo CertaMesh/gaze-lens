@@ -12,14 +12,34 @@ PII-safe read-access for live production investigation by AI agents.
 
 ## Quick start
 
-Download the latest prebuilt Apple Silicon macOS binary and run the built-in demo — it tokenizes a small canned dataset and restores it inline in one process, writing nothing to `~/.gaze-lens/`:
+Download the latest prebuilt archive for your platform, then run the built-in
+demo. It tokenizes a small canned dataset and restores it inline in one
+process, writing nothing to `~/.gaze-lens/`.
+
+Apple Silicon macOS (`aarch64-apple-darwin`):
 
 ```sh
 curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
 ./gaze-lens demo
 ```
 
-Not on Apple Silicon, or want the full first-query-and-replay loop? Start with the [getting-started tutorial](./docs/tutorials/getting-started.md), which also covers building from source.
+Linux x86_64 (`x86_64-unknown-linux-gnu`):
+
+```sh
+curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-x86_64-unknown-linux-gnu.tar.xz | tar -xJ
+./gaze-lens demo
+```
+
+Linux aarch64 (`aarch64-unknown-linux-gnu`):
+
+```sh
+curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-aarch64-unknown-linux-gnu.tar.xz | tar -xJ
+./gaze-lens demo
+```
+
+For unsupported platforms, or for the full first-query-and-replay loop, start
+with the [getting-started tutorial](./docs/tutorials/getting-started.md), which
+also covers building from source.
 
 ## Documentation
 
@@ -46,7 +66,7 @@ See the [docs hub](./docs/README.md) for the full map.
 ### Explanation
 - [Pseudonymization and replay](./docs/explanation/pseudonymization-and-replay.md) — why tokens are reversible only locally.
 - [Threat model](./docs/explanation/threat-model.md) — what gaze-lens defends against, and the residual risks it does not.
-- [Cross-platform roadmap](./docs/explanation/cross-platform-roadmap.md) — why prebuilt binaries are Apple Silicon-only for now.
+- [Cross-platform roadmap](./docs/explanation/cross-platform-roadmap.md) — current Linux proof and remaining Windows work.
 
 Contributors: see [CONTRIBUTING.md](./CONTRIBUTING.md) for the dev workflow, the crates.io Gaze dependency pin, the sqlx macro ban, and PR review routing.
 

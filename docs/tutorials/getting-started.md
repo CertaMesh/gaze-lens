@@ -15,25 +15,41 @@ check the **✓ Success looks like** note, and you'll arrive at a working setup.
 When you want to go deeper, the [Where to next](#where-to-next) links at the end
 point to the how-to guides and reference.
 
-> **What you need:** an Apple Silicon Mac (other platforms build from source —
-> see [step 1](#step-1--install-gaze-lens)), a terminal, and the `sqlite3`
-> command (preinstalled on macOS). About ten minutes.
+> **What you need:** Apple Silicon macOS, Linux x86_64, or Linux aarch64 for a
+> prebuilt binary (other platforms build from source), a terminal, and the
+> `sqlite3` command. It is preinstalled on macOS; install it with your package
+> manager on Linux. About ten minutes.
 
 ---
 
 ## Step 1 — Install gaze-lens
 
-Download the latest prebuilt binary and unpack it:
+Run the download command for your platform. Each archive contains the same
+`gaze-lens` executable:
+
+Apple Silicon macOS (`aarch64-apple-darwin`):
 
 ```sh
 curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+```
+
+Linux x86_64 (`x86_64-unknown-linux-gnu`):
+
+```sh
+curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-x86_64-unknown-linux-gnu.tar.xz | tar -xJ
+```
+
+Linux aarch64 (`aarch64-unknown-linux-gnu`):
+
+```sh
+curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-aarch64-unknown-linux-gnu.tar.xz | tar -xJ
 ```
 
 This drops a `gaze-lens` executable in the current directory. Move it onto your
 `PATH` if you like (`mv gaze-lens /usr/local/bin/`); this tutorial just calls
 `./gaze-lens`.
 
-> **Not on Apple Silicon?** Build from source instead — you need stable Rust
+> **On another platform?** Build from source instead — you need stable Rust
 > 1.89 or newer:
 >
 > ```sh

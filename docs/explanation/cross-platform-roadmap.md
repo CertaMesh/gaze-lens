@@ -8,7 +8,7 @@
 
 ## Current Assessment
 
-Apple Silicon-only is no longer blocked solely by Gaze's old ONNX Runtime default. As of `gaze-recognizers 0.9.0-rc.1`, ONNX-backed recognizers are opt-in features (`runtime-candle` and `runtime-tract`), while the default recognizer set keeps phone parsing enabled without pulling `ort`.
+The former Apple Silicon-only posture was not blocked solely by Gaze's old ONNX Runtime default. As of `gaze-recognizers 0.9.0-rc.1`, ONNX-backed recognizers are opt-in features (`runtime-candle` and `runtime-tract`), while the default recognizer set keeps phone parsing enabled without pulling `ort`.
 
 Linux is now CI-proven and wired into release automation. Windows still needs platform proof across its own filesystem, keyring, and release packaging paths.
 
