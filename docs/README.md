@@ -32,7 +32,7 @@ the session locally to see the original values.
 
 - [Pseudonymization and replay](explanation/pseudonymization-and-replay.md) — why tokens are reversible only locally.
 - [Threat model](explanation/threat-model.md) — what gaze-lens defends against, and the residual risks it does not.
-- [Cross-platform roadmap](explanation/cross-platform-roadmap.md) — why prebuilt binaries are Apple Silicon–only for now.
+- [Cross-platform roadmap](explanation/cross-platform-roadmap.md) — current Linux proof and remaining Windows work.
 
 ---
 

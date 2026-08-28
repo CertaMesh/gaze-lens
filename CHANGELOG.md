@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-08-28
+
+Linux release artifacts, native release proof, and canonical license metadata.
+
+### Added
+- The cargo-dist release plan now produces prebuilt
+  `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` archives with
+  `.sha256` sidecars, alongside the existing Apple Silicon macOS archive.
+- Native CI release proof covers macOS and both Linux targets. The Linux lanes
+  check and test all targets, run `demo` from the built binary, exercise the
+  no-DBus keyring failure path, validate the dist plan, and build a local
+  release artifact.
+
+### Changed
+- CI checks that every committed Linux release target appears in both the
+  cargo-dist target list and its exact `dist.binaries` mapping, so release
+  configuration drift fails before publication.
+
+### Fixed
+- Restored the root `LICENSE` to the canonical Apache-2.0 template so GitHub
+  recognizes the repository license correctly.
+
+### Security
+- Linux CI now proves that keyring access without a DBus session fails
+  gracefully with `BACKEND UNAVAILABLE` or `ACCESS DENIED`, and rejects panic
+  or backtrace output from that failure path.
+
 ## [0.5.4] — 2026-08-25
 
 Query diagnostics and correctness hardening, plus reliable SSH tunnel cleanup.
