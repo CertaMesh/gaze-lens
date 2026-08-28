@@ -149,8 +149,11 @@ jobs:
           DIST_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          if grep -F "\"${DIST_TARGET}\"" dist-workspace.toml; then
-            grep -Fx "\"${DIST_TARGET}\" = [\"gaze-lens\"]" dist-workspace.toml
+          if grep -Fxq "\"${DIST_TARGET}\" = [\"gaze-lens\"]" dist-workspace.toml; then
+            if ! grep -E "^targets = \[.*\"${DIST_TARGET}\".*\]$" dist-workspace.toml; then
+              echo "${DIST_TARGET} has a binary mapping but is missing from the release targets list"
+              exit 1
+            fi
             exit 0
           fi
 
