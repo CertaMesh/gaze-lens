@@ -131,6 +131,11 @@ jobs:
             exit 1
           fi
 
+          if grep -Eiq 'panicked at|stack backtrace:' <<<"$output"; then
+            echo "keyring check emitted a panic or backtrace after its diagnostic"
+            exit 1
+          fi
+
           env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR \
             bash -c 'test -z "${DBUS_SESSION_BUS_ADDRESS:-}" && test -z "${XDG_RUNTIME_DIR:-}"'
 
