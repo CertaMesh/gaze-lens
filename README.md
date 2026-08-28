@@ -16,24 +16,42 @@ Download the latest prebuilt archive for your platform, then run the built-in
 demo. It tokenizes a small canned dataset and restores it inline in one
 process, writing nothing to `~/.gaze-lens/`.
 
+Release asset URLs resolve after the tag workflow finishes. An HTTP 404 means
+publication is still in progress.
+
 Apple Silicon macOS (`aarch64-apple-darwin`):
 
 ```sh
-curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-aarch64-apple-darwin.tar.xz | tar -xJ
+asset="gaze-lens-aarch64-apple-darwin.tar.xz"
+base_url="https://github.com/CertaMesh/gaze-lens/releases/latest/download"
+curl --fail --location --remote-name "${base_url}/${asset}"
+curl --fail --location --remote-name "${base_url}/${asset}.sha256"
+shasum -a 256 --check "${asset}.sha256"
+tar -xJf "${asset}" --strip-components=1 "${asset%.tar.xz}/gaze-lens"
 ./gaze-lens demo
 ```
 
 Linux x86_64 (`x86_64-unknown-linux-gnu`):
 
 ```sh
-curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-x86_64-unknown-linux-gnu.tar.xz | tar -xJ
+asset="gaze-lens-x86_64-unknown-linux-gnu.tar.xz"
+base_url="https://github.com/CertaMesh/gaze-lens/releases/latest/download"
+curl --fail --location --remote-name "${base_url}/${asset}"
+curl --fail --location --remote-name "${base_url}/${asset}.sha256"
+sha256sum --check "${asset}.sha256"
+tar -xJf "${asset}" --strip-components=1 "${asset%.tar.xz}/gaze-lens"
 ./gaze-lens demo
 ```
 
 Linux aarch64 (`aarch64-unknown-linux-gnu`):
 
 ```sh
-curl -L https://github.com/CertaMesh/gaze-lens/releases/latest/download/gaze-lens-aarch64-unknown-linux-gnu.tar.xz | tar -xJ
+asset="gaze-lens-aarch64-unknown-linux-gnu.tar.xz"
+base_url="https://github.com/CertaMesh/gaze-lens/releases/latest/download"
+curl --fail --location --remote-name "${base_url}/${asset}"
+curl --fail --location --remote-name "${base_url}/${asset}.sha256"
+sha256sum --check "${asset}.sha256"
+tar -xJf "${asset}" --strip-components=1 "${asset%.tar.xz}/gaze-lens"
 ./gaze-lens demo
 ```
 
