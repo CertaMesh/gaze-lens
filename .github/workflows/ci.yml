@@ -169,3 +169,41 @@ jobs:
 
       - name: Dist local artifact build (${{ matrix.target }})
         run: dist build --artifacts=local --target "${{ matrix.target }}" --allow-dirty
+
+      - name: Prepare Linux smoke binary
+        shell: bash
+        env:
+          SMOKE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/linux-smoke"
+          mkdir -p "$artifact_dir"
+          cp target/debug/gaze-lens "$artifact_dir/gaze-lens"
+          strip "$artifact_dir/gaze-lens"
+          "$artifact_dir/gaze-lens" --version
+          (
+            cd "$artifact_dir"
+            sha256sum gaze-lens > SHA256SUMS
+            {
+              printf 'commit=%s\ntarget=%s\n' "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" "$SMOKE_TARGET"
+              printf 'run=%s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+              printf 'profile=dev; stripped=true; release=false\n'
+              rustc -Vv
+              cargo -V
+              cat /etc/os-release
+              file gaze-lens
+              ldd gaze-lens
+              readelf --dynamic gaze-lens
+              readelf --version-info gaze-lens
+            } > provenance.txt
+            # Tar preserves executable permissions when the artifact is downloaded.
+            tar -czf gaze-lens.tar.gz gaze-lens SHA256SUMS provenance.txt
+          )
+
+      - name: Upload Linux smoke binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-smoke-${{ matrix.target }}
+          path: ${{ runner.temp }}/linux-smoke/gaze-lens.tar.gz
+          retention-days: 1
+          if-no-files-found: error
