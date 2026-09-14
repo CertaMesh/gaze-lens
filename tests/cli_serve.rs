@@ -406,6 +406,7 @@ fn policy() -> gaze::Policy {
 
 fn serve_args(temp: &tempfile::TempDir, profiles: &[&str]) -> ServeArgs {
     ServeArgs {
+        remote_service_config: None,
         profile: profiles.iter().map(|name| name.to_string()).collect(),
         manifest: temp.path().join("manifest.sqlite"),
         snapshot_dir: temp.path().join("snapshots"),

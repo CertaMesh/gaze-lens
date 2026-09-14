@@ -41,7 +41,8 @@ pub struct Session {
 
 struct SessionInner {
     lens_session_id: ulid::Ulid,
-    gaze_session: gaze::Session,
+    gaze_session: Arc<gaze::Session>,
+    snapshot_lock: Arc<Mutex<()>>,
     pipeline_mode: Mutex<PipelineMode>,
     column_action_mode: Mutex<ColumnActionMode>,
     manifest: Arc<dyn LensManifestStore>,
@@ -362,7 +363,8 @@ impl Session {
         Self {
             inner: Arc::new(SessionInner {
                 lens_session_id,
-                gaze_session,
+                gaze_session: Arc::new(gaze_session),
+                snapshot_lock: Arc::new(Mutex::new(())),
                 pipeline_mode: Mutex::new(pipeline_mode),
                 column_action_mode: Mutex::new(column_action_mode),
                 manifest,
@@ -402,7 +404,8 @@ impl Session {
             self.inner.manifest.clone(),
             &self.inner.snapshot_dir,
             self.inner.lens_session_id,
-            &self.inner.gaze_session,
+            self.inner.gaze_session.clone(),
+            self.inner.snapshot_lock.clone(),
             self.inner.core_summaries.clone(),
         );
         let session_id_policy = gaze_mcp_core::SessionIdPolicy::default_strict();
@@ -1471,22 +1474,34 @@ pub(crate) fn persist_snapshot(
     snapshot_dir: &Path,
     lens_session_id: ulid::Ulid,
     gaze_session: &gaze::Session,
+    snapshot_lock: &Mutex<()>,
 ) -> Result<SnapshotRef, LensError> {
-    std::fs::create_dir_all(snapshot_dir).map_err(|err| LensError::ManifestFinishFailed {
-        call_id: "snapshot".to_string(),
-        detail: err.to_string(),
-        path: Some(snapshot_dir.to_path_buf()),
-    })?;
-    set_dir_private(snapshot_dir)?;
-    let path = snapshot_dir.join(format!("{lens_session_id}.snap"));
-    let bytes = gaze_session
-        .export()
+    // Lock before export: a queued writer must not publish an older token map.
+    let _guard = snapshot_lock
+        .lock()
+        .map_err(|_| snapshot_error(snapshot_dir))?;
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(snapshot_dir)
         .map_err(|err| LensError::ManifestFinishFailed {
             call_id: "snapshot".to_string(),
             detail: err.to_string(),
-            path: Some(path.clone()),
-        })?
-        .into_bytes();
+            path: Some(snapshot_dir.to_path_buf()),
+        })?;
+    set_dir_private(snapshot_dir)?;
+    let path = snapshot_dir.join(format!("{lens_session_id}.snap"));
+    let bytes = zeroize::Zeroizing::new(
+        gaze_session
+            .export()
+            .map_err(|err| LensError::ManifestFinishFailed {
+                call_id: "snapshot".to_string(),
+                detail: err.to_string(),
+                path: Some(path.clone()),
+            })?
+            .into_bytes(),
+    );
     write_private_file(&path, &bytes)?;
     Ok(SnapshotRef { path })
 }
@@ -1505,6 +1520,12 @@ fn cap_string(value: String, max_bytes: usize) -> (String, bool) {
 fn set_dir_private(path: &Path) -> Result<(), LensError> {
     use std::os::unix::fs::PermissionsExt;
 
+    if !std::fs::symlink_metadata(path)
+        .map_err(|_| snapshot_error(path))?
+        .is_dir()
+    {
+        return Err(snapshot_error(path));
+    }
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(|err| {
         LensError::ManifestFinishFailed {
             call_id: "snapshot".to_string(),
@@ -1514,27 +1535,41 @@ fn set_dir_private(path: &Path) -> Result<(), LensError> {
     })
 }
 
-fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), LensError> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+fn snapshot_error(path: &Path) -> LensError {
+    LensError::ManifestFinishFailed {
+        call_id: "snapshot".to_string(),
+        detail: "snapshot persistence failed".to_string(),
+        path: Some(path.to_path_buf()),
+    }
+}
 
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|err| LensError::ManifestFinishFailed {
-            call_id: "snapshot".to_string(),
-            detail: err.to_string(),
-            path: Some(path.to_path_buf()),
-        })?;
-    file.write_all(bytes)
-        .map_err(|err| LensError::ManifestFinishFailed {
-            call_id: "snapshot".to_string(),
-            detail: err.to_string(),
-            path: Some(path.to_path_buf()),
-        })
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), LensError> {
+    let file = prepare_private_file(path, bytes)?;
+    file.persist(path).map_err(|_| snapshot_error(path))?;
+    // Persist the directory entry before a successful manifest row can refer to it.
+    let parent = path.parent().ok_or_else(|| snapshot_error(path))?;
+    std::fs::File::open(parent)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|_| snapshot_error(path))
+}
+
+fn prepare_private_file(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile, LensError> {
+    use std::io::Write;
+
+    let parent = path.parent().ok_or_else(|| snapshot_error(path))?;
+    // NamedTempFile creates a fresh 0600 inode exclusively. Rename replaces a
+    // destination symlink instead of following it. Drop removes failed writes;
+    // a hard exit may leave a private sibling until the operator removes it.
+    let mut file = tempfile::Builder::new()
+        .prefix(".snapshot-")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .map_err(|_| snapshot_error(path))?;
+    file.write_all(bytes).map_err(|_| snapshot_error(path))?;
+    file.as_file()
+        .sync_all()
+        .map_err(|_| snapshot_error(path))?;
+    Ok(file)
 }
 
 #[cfg(test)]
@@ -1561,5 +1596,190 @@ mod restore_tests {
         let restored = restore_gaze_tokens_in_string(&session, &pipeline, &input).expect("restore");
 
         assert_eq!(restored, expected);
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    fn restore(path: &Path) -> gaze::Session {
+        gaze::Session::import(gaze::SensitiveSnapshot::from(std::fs::read(path).unwrap())).unwrap()
+    }
+
+    #[test]
+    fn snapshot_interrupted_before_replacement_preserves_previous_replay() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("snapshots");
+        let id = ulid::Ulid::new();
+        let session = gaze::Session::new(gaze::Scope::Conversation(id.to_string())).unwrap();
+        let lock = Mutex::new(());
+        let token = session
+            .tokenize(&gaze::PiiClass::Email, "first@example.com")
+            .unwrap();
+        let snapshot = persist_snapshot(&dir, id, &session, &lock).unwrap();
+        let previous = std::fs::read(&snapshot.path).unwrap();
+        let next = session
+            .tokenize(&gaze::PiiClass::Email, "next@example.com")
+            .unwrap();
+        let bytes = session.export().unwrap().into_bytes();
+        let pending = prepare_private_file(&snapshot.path, &bytes).unwrap();
+        let pending_path = pending.path().to_owned();
+        assert_eq!(
+            pending.as_file().metadata().unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read(&snapshot.path).unwrap(), previous);
+        assert_eq!(
+            restore(&snapshot.path).restore_strict(&token).unwrap(),
+            "first@example.com"
+        );
+        // Stop at the exact pre-rename boundary. Normal failure unwinds and cleans
+        // the private temporary file; the published snapshot was never touched.
+        drop(pending);
+        assert!(!pending_path.exists());
+        assert_eq!(std::fs::read(&snapshot.path).unwrap(), previous);
+        persist_snapshot(&dir, id, &session, &lock).unwrap();
+        let restored = restore(&snapshot.path);
+        assert_eq!(
+            restored.restore_strict(&token).unwrap(),
+            "first@example.com"
+        );
+        assert_eq!(restored.restore_strict(&next).unwrap(), "next@example.com");
+        assert_eq!(
+            std::fs::metadata(&snapshot.path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn snapshot_hard_exit_before_replacement_preserves_previous_replay() {
+        const CHILD_PATH: &str = "GAZE_LENS_SNAPSHOT_CRASH_TEST_PATH";
+        if let Some(path) = std::env::var_os(CHILD_PATH) {
+            let _pending =
+                prepare_private_file(Path::new(&path), b"next snapshot fixture").unwrap();
+            // Deliberately bypass Drop, as the native watchdog does.
+            std::process::exit(73);
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("snapshots");
+        let id = ulid::Ulid::new();
+        let session = gaze::Session::new(gaze::Scope::Conversation(id.to_string())).unwrap();
+        let token = session
+            .tokenize(&gaze::PiiClass::Email, "earlier@example.com")
+            .unwrap();
+        let snapshot = persist_snapshot(&dir, id, &session, &Mutex::new(())).unwrap();
+        let previous = std::fs::read(&snapshot.path).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "session::snapshot_tests::snapshot_hard_exit_before_replacement_preserves_previous_replay"])
+            .env(CHILD_PATH, &snapshot.path)
+            .status().unwrap();
+        assert_eq!(status.code(), Some(73));
+        assert_eq!(std::fs::read(&snapshot.path).unwrap(), previous);
+        assert_eq!(
+            restore(&snapshot.path).restore_strict(&token).unwrap(),
+            "earlier@example.com"
+        );
+        let files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .collect();
+        assert_eq!(
+            files.len(),
+            2,
+            "hard exit leaves a private temporary sibling"
+        );
+        for file in files {
+            assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn snapshot_replacement_does_not_follow_destination_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("untouched");
+        let path = temp.path().join("snapshot");
+        std::fs::write(&target, b"original").unwrap();
+        symlink(&target, &path).unwrap();
+        write_private_file(&path, b"replacement").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        assert!(
+            !std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn snapshot_directory_symlink_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target");
+        let dir = temp.path().join("snapshots");
+        std::fs::create_dir(&target).unwrap();
+        symlink(&target, &dir).unwrap();
+        let session = gaze::Session::new(gaze::Scope::Conversation("symlink".into())).unwrap();
+        assert!(persist_snapshot(&dir, ulid::Ulid::new(), &session, &Mutex::new(())).is_err());
+        assert_eq!(std::fs::read_dir(target).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn snapshot_failed_replacement_removes_private_temporary_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("destination-directory");
+        std::fs::create_dir(&path).unwrap();
+        assert!(write_private_file(&path, b"private fixture").is_err());
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn snapshot_concurrent_exports_preserve_every_completed_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("snapshots");
+        let id = ulid::Ulid::new();
+        let session = gaze::Session::new(gaze::Scope::Conversation(id.to_string())).unwrap();
+        let lock = Mutex::new(());
+        let barrier = std::sync::Barrier::new(8);
+        let tokens = std::thread::scope(|scope| {
+            let jobs: Vec<_> = (0..8)
+                .map(|worker| {
+                    let session = &session;
+                    let lock = &lock;
+                    let dir = &dir;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        (0..16)
+                            .map(|n| {
+                                let raw = format!("worker{worker}-{n}@example.com");
+                                let token = session.tokenize(&gaze::PiiClass::Email, &raw).unwrap();
+                                persist_snapshot(dir, id, session, lock).unwrap();
+                                (token, raw)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            jobs.into_iter()
+                .flat_map(|job| job.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let restored = restore(&dir.join(format!("{id}.snap")));
+        for (token, raw) in tokens {
+            assert_eq!(restored.restore_strict(&token).unwrap(), raw);
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     }
 }

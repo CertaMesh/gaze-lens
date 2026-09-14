@@ -207,3 +207,24 @@ Shared snapshot_dir means the sweep affects all profiles' replay. Most-restricti
 - Renamed from "Glance" to `gaze-lens` 2026-04-26 after gaze-X family naming convention agreed with Markus.
 - Architectural decisions mirrored to MemPalace under `wing_architect` and `wing_glance` (legacy) / `wing_gaze-lens`.
 - Counselors r1 multi-voice review folded into plan rev 2 (scratchpad 488); decisions D1-D16 locked in scratchpad 477.
+
+## First-party remote log transport
+
+An explicit `serve --remote-service-config` mode may host the bounded raw TLS log
+service without constructing the privacy frontend or Session. Its private MCP
+`2025-11-25` transport supports exactly one configured `log_tail` per connection;
+this does not add a public agent tool or CLI command. Remote source profiles use a
+dedicated local privacy proxy and the existing envelope. Mixed direct/remote
+profiles are rejected. Remote profiles must explicitly tokenize or redact detected
+spans, including every class override derived from database-column rules.
+Preserving overrides and an implicit preserve default fail startup.
+No arbitrary upstream MCP gateway, raw SQL, agent-chosen
+path, command execution, or insecure TLS mode is permitted.
+
+The dedicated proxy enforces startup and request response-admission deadlines with
+one native watchdog and non-queuing admission. Timeout or panic exits the process
+without raw diagnostics; cancellation cannot disarm supervision. Audit success
+means redacted and persisted, not delivery acknowledgement. Previously committed
+replay must survive an interrupted later snapshot replacement. See the
+[remote service guide](../how-to/remote-log-service.md) for the fixed protocol,
+limits, credential placement, certificate operations and failure contract.

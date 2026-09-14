@@ -197,3 +197,20 @@ PR3:
 - [profile-schema.md](./profile-schema.md) — profile fields and snapshot retention.
 - [policy-schema.md](./policy-schema.md) — `gaze-policy.toml` fields.
 - [pseudonymization-and-replay.md](../explanation/pseudonymization-and-replay.md) — session/manifest narrative and cross-profile token correlation.
+
+## Remote log slice
+
+`source::remote::service` is an explicit raw-only entry selected by the existing
+`serve` command before local Session/model/tracing initialization. It reads only
+configured regular files under per-operation grants. `RemoteMcpSource` accepts the
+fixed typed TLS protocol and clean peer closure, then constructs only
+`SourceOutput::TextWithTruncation` through `UpstreamText`. Remote messages never
+enter rmcp's generic runtime. The existing Session/envelope owns redaction and
+audit; the public frontend still owns its five fixed tools.
+
+A single selected profile snapshot determines both remote-only process mode and
+Session construction. The native `watchdog` owns Idle/Running/Expired admission,
+independently of Tokio and model/manifest locks. Frontend completion occurs only
+after sanitized result serialization and a synchronous deadline check. Discarding
+the admission guard does not disarm it. The [operator guide](../how-to/remote-log-service.md)
+documents the boundary between response admission and acknowledged delivery.

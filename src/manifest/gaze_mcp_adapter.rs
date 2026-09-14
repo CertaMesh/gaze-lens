@@ -12,20 +12,22 @@ use crate::session::manifest::LensManifestStore;
 use crate::session::{RedactedToolArgs, ResultSummary, ToolCall, TruncatedAt, persist_snapshot};
 use crate::source::ToolArgs;
 
-pub struct GazeMcpManifestAdapter<'a> {
+pub struct GazeMcpManifestAdapter {
     inner: Arc<dyn LensManifestStore>,
     snapshot_dir: PathBuf,
     lens_session_id: ulid::Ulid,
     summaries: Arc<Mutex<HashMap<String, ResultSummary>>>,
-    gaze_session: &'a gaze::Session,
+    gaze_session: Arc<gaze::Session>,
+    snapshot_lock: Arc<Mutex<()>>,
 }
 
-impl<'a> GazeMcpManifestAdapter<'a> {
+impl GazeMcpManifestAdapter {
     pub fn new(
         inner: Arc<dyn LensManifestStore>,
         snapshot_dir: impl AsRef<Path>,
         lens_session_id: ulid::Ulid,
-        gaze_session: &'a gaze::Session,
+        gaze_session: Arc<gaze::Session>,
+        snapshot_lock: Arc<Mutex<()>>,
         summaries: Arc<Mutex<HashMap<String, ResultSummary>>>,
     ) -> Self {
         Self {
@@ -34,12 +36,13 @@ impl<'a> GazeMcpManifestAdapter<'a> {
             lens_session_id,
             summaries,
             gaze_session,
+            snapshot_lock,
         }
     }
 }
 
 #[async_trait]
-impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter<'_> {
+impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter {
     async fn begin_call(&self, ctx: BeginCallContext<'_>) -> Result<CallHandle, ManifestError> {
         let call = ToolCall {
             call_id: ctx.call_id.to_string(),
@@ -61,9 +64,23 @@ impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter<'_> {
         handle: CallHandle,
         snapshot: CoreSnapshotRef,
     ) -> Result<(), ManifestError> {
-        let snapshot_ref =
-            persist_snapshot(&self.snapshot_dir, self.lens_session_id, self.gaze_session)
-                .map_err(ManifestError::backend)?;
+        let snapshot_dir = self.snapshot_dir.clone();
+        let lens_session_id = self.lens_session_id;
+        let gaze_session = self.gaze_session.clone();
+        let snapshot_lock = self.snapshot_lock.clone();
+        // The blocking job owns the lock through replacement even if its caller
+        // is cancelled, so a detached older write cannot overtake a newer one.
+        let snapshot_ref = tokio::task::spawn_blocking(move || {
+            persist_snapshot(
+                &snapshot_dir,
+                lens_session_id,
+                &gaze_session,
+                &snapshot_lock,
+            )
+        })
+        .await
+        .map_err(|_| ManifestError::backend(lens_internal("snapshot task failed".to_string())))?
+        .map_err(ManifestError::backend)?;
         let summary = self
             .summaries
             .lock()
@@ -97,13 +114,21 @@ impl gaze_mcp_core::ManifestStore for GazeMcpManifestAdapter<'_> {
 
 fn lens_error_from_failure(reason: FailureReason) -> LensError {
     match reason {
-        FailureReason::ToolError { class: _, message }
-            if is_operation_timeout_message(&message) =>
-        {
-            operation_timeout_from_message(&message)
-                .unwrap_or(LensError::Truncated(TruncatedAt::Timeout))
+        FailureReason::ToolError { class, message } => {
+            if class == "internal" {
+                if matches!(
+                    message.as_str(),
+                    "output truncated at Timeout"
+                        | "tool internal error: output truncated at Timeout"
+                ) {
+                    return LensError::Truncated(TruncatedAt::Timeout);
+                }
+                if let Some(timeout) = operation_timeout_from_message(&message) {
+                    return timeout;
+                }
+            }
+            lens_internal("gaze-mcp-core tool failure".to_string())
         }
-        FailureReason::ToolError { class, message } => lens_internal(format!("{class}: {message}")),
         FailureReason::AuthDenied { reason } => lens_internal(format!("auth denied: {reason}")),
         FailureReason::RedactionFailed { message } => {
             LensError::RedactionFailed { detail: message }
@@ -113,30 +138,34 @@ fn lens_error_from_failure(reason: FailureReason) -> LensError {
     }
 }
 
-fn is_timeout_message(message: &str) -> bool {
-    message.contains("output truncated at Timeout")
-}
-
-fn is_operation_timeout_message(message: &str) -> bool {
-    is_timeout_message(message) || message.contains("timeout during ")
-}
-
+// FailureReason erased the typed LensError. Recover only the exact trusted
+// Display shape; nested detector errors and free-form context are not provenance.
 fn operation_timeout_from_message(message: &str) -> Option<LensError> {
-    let start = message.find("timeout during ")?;
-    let timeout = &message[start + "timeout during ".len()..];
+    let timeout = message.strip_prefix("tool internal error: timeout during ")?;
     let (phase, rest) = timeout.split_once(" for ")?;
-    let (operation, rest) = rest.split_once(" after ")?;
-    let (timeout_secs, context) = rest.split_once('s')?;
-    let timeout_secs = timeout_secs.parse::<u64>().ok()?;
-    let context = context
-        .strip_prefix(" (")
-        .and_then(|context| context.strip_suffix(')'))
-        .map(ToString::to_string);
+    if !matches!(
+        phase,
+        "source dispatch" | "redaction" | "ssh connect" | "ssh log command/read" | "local log read"
+    ) {
+        return None;
+    }
+    let (operation, duration) = rest.split_once(" after ")?;
+    if !matches!(
+        operation,
+        "query" | "schema" | "list_tables" | "log_tail" | "log_grep"
+    ) {
+        return None;
+    }
+    let digits = duration.strip_suffix('s')?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let timeout_secs = digits.parse::<u64>().ok()?;
     Some(LensError::OperationTimeout {
         phase: phase.to_string(),
         operation: operation.to_string(),
         timeout_secs,
-        context,
+        context: None,
     })
 }
 
@@ -168,6 +197,7 @@ mod tests {
         let gaze_session =
             gaze::Session::new(gaze::Scope::Conversation(lens_session_id.to_string()))
                 .expect("gaze session");
+        let gaze_session = Arc::new(gaze_session);
         let writer = ManifestWriter::new(
             &manifest_path,
             lens_session_id,
@@ -178,7 +208,8 @@ mod tests {
             Arc::new(writer),
             &snapshot_dir,
             lens_session_id,
-            &gaze_session,
+            gaze_session.clone(),
+            Arc::new(Mutex::new(())),
             Arc::new(Mutex::new(HashMap::new())),
         );
         let pipeline = gaze::Pipeline::builder()
@@ -226,16 +257,37 @@ mod tests {
     }
 
     #[test]
-    fn operation_timeout_message_preserves_phase_context() {
+    fn operation_timeout_recovers_only_fixed_context_free_shape() {
         let err = operation_timeout_from_message(
-            "timeout during ssh connect for log_tail after 10s (profile=prod host=app path=/var/log/app.log)",
+            "tool internal error: timeout during source dispatch for log_tail after 30s",
         )
-        .expect("operation timeout");
-
+        .unwrap();
         assert_eq!(
             crate::errors::sanitize_error(&err),
-            "Timeout: phase=ssh connect operation=log_tail timeout_secs=10 context=profile=prod host=app path=/var/log/app.log"
+            "Timeout: phase=source dispatch operation=log_tail timeout_secs=30"
         );
+        for message in [
+            "tool internal error: timeout during RAW@example.test for log_tail after 30s",
+            "tool internal error: timeout during source dispatch for RAW@example.test after 30s",
+            "tool internal error: timeout during source dispatch for log_tail after RAW@example.test30s",
+            "tool internal error: timeout during source dispatch for log_tail after +30s",
+            "tool internal error: timeout during source dispatch for log_tail after 30s (RAW@example.test)",
+            "tool internal error: timeout during source dispatch for log_tail after 30s RAW@example.test",
+            "tool internal error: redaction failed: timeout during source dispatch for log_tail after 30s",
+            "redaction failed: tool internal error: timeout during source dispatch for log_tail after 30s",
+            "timeout during ssh connect for log_tail after 10s (profile=prod host=app path=/var/log/app.log)",
+        ] {
+            assert!(operation_timeout_from_message(message).is_none());
+            let err = lens_error_from_failure(FailureReason::ToolError {
+                class: "internal".into(),
+                message: message.into(),
+            });
+            assert_eq!(
+                crate::errors::sanitize_error(&err),
+                "Internal: internal error"
+            );
+            assert!(!format!("{err:?}").contains("RAW"));
+        }
     }
 
     #[test]

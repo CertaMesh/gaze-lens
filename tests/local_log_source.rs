@@ -50,6 +50,7 @@ async fn local_log_tail_routes_through_redaction_and_manifest() {
     let snapshot_dir = temp.path().join("snapshots");
     let prepared = prepare_session_for_test(
         ServeArgs {
+            remote_service_config: None,
             profile: Vec::new(),
             manifest: manifest.clone(),
             snapshot_dir,
@@ -127,6 +128,7 @@ async fn local_log_keyword_grep_rejects_raw_pii_but_matches_held_tokens_over_mcp
     let manifest = temp.path().join("manifest.sqlite");
     let prepared = prepare_session_for_test(
         ServeArgs {
+            remote_service_config: None,
             profile: Vec::new(),
             manifest: manifest.clone(),
             snapshot_dir: temp.path().join("snapshots"),
@@ -258,6 +260,7 @@ async fn local_log_keyword_grep_cache_hit_records_core_summary() {
     let manifest = temp.path().join("manifest.sqlite");
     let prepared = prepare_session_for_test(
         ServeArgs {
+            remote_service_config: None,
             profile: Vec::new(),
             manifest: manifest.clone(),
             snapshot_dir: temp.path().join("snapshots"),

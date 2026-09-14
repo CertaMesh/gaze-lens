@@ -239,6 +239,7 @@ pub fn collect_handoff_surface() -> HandoffSurface {
 
 pub fn source_kind(source: &SourceSpec) -> &'static str {
     match source {
+        SourceSpec::RemoteMcpLog { .. } => "remote_mcp_log",
         SourceSpec::Mysql { .. } => "mysql",
         SourceSpec::Postgres { .. } => "postgres",
         SourceSpec::Sqlite { .. } => "sqlite",
@@ -249,6 +250,9 @@ pub fn source_kind(source: &SourceSpec) -> &'static str {
 
 pub fn source_transport(source: &SourceSpec) -> serde_json::Value {
     match source {
+        SourceSpec::RemoteMcpLog { config } => {
+            serde_json::json!({"endpoint":config.endpoint,"server_name":config.server_name,"trust_root":config.trust_root,"resource":config.resource})
+        }
         SourceSpec::Mysql {
             host,
             port,
@@ -297,6 +301,16 @@ pub fn source_transport(source: &SourceSpec) -> serde_json::Value {
 
 pub fn secret_locator(source: &SourceSpec) -> SecretLocator {
     match source {
+        SourceSpec::RemoteMcpLog { config } => match &config.secret {
+            SecretSpec::Env { var } => SecretLocator {
+                backend: "env",
+                identity: format!("var={var}"),
+            },
+            SecretSpec::Keyring { service, account } => SecretLocator {
+                backend: "keyring",
+                identity: format!("service={service} account={account}"),
+            },
+        },
         SourceSpec::Mysql {
             password_env,
             secret,
@@ -341,7 +355,8 @@ pub fn sqlite_json_text_policy(source: &SourceSpec) -> Option<Vec<String>> {
         SourceSpec::Mysql { .. }
         | SourceSpec::Postgres { .. }
         | SourceSpec::SshLog { .. }
-        | SourceSpec::LocalLog { .. } => None,
+        | SourceSpec::LocalLog { .. }
+        | SourceSpec::RemoteMcpLog { .. } => None,
     }
 }
 
