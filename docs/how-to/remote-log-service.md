@@ -1,5 +1,10 @@
 # Run a remote log service
 
+> **Current runtime transport.** The [approved-next split](../reference/server-client-split.md#6-private-protocol-v2)
+> replaces this log-tail-only service mode with a separate server binary and private
+> protocol v2. This guide is still valid for current runtime; the new split rejects
+> legacy remote profiles and never silently falls back to this protocol.
+
 The first-party remote service exposes one bounded `log_tail` operation over a
 private TLS MCP transport. A separate local `gaze-lens serve` process reads that
 result through the existing Source, Session, Gaze redaction, snapshot and manifest

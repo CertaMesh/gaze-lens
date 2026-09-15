@@ -1,5 +1,10 @@
 # gaze-lens architecture
 
+> **Current runtime reference.** The normative [approved-next split](./server-client-split.md)
+> defines three crates, two binaries, server execution and local Gaze. Its
+> [ordered plan](./server-client-split.md#10-ordered-implementation-plan) identifies
+> file ownership and proof. The spine below has not yet been migrated.
+
 > Implementer-facing companion to [`spec.md`](./spec.md). SPEC is the product contract; this is the spine.
 
 ## Spine layout
