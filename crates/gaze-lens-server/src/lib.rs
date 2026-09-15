@@ -2,4 +2,5 @@
 pub mod auth;
 pub mod config;
 pub mod history;
+pub(crate) mod private;
 pub mod service;

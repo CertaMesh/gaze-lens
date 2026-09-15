@@ -1,10 +1,10 @@
 //! Durable identity enrollment; grants are deliberately outside this history.
-use crate::auth::Authority;
+use crate::{auth::Authority, private};
 use gaze_lens_protocol::{Error, Result, bounds};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    fs::{File, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -43,22 +43,10 @@ pub struct History {
 }
 impl History {
     pub fn open(path: &Path, authority: &Authority) -> Result<Self> {
-        parent(path)?;
+        private::directory(path)?;
         let mut lock_name = path.as_os_str().to_owned();
         lock_name.push(".lock");
-        let lock_path = PathBuf::from(lock_name);
-        if let Ok(meta) = fs::symlink_metadata(&lock_path) {
-            private(&meta, false)?;
-        }
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let lock = options.open(&lock_path).map_err(|_| Error::Unavailable)?;
-        private(&lock.metadata().map_err(|_| Error::Unavailable)?, false)?;
+        let lock = lock(&PathBuf::from(lock_name))?;
         lock.try_lock().map_err(|_| Error::Unavailable)?;
         let enrolled = authority.identities()?;
         let mut ledger = read(path)?;
@@ -73,7 +61,7 @@ impl History {
     }
     /// Validate a proposed restart without mutating history or acquiring sources.
     pub fn check(path: &Path, authority: &Authority) -> Result<()> {
-        parent(path)?;
+        private::directory(path)?;
         read(path)?.enroll(&authority.identities()?).map(|_| ())
     }
     /// Identity definitions are immutable for a running server; grants stay live.
@@ -150,64 +138,36 @@ impl Ledger {
         Ok(changed)
     }
 }
-fn parent(path: &Path) -> Result<&Path> {
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .ok_or(Error::Unavailable)?;
-    private(
-        &fs::symlink_metadata(parent).map_err(|_| Error::Unavailable)?,
-        true,
-    )?;
-    Ok(parent)
-}
-fn private(meta: &fs::Metadata, directory: bool) -> Result<()> {
-    if (directory && !meta.is_dir()) || (!directory && !meta.is_file()) {
-        return Err(Error::Unavailable);
-    }
+/// Creates the lock exclusively, or reopens exactly the private file already
+/// there. `create_new` cannot follow a planted symlink, and the reopen path
+/// verifies the type, privacy, owner and inode the same way the reader does.
+fn lock(path: &Path) -> Result<File> {
+    private::directory(path)?;
+    let mut fresh = OpenOptions::new();
+    fresh.read(true).write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        if meta.mode() & 0o077 != 0 {
-            return Err(Error::Unavailable);
-        }
-        Ok(())
+        use std::os::unix::fs::OpenOptionsExt;
+        fresh.mode(0o600);
     }
-    #[cfg(not(unix))]
-    {
-        Err(Error::Unavailable)
+    match fresh.open(path) {
+        Ok(file) => Ok(file),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            private::open(path, OpenOptions::new().read(true).write(true))
+        }
+        Err(_) => Err(Error::Unavailable),
     }
 }
 fn read(path: &Path) -> Result<Ledger> {
-    let link = fs::symlink_metadata(path).map_err(|_| Error::Unavailable)?;
-    private(&link, false)?;
-    let mut file = File::open(path).map_err(|_| Error::Unavailable)?;
-    let meta = file.metadata().map_err(|_| Error::Unavailable)?;
-    private(&meta, false)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if meta.ino() != link.ino() || meta.dev() != link.dev() {
-            return Err(Error::Unavailable);
-        }
-    }
-    let mut bytes = vec![0u8; 65537];
-    let mut n = 0;
-    while n < bytes.len() {
-        let got = file.read(&mut bytes[n..]).map_err(|_| Error::Unavailable)?;
-        if got == 0 {
-            break;
-        }
-        n += got;
-    }
-    bounds::json(&bytes[..n], 65536)?;
-    let ledger: Ledger = serde_json::from_slice(&bytes[..n]).map_err(|_| Error::Unavailable)?;
+    let bytes = private::read(path)?;
+    bounds::json(&bytes, private::FILE_BYTES)?;
+    let ledger: Ledger = serde_json::from_slice(&bytes).map_err(|_| Error::Unavailable)?;
     ledger.validate()?;
     Ok(ledger)
 }
 fn persist(path: &Path, ledger: &Ledger) -> Result<()> {
-    bounds::serialized_size(ledger, 65536)?;
-    let directory = parent(path)?;
+    bounds::serialized_size(ledger, private::FILE_BYTES)?;
+    let directory = private::directory(path)?;
     let mut temporary =
         tempfile::NamedTempFile::new_in(directory).map_err(|_| Error::Unavailable)?;
     serde_json::to_writer(&mut temporary, ledger).map_err(|_| Error::Unavailable)?;

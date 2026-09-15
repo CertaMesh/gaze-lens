@@ -1581,6 +1581,7 @@ dependencies = [
  "clap",
  "gaze-lens-protocol",
  "rcgen",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -1589,6 +1590,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml",
+ "zeroize",
 ]
 
 [[package]]

@@ -7,7 +7,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::io::AsyncReadExt;
 use tokio_rustls::{
     TlsAcceptor,
     rustls::{
@@ -15,6 +14,7 @@ use tokio_rustls::{
         pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
     },
 };
+use zeroize::Zeroizing;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -43,7 +43,9 @@ pub async fn check(path: &Path) -> Result<Checked> {
         .await
         .map_err(|_| Error::InternalFailure)??;
     let cert_bytes = bounded_file(&config.certificate).await?;
-    let key_bytes = bounded_file(&config.private_key).await?;
+    // The PEM key text is wiped when this scope ends; the parsed key already
+    // zeroizes itself. Both copies are short-lived server-local material.
+    let key_bytes = Zeroizing::new(bounded_file(&config.private_key).await?);
     let certs = CertificateDer::pem_slice_iter(&cert_bytes)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|_| Error::InvalidRequest)?;
@@ -63,45 +65,12 @@ pub async fn check(path: &Path) -> Result<Checked> {
         acceptor: TlsAcceptor::from(Arc::new(tls)),
     })
 }
-/// Fixed-sized storage is allocated before reading, never from file metadata.
+/// Configuration, certificate, key, authority and history all pass through the
+/// one private-file reader. It runs on a blocking worker because its checks are
+/// synchronous metadata calls, and it sizes storage from a constant.
 pub(crate) async fn bounded_file(path: &Path) -> Result<Vec<u8>> {
-    let link = tokio::fs::symlink_metadata(path)
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || crate::private::read(&path))
         .await
-        .map_err(|_| Error::Unavailable)?;
-    if !link.is_file() {
-        return Err(Error::Unavailable);
-    }
-    let mut file = tokio::fs::File::open(path)
-        .await
-        .map_err(|_| Error::Unavailable)?;
-    let meta = file.metadata().await.map_err(|_| Error::Unavailable)?;
-    if !meta.is_file() {
-        return Err(Error::Unavailable);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if meta.mode() & 0o077 != 0 || meta.ino() != link.ino() || meta.dev() != link.dev() {
-            return Err(Error::Unavailable);
-        }
-    }
-    #[cfg(not(unix))]
-    return Err(Error::Unavailable);
-    let mut bytes = vec![0u8; 65537];
-    let mut n = 0;
-    while n < bytes.len() {
-        let got = file
-            .read(&mut bytes[n..])
-            .await
-            .map_err(|_| Error::Unavailable)?;
-        if got == 0 {
-            break;
-        }
-        n += got;
-    }
-    if n > 65536 {
-        return Err(Error::CapExceeded);
-    }
-    bytes.truncate(n);
-    Ok(bytes)
+        .map_err(|_| Error::InternalFailure)?
 }
