@@ -32,6 +32,42 @@ pub async fn run(path: &Path) -> Result<()> {
         .map_err(|_| Error::Unavailable)?;
     serve(listener, config).await
 }
+/// One rejected peer must not end the service, and neither must a temporary
+/// descriptor shortage; a socket that can never yield another connection must.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+/// Consecutive resource failures tolerated before the listener is treated as
+/// dead. At `ACCEPT_BACKOFF` each this is a bounded stall, not an exit on the
+/// first `EMFILE`; `EBADF`-class failures share that uncategorized error kind.
+const ACCEPT_FAILURES: u32 = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Accept {
+    /// The failure belonged to one discarded peer; accept again immediately.
+    Peer,
+    /// A process or host resource is exhausted; pause briefly, then retry.
+    Resource,
+    /// The descriptor is not a usable listening socket any more.
+    Dead,
+}
+pub(crate) fn classify(error: &std::io::Error) -> Accept {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::ConnectionAborted
+        | ErrorKind::ConnectionReset
+        | ErrorKind::ConnectionRefused
+        | ErrorKind::Interrupted
+        | ErrorKind::TimedOut
+        | ErrorKind::WouldBlock => Accept::Peer,
+        ErrorKind::InvalidInput
+        | ErrorKind::NotConnected
+        | ErrorKind::BrokenPipe
+        | ErrorKind::AddrNotAvailable
+        | ErrorKind::NotFound => Accept::Dead,
+        // EMFILE, ENFILE, ENOBUFS, ENOMEM and EBADF share the uncategorized
+        // kind on stable Rust, so the repeat ceiling decides between them.
+        _ => Accept::Resource,
+    }
+}
 pub async fn serve(listener: TcpListener, config: Checked) -> Result<()> {
     let authority = Authority::parse(&bounded_file(&config.authority).await?)?;
     let history_path = config.history.clone();
@@ -44,11 +80,29 @@ pub async fn serve(listener: TcpListener, config: Checked) -> Result<()> {
     let permits = Arc::new(Semaphore::new(bounds::DEFAULT_ACTIVE_CALLS));
     let principals = Arc::new(Mutex::new(HashMap::new()));
     let mut tasks = JoinSet::new();
+    let mut failures = 0u32;
     loop {
         while tasks.try_join_next().is_some() {}
         tokio::select! {
             result = listener.accept() => {
-                let (socket,_) = result.map_err(|_| Error::Unavailable)?;
+                let socket = match result {
+                    Ok((socket, _)) => {
+                        failures = 0;
+                        socket
+                    }
+                    Err(error) => match classify(&error) {
+                        Accept::Peer => continue,
+                        Accept::Dead => return Err(Error::Unavailable),
+                        Accept::Resource => {
+                            failures += 1;
+                            if failures >= ACCEPT_FAILURES {
+                                return Err(Error::Unavailable);
+                            }
+                            tokio::time::sleep(ACCEPT_BACKOFF).await;
+                            continue;
+                        }
+                    },
+                };
                 let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else { drop(socket); continue; };
                 let config = Arc::clone(&config);
                 let principals = Arc::clone(&principals);
@@ -220,5 +274,37 @@ impl Drop for PrincipalPermit {
                 counts.remove(&self.id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Accept, classify};
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn a_rejected_peer_never_classifies_as_a_dead_listener() {
+        for kind in [
+            ErrorKind::ConnectionAborted,
+            ErrorKind::ConnectionReset,
+            ErrorKind::Interrupted,
+        ] {
+            assert_eq!(classify(&Error::from(kind)), Accept::Peer);
+        }
+        // EMFILE and ENFILE are uncategorized; they must pause, not exit.
+        assert_eq!(
+            classify(&Error::from_raw_os_error(24)),
+            Accept::Resource,
+            "EMFILE"
+        );
+        assert_eq!(
+            classify(&Error::from_raw_os_error(23)),
+            Accept::Resource,
+            "ENFILE"
+        );
+        assert_eq!(
+            classify(&Error::from(ErrorKind::InvalidInput)),
+            Accept::Dead
+        );
     }
 }

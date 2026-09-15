@@ -62,6 +62,15 @@ async fn exchange(scenario: &str) {
     .unwrap()
     .with_root_certificates(roots)
     .with_no_client_auth();
+    if scenario == "aborted_peer" {
+        // Peers that vanish before and during TLS must not end the accept loop.
+        // The errno classification itself is a unit test; a real ECONNABORTED
+        // from accept(2) cannot be forced portably from a client fixture.
+        drop(tokio::net::TcpStream::connect(address).await.unwrap());
+        let mut junk = tokio::net::TcpStream::connect(address).await.unwrap();
+        junk.write_all(b"not-tls").await.unwrap();
+        drop(junk);
+    }
     let socket = tokio::net::TcpStream::connect(address).await.unwrap();
     let connector = TlsConnector::from(Arc::new(client));
     if scenario == "wrong_cert" {
@@ -311,4 +320,8 @@ async fn wrong_certificate_identity_cannot_establish_tls() {
 #[tokio::test]
 async fn third_principal_call_fails_without_waiting_or_prepared() {
     exchange("principal_limit").await;
+}
+#[tokio::test]
+async fn a_disconnected_peer_does_not_end_the_accept_loop() {
+    exchange("aborted_peer").await;
 }
