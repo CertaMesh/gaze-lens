@@ -71,8 +71,43 @@ async fn exchange(scenario: &str) {
         junk.write_all(b"not-tls").await.unwrap();
         drop(junk);
     }
-    let socket = tokio::net::TcpStream::connect(address).await.unwrap();
     let connector = TlsConnector::from(Arc::new(client));
+    if scenario == "global_limit" {
+        // A handshake that completes proves the accept loop is running.
+        let mut ready = false;
+        for _ in 0..40 {
+            if admitted(&connector, address).await {
+                ready = true;
+                break;
+            }
+        }
+        assert!(ready, "the server never started accepting");
+        let mut held = Vec::new();
+        let mut refused = false;
+        for _ in 0..40 {
+            held.clear();
+            for _ in 0..gaze_lens_protocol::bounds::DEFAULT_ACTIVE_CALLS {
+                held.push(tokio::net::TcpStream::connect(address).await.unwrap());
+            }
+            if !admitted(&connector, address).await {
+                refused = true;
+                break;
+            }
+            // A probe permit had not drained yet; release it and try again.
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert!(refused, "a saturated server must refuse, not queue");
+        drop(held);
+        let mut released = false;
+        for _ in 0..40 {
+            if admitted(&connector, address).await {
+                released = true;
+                break;
+            }
+        }
+        assert!(released, "admission must return once permits are released");
+    }
+    let socket = tokio::net::TcpStream::connect(address).await.unwrap();
     if scenario == "wrong_cert" {
         assert!(
             connector
@@ -88,6 +123,22 @@ async fn exchange(scenario: &str) {
         .connect(ServerName::try_from("localhost").unwrap(), socket)
         .await
         .unwrap();
+    if scenario == "oversized_prepare" {
+        tls.write_all(&vec![b'x'; gaze_lens_protocol::bounds::PREPARE_BYTES + 1])
+            .await
+            .unwrap();
+        let mut bytes = vec![];
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            tls.read_to_end(&mut bytes),
+        )
+        .await
+        .unwrap();
+        assert!(bytes.is_empty(), "an oversized frame releases nothing");
+        server.abort();
+        let _ = server.await;
+        return;
+    }
     let mut p = Prepare {
         version: Version::V2,
         privacy: Privacy::ClientGaze,
@@ -272,6 +323,20 @@ async fn exchange(scenario: &str) {
     }
 }
 
+/// A completed handshake proves the connection was admitted; a server at its
+/// global limit drops the socket instead, so the handshake fails.
+async fn admitted(connector: &TlsConnector, address: std::net::SocketAddr) -> bool {
+    let socket = tokio::net::TcpStream::connect(address).await.unwrap();
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            connector.connect(ServerName::try_from("localhost").unwrap(), socket),
+        )
+        .await,
+        Ok(Ok(_))
+    )
+}
+
 fn pem(kind: &str, der: &[u8]) -> String {
     use base64::Engine;
     format!(
@@ -318,8 +383,11 @@ async fn unimplemented_source_operation_never_requests_values() {
 async fn unchanged_tls_restart_preserves_the_enrolled_binding() {
     exchange("restart").await;
 }
+/// Client-side name validation only: rustls refuses a server name the
+/// certificate does not cover. The server asserts nothing here, and this slice
+/// has no client certificates, so it is not a server-side identity proof.
 #[tokio::test]
-async fn wrong_certificate_identity_cannot_establish_tls() {
+async fn a_client_rejects_a_server_name_absent_from_the_certificate() {
     exchange("wrong_cert").await;
 }
 
@@ -334,4 +402,12 @@ async fn a_disconnected_peer_does_not_end_the_accept_loop() {
 #[tokio::test]
 async fn a_call_for_another_operation_than_the_pin_is_refused() {
     exchange("changed_operation").await;
+}
+#[tokio::test]
+async fn a_saturated_server_refuses_and_admits_again_after_release() {
+    exchange("global_limit").await;
+}
+#[tokio::test]
+async fn a_prepare_frame_over_its_ceiling_releases_nothing() {
+    exchange("oversized_prepare").await;
 }

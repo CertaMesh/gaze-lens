@@ -24,6 +24,27 @@ use tokio::{
     task::JoinSet,
 };
 
+/// Frame and connection deadlines. Fixture values exist for tests only; they
+/// are deliberately not operator-configurable.
+#[derive(Clone, Copy)]
+pub(crate) struct Deadlines {
+    io: Duration,
+    call: Duration,
+}
+impl Default for Deadlines {
+    fn default() -> Self {
+        Self {
+            io: Duration::from_secs(bounds::IO_SECONDS),
+            call: Duration::from_secs(bounds::CALL_SECONDS),
+        }
+    }
+}
+#[cfg(test)]
+impl Deadlines {
+    pub(crate) fn fixture(io: Duration, call: Duration) -> Self {
+        Self { io, call }
+    }
+}
 pub async fn run(path: &Path) -> Result<()> {
     let config = crate::config::check(path).await?;
     let listener = TcpListener::bind(config.listen)
@@ -68,6 +89,13 @@ pub(crate) fn classify(error: &std::io::Error) -> Accept {
     }
 }
 pub async fn serve(listener: TcpListener, config: Checked) -> Result<()> {
+    serve_with(listener, config, Deadlines::default()).await
+}
+pub(crate) async fn serve_with(
+    listener: TcpListener,
+    config: Checked,
+    deadlines: Deadlines,
+) -> Result<()> {
     let authority = Authority::parse(&bounded_file(&config.authority).await?)?;
     let history_path = config.history.clone();
     let history = Arc::new(
@@ -109,8 +137,8 @@ pub async fn serve(listener: TcpListener, config: Checked) -> Result<()> {
                 tasks.spawn(async move {
                     let _permit = permit;
                     let _ = tokio::time::timeout(
-                        Duration::from_secs(bounds::CALL_SECONDS),
-                        connection(socket, config, principals, history),
+                        deadlines.call,
+                        connection(socket, config, principals, history, deadlines),
                     ).await;
                 });
             }
@@ -123,15 +151,13 @@ async fn connection(
     config: Arc<Checked>,
     principals: Arc<Mutex<HashMap<String, usize>>>,
     history: Arc<History>,
+    deadlines: Deadlines,
 ) -> Result<()> {
-    let mut io = tokio::time::timeout(
-        Duration::from_secs(bounds::IO_SECONDS),
-        config.acceptor.accept(socket),
-    )
-    .await
-    .map_err(|_| Error::Timeout)?
-    .map_err(|_| Error::Unauthorized)?;
-    let p = wire::decode_prepare(&read(&mut io, bounds::PREPARE_BYTES).await?)?;
+    let mut io = tokio::time::timeout(deadlines.io, config.acceptor.accept(socket))
+        .await
+        .map_err(|_| Error::Timeout)?
+        .map_err(|_| Error::Unauthorized)?;
+    let p = wire::decode_prepare(&read(&mut io, bounds::PREPARE_BYTES, deadlines).await?)?;
     let pin = authority(&config.authority, &history)
         .await?
         .prepare(&p, now()?)?;
@@ -151,6 +177,7 @@ async fn connection(
                     id: p.id,
                     code,
                 })?,
+                deadlines,
             )
             .await;
         }
@@ -162,8 +189,8 @@ async fn connection(
         operation: p.operation,
         binding: pin.binding().clone(),
     };
-    write(&mut io, &wire::encode_prepared(&prepared)?).await?;
-    let outcome = call(&mut io, &config.authority, &pin, &p.id, &history).await;
+    write(&mut io, &wire::encode_prepared(&prepared)?, deadlines).await?;
+    let outcome = call(&mut io, &config.authority, &pin, &p.id, &history, deadlines).await;
     let bytes = match outcome {
         Ok(bytes) => bytes,
         Err(code) => wire::encode_failure(&Failure {
@@ -172,11 +199,15 @@ async fn connection(
             code,
         })?,
     };
-    finish(&mut io, &bytes).await
+    finish(&mut io, &bytes, deadlines).await
 }
-async fn finish<S: AsyncWrite + Unpin>(io: &mut S, bytes: &[u8]) -> Result<()> {
-    write(io, bytes).await?;
-    tokio::time::timeout(Duration::from_secs(bounds::IO_SECONDS), io.shutdown())
+async fn finish<S: AsyncWrite + Unpin>(
+    io: &mut S,
+    bytes: &[u8],
+    deadlines: Deadlines,
+) -> Result<()> {
+    write(io, bytes, deadlines).await?;
+    tokio::time::timeout(deadlines.io, io.shutdown())
         .await
         .map_err(|_| Error::Timeout)?
         .map_err(|_| Error::Unavailable)
@@ -187,8 +218,9 @@ async fn call<S: AsyncRead + Unpin>(
     pin: &Pinned,
     id: &str,
     history: &History,
+    deadlines: Deadlines,
 ) -> Result<Vec<u8>> {
-    let call = wire::decode_call(&read(io, bounds::FRAME_BYTES).await?)?;
+    let call = wire::decode_call(&read(io, bounds::FRAME_BYTES, deadlines).await?)?;
     // The Call may not change the operation authorized and pinned at Prepare.
     if call.id != id || call.args.operation() != pin.operation() {
         return Err(Error::InvalidRequest);
@@ -224,8 +256,12 @@ fn now() -> Result<u64> {
         .map(|x| x.as_secs())
         .map_err(|_| Error::Unavailable)
 }
-async fn read<S: AsyncRead + Unpin>(io: &mut S, max: usize) -> Result<Vec<u8>> {
-    tokio::time::timeout(Duration::from_secs(bounds::IO_SECONDS), async {
+async fn read<S: AsyncRead + Unpin>(
+    io: &mut S,
+    max: usize,
+    deadlines: Deadlines,
+) -> Result<Vec<u8>> {
+    tokio::time::timeout(deadlines.io, async {
         let mut buffer = FrameBuffer::new(max)?;
         let mut chunk = [0u8; 1024];
         loop {
@@ -241,8 +277,12 @@ async fn read<S: AsyncRead + Unpin>(io: &mut S, max: usize) -> Result<Vec<u8>> {
     .await
     .map_err(|_| Error::Timeout)?
 }
-async fn write<S: AsyncWrite + Unpin>(io: &mut S, bytes: &[u8]) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(bounds::IO_SECONDS), async {
+async fn write<S: AsyncWrite + Unpin>(
+    io: &mut S,
+    bytes: &[u8],
+    deadlines: Deadlines,
+) -> Result<()> {
+    tokio::time::timeout(deadlines.io, async {
         io.write_all(bytes).await.map_err(|_| Error::Unavailable)?;
         io.flush().await.map_err(|_| Error::Unavailable)
     })
@@ -283,8 +323,119 @@ impl Drop for PrincipalPermit {
 
 #[cfg(test)]
 mod tests {
-    use super::{Accept, classify};
+    use super::{Accept, Deadlines, TcpListener, classify, serve_with};
     use std::io::{Error, ErrorKind};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio_rustls::{
+        TlsConnector,
+        rustls::{self, pki_types::ServerName},
+    };
+
+    fn pem(kind: &str, der: &[u8]) -> String {
+        use base64::Engine;
+        format!(
+            "-----BEGIN {kind}-----\n{}\n-----END {kind}-----\n",
+            base64::engine::general_purpose::STANDARD.encode(der)
+        )
+    }
+    /// A server whose deadlines are short enough to observe in a test. The
+    /// authority is empty: no connection here reaches Prepare.
+    async fn server(
+        deadlines: Deadlines,
+    ) -> (tempfile::TempDir, std::net::SocketAddr, TlsConnector) {
+        let directory = tempfile::tempdir().unwrap();
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert = directory.path().join("cert.pem");
+        let key = directory.path().join("key.pem");
+        let authority = directory.path().join("authority.json");
+        let history = directory.path().join("history.json");
+        let config = directory.path().join("server.toml");
+        std::fs::write(&cert, pem("CERTIFICATE", certified.cert.der())).unwrap();
+        std::fs::write(
+            &key,
+            pem("PRIVATE KEY", &certified.signing_key.serialize_der()),
+        )
+        .unwrap();
+        std::fs::write(
+            &authority,
+            br#"{"principals":[],"resources":[],"grants":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(&history, br#"{"version":1,"entries":[]}"#).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "listen = '127.0.0.1:0'\ncertificate = '{}'\nprivate-key = '{}'\nauthority = '{}'\nhistory = '{}'\n",
+                cert.display(),
+                key.display(),
+                authority.display(),
+                history.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            for file in [&cert, &key, &authority, &history, &config] {
+                std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
+        let checked = crate::config::check(&config).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(serve_with(listener, checked, deadlines));
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(certified.cert.der().clone()).unwrap();
+        let client = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        (
+            directory,
+            address,
+            TlsConnector::from(std::sync::Arc::new(client)),
+        )
+    }
+    fn deadlines() -> Deadlines {
+        Deadlines::fixture(Duration::from_millis(250), Duration::from_secs(30))
+    }
+
+    #[tokio::test]
+    async fn a_silent_handshake_closes_without_a_failure_frame() {
+        let (_directory, address, _connector) = server(deadlines()).await;
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut bytes = vec![];
+        let closed = tokio::time::timeout(Duration::from_secs(5), socket.read_to_end(&mut bytes))
+            .await
+            .is_ok();
+        assert!(closed, "the handshake deadline must close the connection");
+        assert!(bytes.is_empty(), "a closed handshake sends no frame");
+    }
+    #[tokio::test]
+    async fn an_unterminated_frame_closes_without_a_failure_frame() {
+        let (_directory, address, connector) = server(deadlines()).await;
+        let socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut tls = connector
+            .connect(ServerName::try_from("localhost").unwrap(), socket)
+            .await
+            .unwrap();
+        // A frame that never ends in a newline: only the deadline ends it.
+        tls.write_all(br#"{"version":"gaze-lens-source/2""#)
+            .await
+            .unwrap();
+        let mut bytes = vec![];
+        let closed = tokio::time::timeout(Duration::from_secs(5), tls.read_to_end(&mut bytes))
+            .await
+            .is_ok();
+        assert!(closed, "the frame deadline must close the connection");
+        assert!(bytes.is_empty(), "a timed-out frame sends no failure");
+    }
 
     #[test]
     fn a_rejected_peer_never_classifies_as_a_dead_listener() {

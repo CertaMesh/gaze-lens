@@ -115,6 +115,45 @@ fn one_writer_and_read_only_check_preserve_the_registry() {
     ));
     assert!(!path.exists());
 }
+/// 128 principals, the per-file maximum, with a generation set unique to each
+/// round. Every round after the first retires 128 entries and enrolls 128 more.
+fn rotation(round: usize) -> Authority {
+    let principals = (0..128usize)
+        .map(|i| {
+            format!(
+                r#"{{"id":"{:032x}","generation":"{:032x}","sha256":"{:064x}"}}"#,
+                0x1000 + i,
+                0x900000 + round * 0x1000 + i,
+                0x2000 + i
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    Authority::parse(
+        format!(r#"{{"principals":[{principals}],"resources":[],"grants":[]}}"#).as_bytes(),
+    )
+    .unwrap()
+}
+#[test]
+fn the_byte_ceiling_binds_before_the_entry_count_and_writes_nothing() {
+    let (_dir, path) = fixture();
+    drop(History::open(&path, &rotation(0)).unwrap());
+    drop(History::open(&path, &rotation(1)).unwrap());
+    let before = std::fs::read(&path).unwrap();
+    let entries = String::from_utf8(before.clone())
+        .unwrap()
+        .matches("\"active\"")
+        .count();
+    // 256 retained entries are far below the 1,024-entry cap, yet a third
+    // rotation would not fit in 64 KiB: the byte ceiling is the real limit.
+    assert_eq!(entries, 256);
+    assert!(before.len() < 65_536);
+    assert!(
+        matches!(History::open(&path, &rotation(2)), Err(Error::CapExceeded)),
+        "a third rotation must fail closed"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
 #[test]
 fn malformed_and_oversized_history_is_never_reset() {
     let (_dir, path) = fixture();
