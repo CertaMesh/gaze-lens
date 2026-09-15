@@ -1,14 +1,17 @@
-# Phase 1 development assembly
+# Split development assembly
 
-These are extraction boundaries, not runnable split products. Nothing here
-connects to a source, authenticates TLS, restores a token or releases a result.
+These are extraction boundaries, not a complete split product. The server now
+has a limited authenticated readiness development slice, documented in
+[gaze-lens-server/docs/phase2-proof.md](gaze-lens-server/docs/phase2-proof.md).
+It does not execute a source, restore a token or provide client release.
 The normative contract is [server-client-split.md](../docs/reference/server-client-split.md).
 
 - `gaze-lens-protocol`: pure closed DTOs, exact JSON/number carriers, shape/bounds
   checks and one-connection sequence checking. Dependencies: serde, serde_json
   raw values and base64 only. It intentionally has no feature flags.
-- `gaze-lens-server`: empty nonpublished library scaffold for phase 2. No binary,
-  readiness stub, collectors or client dependency.
+- `gaze-lens-server`: nonpublished phase 2 auth/TLS/readiness slice with separate
+  serve/check commands and durable identity history. Acquisition remains incomplete;
+  no source execution, collectors or client dependency.
 - `gaze-lens`: empty nonpublished client library scaffold for phase 3. Its
   temporary Cargo name is `gaze-lens-client-development`, because the unchanged
   legacy package still owns `gaze-lens`. Rename at the phase 4 cutover. There is

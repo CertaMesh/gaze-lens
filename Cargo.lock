@@ -1576,6 +1576,22 @@ dependencies = [
 [[package]]
 name = "gaze-lens-server"
 version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "clap",
+ "gaze-lens-protocol",
+ "rcgen",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "zeroize",
+]
 
 [[package]]
 name = "gaze-mcp-core"
