@@ -90,6 +90,7 @@ impl<'de> Deserialize<'de> for Value {
     }
 }
 fn decode(raw: &str) -> Result<Value> {
+    bounds::require(raw.starts_with('{'))?;
     bounds::json(raw.as_bytes(), bounds::RESULT_BYTES)?;
     let tag: Tag = serde_json::from_str(raw).map_err(|_| Error::InvalidRequest)?;
     macro_rules! fields {

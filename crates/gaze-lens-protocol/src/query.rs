@@ -82,8 +82,7 @@ pub enum Direction {
     Asc,
     Desc,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
 pub struct Predicate {
     pub col: String,
     pub op: Op,
@@ -94,19 +93,19 @@ pub struct Predicate {
     )]
     pub val: Option<Operand>,
 }
+}
 fn present_operand<'de, D: Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<Option<Operand>, D::Error> {
     Operand::deserialize(d).map(Some)
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
 pub struct Order {
     pub col: String,
     pub dir: Direction,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct Query {
     pub table: String,
     #[serde(
@@ -139,6 +138,7 @@ pub struct Query {
         deserialize_with = "present"
     )]
     pub limit: Option<usize>,
+}
 }
 impl Query {
     pub fn limit(&self) -> usize {

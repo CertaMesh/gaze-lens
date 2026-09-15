@@ -633,3 +633,34 @@ fn lower_operator_ceilings_can_truncate_below_requested_limits() {
     );
     roundtrip(&c, page_result(0, 100, 1, Some(1), json!(["records"])));
 }
+
+#[test]
+fn positional_arrays_never_substitute_for_closed_objects() {
+    let request = |op: &str, args: Json| {
+        frame(json!({"version":VERSION,"id":ID,"operation":op,"binding":binding(),"args":args}))
+    };
+    for (op, args) in [
+        ("readiness", json!([])),
+        ("log_tail", json!([100])),
+        ("query", json!({"table":"t","where":[["x","eq",1]]})),
+        ("query", json!({"table":"t","order_by":[["x","asc"]]})),
+    ] {
+        assert!(decode_call(&request(op, args)).is_err());
+    }
+    let mut c: Json = serde_json::from_slice(&request("readiness", json!({}))).unwrap();
+    c["binding"] = json!([
+        "a".repeat(32),
+        "b".repeat(32),
+        "c".repeat(32),
+        "d".repeat(32)
+    ]);
+    assert!(decode_call(&frame(c)).is_err());
+    let c = call("schema", json!({"table":"t"}));
+    assert!(decode_success(&success(&c,json!({"kind":"table_schema","table":"t","columns":[["x","text",false]],"truncated":[]})),&c).is_err());
+    assert!(serde_json::from_str::<Value>(r#"["null"]"#).is_err());
+    let c = call(
+        "inspect",
+        json!({"view":"host","collector":"linux","limit":1}),
+    );
+    assert!(decode_success(&success(&c,json!({"kind":"inspection","view":"host","collector":"linux","status":"ok","evidence":"os_release","records":[["linux",null,"arm64"]],"page":null,"truncated":[]})),&c).is_err());
+}

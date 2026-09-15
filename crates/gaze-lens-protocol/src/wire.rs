@@ -33,8 +33,8 @@ pub enum Privacy {
     #[serde(rename = "client_gaze")]
     ClientGaze,
 }
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
+#[derive(Clone, PartialEq, Eq)]
 pub struct DestinationBinding {
     #[serde(deserialize_with = "opaque")]
     pub principal: String,
@@ -44,6 +44,7 @@ pub struct DestinationBinding {
     pub resource: String,
     #[serde(deserialize_with = "opaque")]
     pub resource_generation: String,
+}
 }
 fn opaque<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
     struct Opaque;
@@ -83,8 +84,7 @@ impl DestinationBinding {
         Ok(())
     }
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
 pub struct Prepare {
     pub version: Version,
     pub privacy: Privacy,
@@ -93,8 +93,8 @@ pub struct Prepare {
     pub resource: String,
     pub operation: Operation,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct Prepared {
     pub version: Version,
     pub privacy: Privacy,
@@ -102,15 +102,15 @@ pub struct Prepared {
     pub operation: Operation,
     pub binding: DestinationBinding,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct Failure {
     pub version: Version,
     pub id: String,
     pub code: Error,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 struct RawCall {
     version: Version,
     id: String,
@@ -118,14 +118,15 @@ struct RawCall {
     binding: DestinationBinding,
     args: Box<RawValue>,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 struct RawSuccess {
     version: Version,
     id: String,
     operation: Operation,
     binding: DestinationBinding,
     result: Box<RawValue>,
+}
 }
 
 pub struct Call {
@@ -139,21 +140,20 @@ pub struct Success {
     pub binding: DestinationBinding,
     pub result: ResultBody,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
 pub struct Empty {}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct Schema {
     pub table: String,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct Tail {
     pub lines: usize,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct Regex {
     pub pattern: String,
     #[serde(
@@ -164,6 +164,7 @@ pub struct Regex {
     pub level: Option<String>,
     pub limit: usize,
 }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum View {
@@ -171,8 +172,7 @@ pub enum View {
     Packages,
     Php,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
 pub struct Inspect {
     pub view: View,
     pub collector: String,
@@ -183,6 +183,7 @@ pub struct Inspect {
         deserialize_with = "offset"
     )]
     pub offset: Option<usize>,
+}
 }
 fn offset<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<usize>, D::Error> {
     usize::deserialize(d).map(Some)
@@ -297,16 +298,15 @@ pub enum Scope {
     #[serde(rename = "tail_window")]
     TailWindow,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
 pub struct Window {
     pub scope: Scope,
     pub scanned_bytes: usize,
     pub scanned_lines: usize,
     pub admitted_lines: usize,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct PackagePage {
     pub offset: usize,
     pub returned: usize,
@@ -314,17 +314,18 @@ pub struct PackagePage {
     #[serde(deserialize_with = "nullable")]
     pub next_offset: Option<usize>,
 }
+}
 fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
     d: D,
 ) -> std::result::Result<Option<T>, D::Error> {
     Option::deserialize(d)
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
 pub struct Column {
     pub name: String,
     pub data_type: String,
     pub nullable: bool,
+}
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -342,20 +343,20 @@ pub enum Evidence {
     ConfiguredPhp,
     None,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
 pub struct Host {
     pub os_id: String,
     #[serde(deserialize_with = "nullable")]
     pub version_id: Option<String>,
     pub architecture: String,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct Package {
     pub name: String,
     pub version: String,
     pub architecture: String,
+}
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -378,8 +379,7 @@ pub enum AppBinding {
     Proven,
     Unknown,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+crate::closed_object! {
 pub struct PackageObservation {
     pub status: PackageStatus,
     #[serde(deserialize_with = "nullable")]
@@ -387,15 +387,15 @@ pub struct PackageObservation {
     #[serde(deserialize_with = "nullable")]
     pub version: Option<String>,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct CliObservation {
     pub status: ObservationStatus,
     #[serde(deserialize_with = "nullable")]
     pub version: Option<String>,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct FpmObservation {
     pub status: ObservationStatus,
     #[serde(deserialize_with = "nullable")]
@@ -404,13 +404,14 @@ pub struct FpmObservation {
     pub active: Option<bool>,
     pub app_binding: AppBinding,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+}
+crate::closed_object! {
 pub struct Php {
     pub runtime_id: String,
     pub installed_package: PackageObservation,
     pub cli: CliObservation,
     pub fpm: FpmObservation,
+}
 }
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -478,6 +479,7 @@ pub enum ResultBody {
     },
 }
 fn result(s: &str) -> Result<ResultBody> {
+    require(s.starts_with('{'))?;
     #[derive(Deserialize)]
     struct Tag {
         kind: String,
