@@ -337,7 +337,7 @@ impl Drop for PrincipalPermit {
 
 #[cfg(test)]
 mod tests {
-    use super::{Accept, Deadlines, TcpListener, classify, serve_with};
+    use super::{Accept, Authority, Deadlines, History, TcpListener, classify, serve_with, wire};
     use std::io::{Error, ErrorKind};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -485,6 +485,82 @@ mod tests {
         assert_eq!(
             classify(&Error::from(ErrorKind::InvalidInput)),
             Accept::Dead
+        );
+    }
+    /// The `changed_operation` fixture in `tests/readiness.rs` cannot see this
+    /// check. Its mismatched Call also draws InvalidRequest one frame later,
+    /// from the protocol layer's `ResultBody::validate_for`, so it stays green
+    /// with the comparison removed. Pinning an operation the reply site does
+    /// not implement separates the two: the comparison answers InvalidRequest,
+    /// and only without it does execution reach the reply match, which answers
+    /// UnsupportedOperation. The service-layer check is defense in depth behind
+    /// `validate_for`, and this is the case that holds it in place.
+    #[tokio::test]
+    async fn the_pin_comparison_refuses_a_call_the_protocol_layer_would_accept() {
+        use gaze_lens_protocol::wire::{Args, Call, Empty, Operation, Prepare, Privacy, Version};
+        const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+        let directory = tempfile::tempdir().unwrap();
+        let authority_path = directory.path().join("authority.json");
+        let history_path = directory.path().join("history.json");
+        // Granted for `inspect`, which `call` has no reply arm for.
+        let state = format!(
+            r#"{{"principals":[{{"id":"{p}","generation":"{g}","sha256":"ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb"}}],"resources":[{{"alias":"fixture","id":"{r}","generation":"{rg}","class":"database"}}],"grants":[{{"principal":"{p}","resource":"{r}","operation":"inspect","enabled":true,"expires-unix":4102444800}}]}}"#,
+            p = "1".repeat(32),
+            g = "2".repeat(32),
+            r = "3".repeat(32),
+            rg = "4".repeat(32),
+        );
+        std::fs::write(&authority_path, &state).unwrap();
+        std::fs::write(&history_path, br#"{"version":1,"entries":[]}"#).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            for file in [&authority_path, &history_path] {
+                std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
+        let parsed = Authority::parse(state.as_bytes()).unwrap();
+        let history = History::open(&history_path, &parsed).unwrap();
+        let pin = parsed
+            .prepare(
+                &Prepare {
+                    version: Version::V2,
+                    privacy: Privacy::ClientGaze,
+                    id: ID.into(),
+                    credential: "a".repeat(64),
+                    resource: "fixture".into(),
+                    operation: Operation::Inspect,
+                },
+                1,
+            )
+            .unwrap();
+        // Everything but the operation matches the pin, so no earlier check in
+        // `call` can be the one that refuses: the ID and the binding are equal
+        // and the grant is live.
+        let frame = wire::encode_call(&Call {
+            id: ID.into(),
+            binding: pin.binding().clone(),
+            args: Args::Readiness(Empty {}),
+        })
+        .unwrap();
+        let mut reader = frame.as_slice();
+        let outcome = super::call(
+            &mut reader,
+            &authority_path,
+            &pin,
+            ID,
+            &history,
+            deadlines(),
+        )
+        .await;
+        assert_eq!(
+            outcome.unwrap_err(),
+            gaze_lens_protocol::Error::InvalidRequest,
+            "the pin comparison must refuse the Call; UnsupportedOperation \
+             here means the comparison is gone and the reply match caught it"
         );
     }
 }
