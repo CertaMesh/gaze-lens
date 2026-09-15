@@ -161,12 +161,19 @@ external service or new platform claim has been enabled in this change.
   SELECT/WHERE/ORDER grants, native per-IN normalization and read-only-role proof
   are absent. Readiness permission never implies those operations.
 - **H, partial:** exact readiness grants, expiry, revocation, malformed authority,
-  changed Call binding, a Call for an operation the pin never authorized, fixed
+  changed Call binding, a Call for an operation the pin never authorized, a
+  resource reusing a principal identity, fixed
   principal-limit rejection, global-limit saturation and release, handshake and
   frame deadlines closing without a Failure frame, an oversized Prepare frame,
   accept-error classification, private-file rejection (group-readable,
   symlinked, FIFO, shared parent) and durable restart/remap/retirement/history
-  failure have synthetic tests. The certificate test proves client-side
+  failure have synthetic tests. The Call-operation refusal is proved by a unit
+  case over the pin comparison, not by the end-to-end fixture: while readiness
+  is the only reachable pin, a mismatched Call is refused one frame later by
+  the protocol layer's `ResultBody::validate_for` with the same code, so the
+  synthetic exchange stays green with the service-layer comparison removed.
+  That comparison is defense in depth behind `validate_for`, and the unit case
+  separates them by pinning an operation whose reply is unimplemented. The certificate test proves client-side
   server-name validation only; there are no client certificates in this slice,
   so no server-side identity assertion is claimed. Per-driver measured peak
   memory, huge cells/schema/buffer acquisition, native cancellation and pool
@@ -261,10 +268,10 @@ cargo tree -p gaze-lens-server --all-features --edges normal
 cargo tree -p gaze-lens-protocol --all-features --edges normal
 ```
 
-The 31 server cases cover authority, exact CLI command surface, private-file
+The 33 server cases cover authority, exact CLI command surface, private-file
 admission, durable history, accept-error classification, deadline closure and
-real synthetic TLS exchanges. The readiness fixture asserts that `check` does
-not enroll or modify history. The ordinary suite retains the standalone
+real synthetic TLS exchanges. The history fixture asserts that `check` does not
+enroll or modify history, comparing the file byte for byte before and after. The ordinary suite retains the standalone
 allocation-admission probe under Cargo's existing `harness = false` linkage.
 Normal pre-push hooks remain enabled. Logs and exact final outcomes belong to
 the PR/delivery, not a claim that unimplemented driver gates have passed.
