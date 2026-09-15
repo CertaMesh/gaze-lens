@@ -77,7 +77,12 @@ pub(crate) fn classify(error: &std::io::Error) -> Accept {
         | ErrorKind::ConnectionRefused
         | ErrorKind::Interrupted
         | ErrorKind::TimedOut
-        | ErrorKind::WouldBlock => Accept::Peer,
+        // accept(2) hands back errors already pending on the new connection,
+        // and the man page says to retry them like EAGAIN. They belong to one
+        // peer, so they must not count toward the dead-listener ceiling.
+        | ErrorKind::HostUnreachable
+        | ErrorKind::NetworkUnreachable
+        | ErrorKind::NetworkDown => Accept::Peer,
         ErrorKind::InvalidInput
         | ErrorKind::NotConnected
         | ErrorKind::BrokenPipe
@@ -85,6 +90,8 @@ pub(crate) fn classify(error: &std::io::Error) -> Accept {
         | ErrorKind::NotFound => Accept::Dead,
         // EMFILE, ENFILE, ENOBUFS, ENOMEM and EBADF share the uncategorized
         // kind on stable Rust, so the repeat ceiling decides between them.
+        // WouldBlock joins them: tokio retries it on readiness so it cannot
+        // surface here, but as a Peer outcome it would retry with no pause.
         _ => Accept::Resource,
     }
 }
@@ -443,9 +450,20 @@ mod tests {
             ErrorKind::ConnectionAborted,
             ErrorKind::ConnectionReset,
             ErrorKind::Interrupted,
+            // Pending network errors handed back by accept(2): one peer each,
+            // so a run of them must never reach the dead-listener ceiling.
+            ErrorKind::HostUnreachable,
+            ErrorKind::NetworkUnreachable,
+            ErrorKind::NetworkDown,
         ] {
-            assert_eq!(classify(&Error::from(kind)), Accept::Peer);
+            assert_eq!(classify(&Error::from(kind)), Accept::Peer, "{kind:?}");
         }
+        // A Peer outcome retries with no pause, so WouldBlock must not be one.
+        assert_eq!(
+            classify(&Error::from(ErrorKind::WouldBlock)),
+            Accept::Resource,
+            "EAGAIN"
+        );
         // EMFILE and ENFILE are uncategorized; they must pause, not exit.
         assert_eq!(
             classify(&Error::from_raw_os_error(24)),
