@@ -59,6 +59,10 @@ pub struct Profile {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SourceSpec {
+    RemoteMcpLog {
+        #[serde(flatten)]
+        config: crate::source::remote::RemoteConfig,
+    },
     Mysql {
         host: String,
         port: u16,
@@ -156,6 +160,11 @@ impl Profile {
             SourceSpec::LocalLog { .. } => {
                 return Err(LensError::Profile {
                     detail: "local_log profiles do not have database passwords".to_string(),
+                });
+            }
+            SourceSpec::RemoteMcpLog { .. } => {
+                return Err(LensError::Profile {
+                    detail: "remote log profiles do not have database passwords".to_string(),
                 });
             }
         };
@@ -375,7 +384,10 @@ fn validate_post_merge(profiles: &[Profile]) -> Result<(), LensError> {
                 secret,
                 ..
             } => (password_env, secret),
-            SourceSpec::Sqlite { .. } | SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
+            SourceSpec::Sqlite { .. }
+            | SourceSpec::SshLog { .. }
+            | SourceSpec::LocalLog { .. }
+            | SourceSpec::RemoteMcpLog { .. } => {
                 continue;
             }
         };
@@ -776,6 +788,14 @@ fn merge_source(user: &SourceSpec, project: &SourceSpec) -> SourceSpec {
                     user_path.clone()
                 },
             }
+        }
+        (
+            SourceSpec::RemoteMcpLog { config: user },
+            SourceSpec::RemoteMcpLog { config: project },
+        ) => {
+            let mut config = user.clone();
+            config.resource = project.resource.clone();
+            SourceSpec::RemoteMcpLog { config }
         }
         (_, project) => project.clone(),
     }

@@ -325,6 +325,9 @@ fn render_source_error(
 
 fn source_error_hint(source: &SourceSpec) -> &'static str {
     match source {
+        SourceSpec::RemoteMcpLog { .. } => {
+            "verify remote endpoint, TLS trust root/name and credential grant"
+        }
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
             "If the database host is private, configure source ssh_host/local_port or rerun `gaze-lens init` with tunnel settings."
         }
@@ -391,6 +394,7 @@ fn load_policy_only(profile: &crate::profile::Profile) -> Result<ValidatedPolicy
         validate_policy_file(&policy).map_err(|err| LensError::Profile {
             detail: err.to_string(),
         })?;
+        crate::policy::enforce_remote_output_policy(profile, &policy)?;
         enforce_production_ner(&profile.name, profile.production, &policy).map_err(|err| {
             LensError::Profile {
                 detail: err.to_string(),
@@ -421,6 +425,7 @@ fn load_policy_only(profile: &crate::profile::Profile) -> Result<ValidatedPolicy
     validate_policy_file(&policy).map_err(|err| LensError::Profile {
         detail: err.to_string(),
     })?;
+    crate::policy::enforce_remote_output_policy(profile, &policy)?;
     enforce_production_ner(&profile.name, profile.production, &policy).map_err(|err| {
         LensError::Profile {
             detail: err.to_string(),
@@ -512,6 +517,7 @@ fn should_warn_email_regex_only_redaction(
                 | SourceSpec::Sqlite { .. }
                 | SourceSpec::SshLog { .. }
                 | SourceSpec::LocalLog { .. }
+                | SourceSpec::RemoteMcpLog { .. }
         )
 }
 
@@ -521,7 +527,7 @@ fn email_regex_only_redaction_warning(
 ) -> String {
     let is_log_profile = matches!(
         profile.source,
-        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. }
+        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } | SourceSpec::RemoteMcpLog { .. }
     );
     let high_risk = is_log_profile || profile.production;
     let severity = if high_risk {
@@ -580,6 +586,9 @@ async fn validate_source(
         .rows
         .min(u32::MAX as usize) as u32;
     match &profile.source {
+        SourceSpec::RemoteMcpLog { config } => {
+            config.validate()?;
+        }
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
             let source = connect_db_source_with_password(profile, limit_cap, db_password).await?;
             let _ = source.list_tables().await?;
@@ -651,6 +660,13 @@ async fn validate_secret_for_check(
     profile: &crate::profile::Profile,
 ) -> Result<ValidatedSecret, LensError> {
     match &profile.source {
+        SourceSpec::RemoteMcpLog { .. } => Ok(ValidatedSecret {
+            metadata: SecretMetadata {
+                backend: "deferred",
+                identity: "remote credential checked on connection".into(),
+            },
+            db_password: None,
+        }),
         SourceSpec::Mysql {
             password_env,
             secret,

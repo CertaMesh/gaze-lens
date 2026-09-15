@@ -8,6 +8,7 @@ async fn test_serve_installs_tracing_before_session_prepare_errors() {
 
     let err = run(
         ServeArgs {
+            remote_service_config: None,
             profile: Vec::new(),
             manifest: temp.path().join("manifest.sqlite"),
             snapshot_dir: temp.path().join("snapshots"),

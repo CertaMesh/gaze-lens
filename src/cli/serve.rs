@@ -26,6 +26,9 @@ use crate::source::{DbSourceWrapper, SchemaPresentation, Source};
 
 #[derive(Debug, Args)]
 pub struct ServeArgs {
+    /// Run only the first-party raw TLS log service, without a local privacy session.
+    #[arg(long, conflicts_with_all=["profile", "print_discovery", "log", "manifest", "snapshot_dir"])]
+    pub remote_service_config: Option<PathBuf>,
     #[arg(long, value_name = "PROFILE")]
     pub profile: Vec<String>,
     #[arg(
@@ -60,11 +63,41 @@ pub async fn run(
     project_config: Option<&Path>,
     user_config: Option<&Path>,
 ) -> Result<(), LensError> {
-    init_tracing(args.log.as_deref())?;
+    if let Some(path) = &args.remote_service_config {
+        if project_config.is_some() || user_config.is_some() {
+            return Err(crate::source::remote::failure());
+        }
+        return crate::source::remote::service::run(path).await;
+    }
+    let profiles = match load_profiles(project_config, user_config)
+        .and_then(|profiles| select_profiles(profiles, &args.profile))
+    {
+        Ok(profiles) => profiles,
+        Err(err) => {
+            init_tracing(args.log.as_deref())?;
+            return Err(err);
+        }
+    };
+    let remote = profiles
+        .iter()
+        .filter(|p| matches!(p.source, SourceSpec::RemoteMcpLog { .. }))
+        .count();
+    if remote > 0 && remote != profiles.len() {
+        return Err(LensError::Profile { detail:"remote profiles require a dedicated process; mixed direct and remote profiles are rejected".into() });
+    }
+    if remote > 0 {
+        crate::source::remote::watchdog::enable()?;
+    } else {
+        init_tracing(args.log.as_deref())?;
+    }
+    let startup = crate::source::remote::watchdog::admit()?;
     if print_discovery_requested(&args) {
         return print_discovery_inventory(&args, project_config, user_config).await;
     }
-    let prepared = prepare_session(args, project_config, user_config)?;
+    let prepared = prepare_selected_session(args, profiles)?;
+    if let Some(startup) = startup {
+        startup.complete();
+    }
     eprintln!("{}", loaded_profiles_banner(&prepared.loaded_profiles));
     run_frontend_until_shutdown(
         McpFrontend::new(),
@@ -121,6 +154,13 @@ fn prepare_session(
     user_config: Option<&Path>,
 ) -> Result<PreparedServe, LensError> {
     let profiles = select_profiles(load_profiles(project_config, user_config)?, &args.profile)?;
+    prepare_selected_session(args, profiles)
+}
+
+fn prepare_selected_session(
+    args: ServeArgs,
+    profiles: Vec<Profile>,
+) -> Result<PreparedServe, LensError> {
     let manifest = expand_path(&args.manifest)?;
     let snapshot_dir = expand_path(&args.snapshot_dir)?;
     apply_multi_profile_retention(&profiles, &manifest, &snapshot_dir)?;
@@ -218,7 +258,9 @@ fn register_lazy_source(session: &Arc<Session>, profile: Profile) {
                 }),
             );
         }
-        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
+        SourceSpec::SshLog { .. }
+        | SourceSpec::LocalLog { .. }
+        | SourceSpec::RemoteMcpLog { .. } => {
             session.register_source_lazy(
                 SourceClass::Log,
                 profile.name.clone(),
@@ -329,6 +371,9 @@ async fn discover_profile(profile: &Profile) -> Result<ProfileDiscovery, LensErr
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
             discover_database_profile(profile).await
         }
+        SourceSpec::RemoteMcpLog { .. } => Err(LensError::Profile {
+            detail: "remote discovery is unavailable; use the fixed log_tail operation".into(),
+        }),
         SourceSpec::SshLog { host, path } => discover_log_profile(profile, host, path),
         SourceSpec::LocalLog { path } => {
             discover_log_profile(profile, "local", &path.to_string_lossy())
@@ -461,7 +506,9 @@ async fn build_db_source(profile: Profile) -> Result<Arc<dyn Source>, LensError>
         SourceSpec::Mysql { .. } | SourceSpec::Postgres { .. } | SourceSpec::Sqlite { .. } => {
             connect_db_source(&profile, default_db_limit_cap()).await?
         }
-        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
+        SourceSpec::SshLog { .. }
+        | SourceSpec::LocalLog { .. }
+        | SourceSpec::RemoteMcpLog { .. } => {
             return Err(LensError::Profile {
                 detail: format!("profile `{}` is not a database source", profile.name),
             });
@@ -487,6 +534,9 @@ fn default_db_limit_cap() -> u32 {
 fn build_log_source(profile: Profile) -> Result<Arc<dyn Source>, LensError> {
     let caps = OutputCaps::default();
     match &profile.source {
+        SourceSpec::RemoteMcpLog { config } => Ok(Arc::new(
+            crate::source::remote::RemoteMcpSource::new(config.clone())?,
+        )),
         SourceSpec::SshLog { host, path } => {
             let log_source = Arc::new(SshLogSource::new(
                 profile.name.clone(),
@@ -596,6 +646,7 @@ pub fn runtime_policy(
         }
         None => default_policy_file()?,
     };
+    crate::policy::enforce_remote_output_policy(profile, &policy_file)?;
     // #988: a production profile must configure an NER model. Enforced before
     // the pipeline is built so a misconfigured prod profile fails closed at
     // session build (serve/query) rather than leaking names at retrieval time.

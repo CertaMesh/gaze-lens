@@ -40,7 +40,9 @@ pub fn runtime_plan(profile: &Profile) -> Result<DbRuntimePlan, LensError> {
             connect_port: 0,
             tunnel: None,
         }),
-        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => Err(LensError::Profile {
+        SourceSpec::SshLog { .. }
+        | SourceSpec::LocalLog { .. }
+        | SourceSpec::RemoteMcpLog { .. } => Err(LensError::Profile {
             detail: format!("profile `{}` is not a database source", profile.name),
         }),
     }
@@ -114,7 +116,9 @@ pub(crate) async fn connect_db_source_with_password(
             Arc::new(source)
         }
         SourceSpec::Sqlite { .. } => Arc::new(SqliteSource::connect(profile, limit_cap).await?),
-        SourceSpec::SshLog { .. } | SourceSpec::LocalLog { .. } => {
+        SourceSpec::SshLog { .. }
+        | SourceSpec::LocalLog { .. }
+        | SourceSpec::RemoteMcpLog { .. } => {
             return Err(LensError::Profile {
                 detail: format!("profile `{}` is not a database source", profile.name),
             });

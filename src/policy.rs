@@ -206,6 +206,33 @@ pub fn validate_policy_file(policy: &PolicyFile) -> Result<(), PolicyError> {
     Ok(())
 }
 
+/// Remote text must not preserve detected spans, including class overrides
+/// synthesized from database-column rules. Validate the exact loaded policy.
+pub fn enforce_remote_output_policy(
+    profile: &crate::profile::Profile,
+    policy: &PolicyFile,
+) -> Result<(), crate::errors::LensError> {
+    if !matches!(
+        profile.source,
+        crate::profile::SourceSpec::RemoteMcpLog { .. }
+    ) {
+        return Ok(());
+    }
+    let safe = |action: Option<&str>| matches!(action, Some("tokenize" | "redact"));
+    if profile.policy.is_none()
+        || !safe(policy.policy.default_action.as_deref())
+        || policy
+            .policy
+            .database
+            .column_rules
+            .iter()
+            .any(|r| !safe(Some(r.action.as_deref().unwrap_or("tokenize"))))
+    {
+        return Err(crate::errors::LensError::Profile{detail:"remote profiles require an explicit policy with default_action tokenize or redact and only tokenize/redact column overrides".into()});
+    }
+    Ok(())
+}
+
 pub fn build_pipeline(policy: &PolicyFile) -> Result<Pipeline, PolicyError> {
     let mut builder = Pipeline::builder()
         .detector(RegexDetector::emails().map_err(|err| PolicyError::Recognizer(err.to_string()))?);

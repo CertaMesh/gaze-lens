@@ -38,3 +38,5 @@ the session locally to see the original values.
 
 New here? The top-level [README](../README.md) has install + a quickstart.
 Contributors: see [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+- [Run a remote log service](how-to/remote-log-service.md): bounded TLS log access through a dedicated local privacy proxy.

@@ -8,6 +8,7 @@ use crate::value::LensRow;
 
 pub mod db;
 pub mod log;
+pub mod remote;
 pub mod ssh_tunnel;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

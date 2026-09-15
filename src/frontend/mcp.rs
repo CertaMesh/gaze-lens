@@ -195,7 +195,9 @@ impl McpFrontend {
         args: Result<serde_json::Value, serde_json::Error>,
     ) -> Result<CallToolResult, ErrorData> {
         let args = args.map_err(|err| ErrorData::internal_error(err.to_string(), None))?;
-        match self.dispatch(tool_name, args).await {
+        let admission = crate::source::remote::watchdog::admit()
+            .map_err(|_| ErrorData::internal_error("remote operation unavailable", None))?;
+        let response = match self.dispatch(tool_name, args).await {
             Ok(result) => serde_json::to_string(&result)
                 .map(|json| CallToolResult::success(vec![ContentBlock::text(json)]))
                 .map_err(|err| ErrorData::internal_error(err.to_string(), None)),
@@ -203,7 +205,11 @@ impl McpFrontend {
                 Err(ErrorData::invalid_params(sanitize_error(&err), None))
             }
             Err(err) => Err(ErrorData::internal_error(sanitize_error(&err), None)),
+        };
+        if let Some(admission) = admission {
+            admission.complete();
         }
+        response
     }
 
     async fn dispatch(
@@ -269,5 +275,222 @@ impl Frontend for McpFrontend {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod remote_privacy_tests {
+    use super::*;
+    use crate::session::manifest::{LensManifestStore, SnapshotRef};
+    use crate::session::{OutputCaps, RedactedToolArgs, ResultSummary};
+    use crate::source::remote::{test_support, watchdog};
+    use std::time::{Duration, Instant};
+
+    struct RuntimeDetector(String);
+    impl gaze::Detector for RuntimeDetector {
+        fn detect(&self, _: &str) -> Vec<gaze::Detection> {
+            vec![]
+        }
+        fn try_detect(
+            &self,
+            input: &str,
+        ) -> Result<Vec<gaze::Detection>, gaze_types::RecognizerRuntimeError> {
+            if input.contains("RAW_TEXT_CANARY") {
+                println!("detector_entered");
+                match self.0.as_str() {
+                    "slow" => std::thread::sleep(Duration::from_secs(30)),
+                    "panic" => panic!("RAW_PANIC_CANARY secret@example.test"),
+                    "timeout_canary" => {
+                        return Err(gaze_types::RecognizerRuntimeError::new(
+                            "fixture",
+                            "timeout during RAW_TIMEOUT_CANARY@example.test for log_tail after 30s",
+                        ));
+                    }
+                    _ => {
+                        return Err(gaze_types::RecognizerRuntimeError::new(
+                            "fixture",
+                            "RAW_ERROR_CANARY secret@example.test",
+                        ));
+                    }
+                }
+            }
+            Ok(vec![])
+        }
+    }
+    struct Manifest(String);
+    impl LensManifestStore for Manifest {
+        fn begin_call(&self, _: &ToolCall, _: &RedactedToolArgs) -> Result<(), LensError> {
+            Ok(())
+        }
+        fn finish_call(
+            &self,
+            id: &str,
+            _: &ResultSummary,
+            _: &SnapshotRef,
+        ) -> Result<(), LensError> {
+            println!("manifest_entered");
+            if self.0 == "manifest_slow" {
+                std::thread::sleep(Duration::from_secs(30));
+            }
+            Err(LensError::ManifestFinishFailed {
+                call_id: id.into(),
+                detail: "RAW_MANIFEST_CANARY secret@example.test".into(),
+                path: None,
+            })
+        }
+        fn fail_call(&self, _: &str, _: &LensError) -> Result<(), LensError> {
+            Ok(())
+        }
+    }
+    #[test]
+    fn privacy_child() {
+        let Ok(mode) = std::env::var("GAZE_PRIVACY_UNIT_CHILD") else {
+            return;
+        };
+        watchdog::enable().unwrap();
+        watchdog::TEST_TIMEOUT_MS.store(500, std::sync::atomic::Ordering::Relaxed);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (source, peer, dir) = test_support::peer(mode == "upstream_error").await;
+            println!("fixture_ready");
+            let mut policy = gaze::Policy::default();
+            policy.session.scope = gaze::SessionScope::Conversation;
+            let session = if mode.starts_with("manifest") {
+                Session::new_with_manifest_for_tests(
+                    &policy,
+                    Arc::new(Manifest(mode.clone())),
+                    &dir.path().join("snap"),
+                    OutputCaps::default(),
+                )
+                .unwrap()
+            } else {
+                let pipeline = if mode == "upstream_error" {
+                    gaze::Pipeline::builder().build().unwrap()
+                } else {
+                    gaze::Pipeline::builder()
+                        .detector(RuntimeDetector(mode.clone()))
+                        .build()
+                        .unwrap()
+                };
+                Session::new_with_pipeline_for_profile(
+                    &policy,
+                    pipeline,
+                    "test",
+                    &dir.path().join("manifest"),
+                    &dir.path().join("snap"),
+                )
+                .unwrap()
+            };
+            session.register_source_for_profile(
+                crate::session::SourceClass::Log,
+                "test",
+                Arc::new(source),
+            );
+            println!("session_ready");
+            let frontend = McpFrontend::with_session(Arc::new(session));
+            let result = frontend
+                .to_call_tool_result(
+                    "log_tail",
+                    Ok(serde_json::json!({"profile":"test","lines":1})),
+                )
+                .await;
+            println!("dispatch_finished error={}", result.is_err());
+            assert!(result.is_err());
+            println!(
+                "RESPONSE {}",
+                serde_json::to_string(&result.unwrap_err()).unwrap()
+            );
+            peer.await.unwrap();
+            if mode == "timeout_canary" {
+                let conn = rusqlite::Connection::open(dir.path().join("manifest")).unwrap();
+                let summary: String = conn
+                    .query_row("SELECT result_summary FROM calls LIMIT 1", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                println!("manifest_canary={}", summary.contains("RAW_TIMEOUT_CANARY"));
+                assert!(!summary.contains("RAW_TIMEOUT_CANARY"));
+            }
+        });
+    }
+    #[test]
+    fn real_tls_gaze_and_manifest_failures_are_closed_at_frontend() {
+        use std::process::{Command, Stdio};
+        for mode in [
+            "slow",
+            "panic",
+            "failed_detector",
+            "timeout_canary",
+            "manifest_slow",
+            "manifest_error",
+            "upstream_error",
+        ] {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "frontend::mcp::remote_privacy_tests::privacy_child",
+                    "--nocapture",
+                ])
+                .env("GAZE_PRIVACY_UNIT_CHILD", mode)
+                .env("RUST_LOG", "trace")
+                .env("GAZE_LENS_VERBOSE_ERRORS", "1")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let start = Instant::now();
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if start.elapsed() > Duration::from_secs(6) {
+                    child.kill().unwrap();
+                    panic!("privacy deadline failed {mode}");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let output = child.wait_with_output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let killed = matches!(mode, "slow" | "panic" | "manifest_slow");
+            assert!(stdout.contains("session_ready"), "{mode}: setup failed");
+            if matches!(
+                mode,
+                "slow" | "panic" | "failed_detector" | "timeout_canary"
+            ) {
+                assert!(
+                    stdout.contains("detector_entered"),
+                    "{mode}: detector was not reached"
+                );
+            }
+            if mode.starts_with("manifest") {
+                assert!(
+                    stdout.contains("manifest_entered"),
+                    "{mode}: manifest was not reached"
+                );
+            }
+            assert_eq!(
+                status.code(),
+                Some(if killed { 124 } else { 0 }),
+                "{mode}: {stdout} {stderr}"
+            );
+            for canary in [
+                "RAW_TEXT_CANARY",
+                "RAW_ERROR_CANARY",
+                "RAW_MANIFEST_CANARY",
+                "RAW_PANIC_CANARY",
+                "RAW_TIMEOUT_CANARY",
+                "secret@example.test",
+                &"d".repeat(64),
+            ] {
+                assert!(!stdout.contains(canary), "{mode}: {stdout}");
+                assert!(!stderr.contains(canary), "{mode}: {stderr}");
+            }
+            assert_eq!(stdout.contains("RESPONSE"), !killed, "{mode}: {stdout}");
+        }
     }
 }
