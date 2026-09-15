@@ -169,7 +169,7 @@ async fn connection(
         .await?
         .prepare(&p, now()?)?;
     // No executable values are requested for unimplemented operations.
-    let admission = if p.operation == Operation::Readiness {
+    let admission = if pin.operation() == Operation::Readiness {
         PrincipalPermit::acquire(principals, pin.binding().principal.clone())
     } else {
         Err(Error::UnsupportedOperation)
@@ -238,13 +238,20 @@ async fn call<S: AsyncRead + Unpin>(
     authority(path, history).await?.revalidate(pin, now()?)?;
     // Readiness is the one implemented operation; the allow-list is in
     // `connection`, which refuses every other operation before Prepared.
+    // Deriving the body from the pin keeps the two sites from disagreeing: an
+    // operation added to that allow-list and forgotten here now refuses,
+    // instead of replying with a Readiness body the client never asked for.
+    let result = match pin.operation() {
+        Operation::Readiness => ResultBody::Readiness {
+            status: ReadinessStatus::Configured,
+        },
+        _ => return Err(Error::UnsupportedOperation),
+    };
     let success = Success {
         id: call.id.clone(),
         operation: pin.operation(),
         binding: pin.binding().clone(),
-        result: ResultBody::Readiness {
-            status: ReadinessStatus::Configured,
-        },
+        result,
     };
     let bytes = wire::encode_success(&success, &call)?;
     // Last authorization check is the release linearization point.
