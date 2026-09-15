@@ -56,6 +56,11 @@ impl Pinned {
     pub fn binding(&self) -> &DestinationBinding {
         &self.binding
     }
+    /// The operation authorized at Prepare. Later checks read it from here
+    /// instead of repeating an operation literal that could drift.
+    pub fn operation(&self) -> Operation {
+        self.operation
+    }
 }
 impl Authority {
     pub fn parse(bytes: &[u8]) -> Result<Self> {

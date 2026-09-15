@@ -8,8 +8,7 @@ use gaze_lens_protocol::{
     Error, Result,
     bounds::{self, FrameBuffer},
     wire::{
-        self, Args, Failure, Operation, Prepared, Privacy, ReadinessStatus, ResultBody, Success,
-        Version,
+        self, Failure, Operation, Prepared, Privacy, ReadinessStatus, ResultBody, Success, Version,
     },
 };
 use std::{
@@ -190,16 +189,19 @@ async fn call<S: AsyncRead + Unpin>(
     history: &History,
 ) -> Result<Vec<u8>> {
     let call = wire::decode_call(&read(io, bounds::FRAME_BYTES).await?)?;
-    if call.id != id || !matches!(call.args, Args::Readiness(_)) {
+    // The Call may not change the operation authorized and pinned at Prepare.
+    if call.id != id || call.args.operation() != pin.operation() {
         return Err(Error::InvalidRequest);
     }
     if &call.binding != pin.binding() {
         return Err(Error::BindingChanged);
     }
     authority(path, history).await?.revalidate(pin, now()?)?;
+    // Readiness is the one implemented operation; the allow-list is in
+    // `connection`, which refuses every other operation before Prepared.
     let success = Success {
         id: call.id.clone(),
-        operation: Operation::Readiness,
+        operation: pin.operation(),
         binding: pin.binding().clone(),
         result: ResultBody::Readiness {
             status: ReadinessStatus::Configured,

@@ -192,6 +192,8 @@ async fn exchange(scenario: &str) {
     };
     match scenario {
         "changed_call" => call.binding.resource_generation = "5".repeat(32),
+        // A Call may not switch to an operation the Prepare never authorized.
+        "changed_operation" => call.args = Args::ListTables(Empty {}),
         "revoke" => {
             let bytes = std::fs::read_to_string(&state).unwrap();
             std::fs::write(&state, bytes.replace("true", "false")).unwrap();
@@ -218,6 +220,10 @@ async fn exchange(scenario: &str) {
         "revoke" | "malformed_authority" => assert_eq!(
             wire::decode_failure(&response, &call.id).unwrap().code,
             gaze_lens_protocol::Error::Unauthorized
+        ),
+        "changed_operation" => assert_eq!(
+            wire::decode_failure(&response, &call.id).unwrap().code,
+            gaze_lens_protocol::Error::InvalidRequest
         ),
         _ => assert!(wire::decode_success(&response, &call).is_ok()),
     }
@@ -324,4 +330,8 @@ async fn third_principal_call_fails_without_waiting_or_prepared() {
 #[tokio::test]
 async fn a_disconnected_peer_does_not_end_the_accept_loop() {
     exchange("aborted_peer").await;
+}
+#[tokio::test]
+async fn a_call_for_another_operation_than_the_pin_is_refused() {
+    exchange("changed_operation").await;
 }
