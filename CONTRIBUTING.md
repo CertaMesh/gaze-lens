@@ -104,7 +104,15 @@ Exceptions:
 
 ## Public-surface expansion rule
 
-The 5 SPEC v1 MCP tools (`query`, `schema`, `list_tables`, `log_tail`, `log_grep`) are the locked public surface. Each accepts a required `profile` argument in v0.2.2; argument-schema growth is allowed under the locked tool list, but adding a 6th tool requires a SPEC amendment PR, not an impl PR. Internal helper methods are fine; do not wire them through `frontend::mcp::McpFrontend` without SPEC.
+The current runtime has five MCP tools (`query`, `schema`, `list_tables`,
+`log_tail`, `log_grep`) with required `profile` arguments and six CLI commands.
+The normative [server/client split amendment](./docs/reference/server-client-split.md)
+authorizes the next six-tool surface by adding `inspect`, retaining the six client
+commands and defining separate server `serve`/`check` commands. Implement that
+contract and its A-J gates before describing it as available. Further public
+expansion requires a SPEC amendment; internal helpers grant no extra surface.
+This security-sensitive contract/implementation requires independent review even
+though the contract amendment changes only documentation.
 
 ## MySQL integration tests
 

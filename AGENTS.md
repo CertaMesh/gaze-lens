@@ -4,14 +4,26 @@ This file provides guidance for AI agents (Claude Code, Codex, Cursor, etc.) whe
 
 `gaze-lens` is a v0.1 PII-safe read-access tool for live production investigation by AI agents, built on the Gaze pseudonymization engine.
 
-## Public surface (locked at v1)
+## Public surface: current runtime and approved next
 
-The product surface is exactly:
+The **current runtime** surface is exactly:
 
 - **5 MCP tools:** `query`, `schema`, `list_tables`, `log_tail`, `log_grep`.
 - **6 CLI subcommands:** `serve`, `init`, `query`, `replay`, `check`, `demo`.
 
-`demo` is a CLI-only inline-replay helper introduced in v0.2.0; it tokenizes a canned in-memory dataset and inline-restores it without persistent state. Adding a 7th subcommand or new MCP tool requires a SPEC amendment PR, not an impl PR. Internal helpers are fine; do not wire them through `frontend::mcp::McpFrontend` without updating [SPEC.md](./docs/reference/spec.md).
+`demo` is a CLI-only canned, offline inline-replay helper without persistent state.
+The normative [server/client split amendment](./docs/reference/server-client-split.md)
+authorizes the **next implementation**: six agent tools (the five above plus
+`inspect`), the same six client commands, and separate `gaze-lens-server serve`
+and `check` commands. Server owns all DB/log/inspection execution and credentials;
+client owns local Gaze/session/audit/replay with no source drivers or fallback.
+This docs approval does not mean the split is implemented. Any further public
+expansion requires another [SPEC](./docs/reference/spec.md) amendment.
+
+For split work, follow the amendment's trust-domain, request omission, typed
+response codec, protocol and A-J proof requirements. The architecture and command
+examples below describe current runtime. Do not reintroduce direct client sources
+or treat historical request-redaction rules as the approved-next contract.
 
 ## Non-negotiables
 

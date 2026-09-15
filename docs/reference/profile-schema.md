@@ -1,5 +1,10 @@
 # Profile schema reference
 
+> **Current runtime schema.** The [approved-next split](./server-client-split.md#3-configuration-authority-and-session-domains)
+> moves source credentials/allowlists to the server and gives the client v2 remote
+> profiles plus immutable session trust domains. Its migration rejects direct and
+> legacy remote profiles; these new settings are not implemented by this docs PR.
+
 Profiles configure the sources `gaze-lens` connects to and the PII policy applied to each. They are TOML, loaded from two files and merged. This page documents every field, its type, default, and merge rule.
 
 For setup examples see [configure-profiles.md](../how-to/configure-profiles.md); for the policy file referenced by `policy` see [policy-schema.md](./policy-schema.md).

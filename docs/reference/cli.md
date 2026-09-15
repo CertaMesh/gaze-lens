@@ -1,5 +1,10 @@
 # CLI reference
 
+> **Current runtime CLI.** The [approved-next split CLI](./server-client-split.md#2-public-surface-and-cli)
+> retains these six client commands, moves source probes out of client `check` and
+> adds a separate two-command `gaze-lens-server` binary. The command reference below
+> remains for current runtime until implementation; new split commands are not yet available.
+
 `gaze-lens` ships exactly six CLI subcommands: `serve`, `init`, `query`, `replay`, `check`, `demo`. The set is locked at v1; adding a subcommand requires a [SPEC](./spec.md) amendment, not an implementation change.
 
 This page documents every subcommand's synopsis, arguments, flags, and side effects. For setup walkthroughs see the how-to guides linked under each subcommand.

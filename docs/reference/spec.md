@@ -1,9 +1,25 @@
 # gaze-lens — product spec v1
 
-> **Status:** locked 2026-04-26 via `/interview-me` + `/grill-me` sessions.
+> **Status:** v1 baseline locked 2026-04-26; approved-next server/client amendment below.
 > **Org:** [CertaMesh](https://github.com/CertaMesh)
 > **Engine:** built on the Gaze pseudonymization runtime.
 > **Naming:** all CertaMesh products carry the `gaze-` prefix. Decided 2026-04-26 with Markus. The original working name "Glance" was retired in favor of `gaze-lens` to fit the family convention.
+
+## Approved next: server/client split
+
+[Server/client split contract and implementation plan](./server-client-split.md)
+is a **normative SPEC amendment**. For the next implementation it takes precedence
+where it conflicts with this historical/current-runtime baseline: two binaries,
+server-owned source execution, local Gaze, six agent tools including `inspect`,
+six retained client commands and a separate two-command server CLI. It also defines
+immutable restoration trust domains, metadata-only request audit, private protocol
+v2, Linux/dpkg inspection, breaking profile migration and acceptance gates A-J.
+
+This docs amendment does not implement those features. Current runtime remains
+five agent tools with direct sources and the log-tail-only remote service. The
+older no-server-install/server-companion exclusions, shared cross-profile mapping,
+request-redaction/recoverable-argument rules and five-tool limit below do not govern
+the approved split. No server Gaze, Rama, raw SQL or generic execution is authorized.
 
 ## Problem
 

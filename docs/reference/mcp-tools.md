@@ -1,5 +1,10 @@
 # MCP tools reference
 
+> **Current runtime tools.** The [normative split amendment](./server-client-split.md)
+> authorizes six tools for the next implementation, adding bounded typed `inspect`
+> and routing source execution to the server. The five-tool reference below still
+> describes current runtime, not the approved-next discovery schema.
+
 `gaze-lens` exposes exactly five MCP tools over stdio: `query`, `schema`, `list_tables`, `log_tail`, `log_grep`. The set is locked at v1; adding a tool requires a [SPEC](./spec.md) amendment, not an implementation change. Argument-schema growth under the locked tool list is allowed.
 
 The server is started with [`gaze-lens serve`](./cli.md#serve). For client wiring see [wire-up-mcp-clients.md](../how-to/wire-up-mcp-clients.md).
