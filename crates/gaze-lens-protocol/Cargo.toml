@@ -17,3 +17,9 @@ base64.workspace = true
 
 [lints]
 workspace = true
+
+# Cargo owns protocol linkage; no libtest threads share the allocation meter.
+[[test]]
+name = "allocation_admission"
+path = "tests/support/allocation_probe.rs"
+harness = false
