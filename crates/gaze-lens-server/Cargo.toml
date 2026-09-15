@@ -1,0 +1,16 @@
+[package]
+name = "gaze-lens-server"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+license = "Apache-2.0"
+description = "Development-only phase 1 split scaffold; not a release artifact"
+
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+
+[lints]
+workspace = true
