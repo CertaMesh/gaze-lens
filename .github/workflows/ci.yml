@@ -139,11 +139,22 @@ jobs:
           env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR \
             bash -c 'test -z "${DBUS_SESSION_BUS_ADDRESS:-}" && test -z "${XDG_RUNTIME_DIR:-}"'
 
+      - name: Check release artifact eligibility
+        id: release-eligibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --no-deps --format-version 1 --locked > "$RUNNER_TEMP/dist-metadata.json"
+          eligible=$(jq 'any(.packages[]; .publish != [] and (.metadata.dist.dist != false) and any(.targets[]; .kind | index("bin")))' "$RUNNER_TEMP/dist-metadata.json")
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+
       - name: Install dist 0.31.0
+        if: steps.release-eligibility.outputs.eligible == 'true'
         shell: bash
         run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh"
 
       - name: Stage proposed Linux dist target for proof only
+        if: steps.release-eligibility.outputs.eligible == 'true'
         shell: bash
         env:
           DIST_TARGET: ${{ matrix.target }}
@@ -165,9 +176,11 @@ jobs:
           grep -Fx "\"${DIST_TARGET}\" = [\"gaze-lens\"]" dist-workspace.toml
 
       - name: Dist plan (${{ matrix.target }})
+        if: steps.release-eligibility.outputs.eligible == 'true'
         run: dist plan --target "${{ matrix.target }}" --allow-dirty
 
       - name: Dist local artifact build (${{ matrix.target }})
+        if: steps.release-eligibility.outputs.eligible == 'true'
         run: dist build --artifacts=local --target "${{ matrix.target }}" --allow-dirty
 
       - name: Prepare Linux smoke binary

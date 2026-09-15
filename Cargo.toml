@@ -1,4 +1,22 @@
+# Legacy development assembly only, removed at phase 4 cutover.
+# The extracted client below has no dependency on this package.
+[workspace]
+resolver = "3"
+members = [".", "crates/gaze-lens-protocol", "crates/gaze-lens-server", "crates/gaze-lens"]
+default-members = [".", "crates/gaze-lens-protocol", "crates/gaze-lens-server", "crates/gaze-lens"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+base64 = "0.22"
+gaze-lens-protocol = { path = "crates/gaze-lens-protocol" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
 [package]
+publish = false
 name = "gaze-lens"
 version = "0.5.5"
 edition = "2024"

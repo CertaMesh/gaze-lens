@@ -4,6 +4,7 @@ use crate::errors::LensError;
 use crate::value::LensRow;
 
 pub mod query;
+mod query_dto;
 
 pub use query::{ColumnInfo, TableSchema};
 
