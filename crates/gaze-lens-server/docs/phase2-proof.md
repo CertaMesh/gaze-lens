@@ -13,24 +13,49 @@ Separate unpublished server `serve --config` and `check --config`. The only
 implemented exchange is config-only readiness, over verified TLS in the synthetic
 client fixture. Prepare authenticates a credential digest and exact readiness
 grant, owns copies of the resolved principal/resource objects, and returns the
-v2 binding. Call must preserve ID, operation and binding. The authority file is
-reopened before invoke and release. Revoke, expiry, malformed authority and
-object/generation changes deny. Other operations do not receive Prepared or
-request executable values. No source adapter, source credentials, Gaze, maps,
-manifest, replay, client fallback or inspection collector is added here.
+v2 binding. Call must preserve ID, binding and the operation pinned at Prepare;
+that comparison reads `Pinned::operation`, not a repeated operation literal. The
+authority file is reopened before invoke and release. Revoke, expiry, malformed
+authority and object/generation changes deny. Other operations do not receive
+Prepared or request executable values. No source adapter, source credentials,
+Gaze, maps, manifest, replay, client fallback or inspection collector is here.
 
 Resource class is a placeholder for the forthcoming source descriptor. Readiness
 here establishes only that placeholder and its exact grant in configuration.
 It does not establish source connectivity, usability or complete server setup.
 
-Four active connections globally, two per principal, no waiting queue. TLS and
-frame I/O have 10-second deadlines inside one 30-second connection deadline.
-Frames use phase 1 admission buffers. Local config/certificate/key/authority files
-are capped at 64 KiB each before parsing; on Unix opened files must be regular,
-private (no group/other permissions), and match the inspected device/inode.
-Non-Unix permission validation is deliberately unavailable pending an ACL proof.
-Config files must be in trusted operator-controlled directories. No logging
-subscriber or TLS key logger is installed. Errors contain only protocol codes.
+Four active connections globally, two per principal, no waiting queue. TLS is
+1.3 only. TLS and frame I/O have 10-second deadlines inside one 30-second
+connection deadline; a deadline closes the connection without a Failure frame.
+Frames use phase 1 admission buffers. A failed `accept` is classified rather
+than fatal: a rejected peer retries at once, an exhausted resource pauses 100ms,
+and only an unusable descriptor or 64 consecutive resource failures ends the
+service.
+
+One private-file reader admits every trusted operator file - configuration,
+certificate, private key, authority and identity history. Each is capped at
+64 KiB before parsing, and on Unix must be a regular file (settled on the link,
+so a FIFO never reaches `open`), with no group or other permission bits, owned
+by the process euid, matching the inspected device/inode, in a directory that is
+itself a real directory with the same privacy and ownership. The history `.lock`
+is created with `create_new` or reopened under the same checks. Non-Unix
+permission validation is deliberately unavailable pending an ACL proof. No
+logging subscriber or TLS key logger is installed; errors contain only protocol
+codes; the PEM key text is zeroized after the TLS acceptor is built.
+
+### Operator file handling
+
+- **Apply authority-file edits by atomic rename.** Write the new file beside the
+  old one, `0600`, in the same `0700` directory, then `rename(2)` it into place.
+  The server rereads the authority before invoke and before release, so an
+  in-place edit can be read half-written and will simply deny.
+- **Credentials must be 256 bits of randomness, rendered as 64 lowercase hex
+  characters** - for example `head -c 32 /dev/urandom | xxd -p -c 32`. The
+  authority file stores only their SHA-256. A hex-encoded passphrase has the
+  entropy of the passphrase, not of its 64 characters, and the digest is
+  unsalted and fast; the length check is a shape check, never a strength check.
+- Config, certificate, key, authority and history must all live in trusted
+  operator-controlled `0700` directories owned by the server's user.
 
 ## Acquisition feasibility, locked SQLx 0.8.6
 
@@ -136,12 +161,17 @@ external service or new platform claim has been enabled in this change.
   SELECT/WHERE/ORDER grants, native per-IN normalization and read-only-role proof
   are absent. Readiness permission never implies those operations.
 - **H, partial:** exact readiness grants, expiry, revocation, malformed authority,
-  changed Call/resource binding, fixed principal-limit rejection, wrong
-  certificate identity and durable
-  restart/remap/retirement/history failure have synthetic tests. Per-driver measured peak
+  changed Call binding, a Call for an operation the pin never authorized, fixed
+  principal-limit rejection, global-limit saturation and release, handshake and
+  frame deadlines closing without a Failure frame, an oversized Prepare frame,
+  accept-error classification, private-file rejection (group-readable,
+  symlinked, FIFO, shared parent) and durable restart/remap/retirement/history
+  failure have synthetic tests. The certificate test proves client-side
+  server-name validation only; there are no client certificates in this slice,
+  so no server-side identity assertion is claimed. Per-driver measured peak
   memory, huge cells/schema/buffer acquisition, native cancellation and pool
-  cleanup remain blocked/unproved. Full admission/deadline/adversarial TLS proof
-  also remains incomplete.
+  cleanup remain blocked/unproved. Adversarial TLS proof remains incomplete, as
+  does a foreign-owner file fixture, which needs a second uid.
 
 ## Durable identity history
 
@@ -153,15 +183,26 @@ Keep this file and its adjacent `.lock` path at the same trusted location across
 restarts. Do not delete, edit, reset or restore an older history, including during
 binary rollback. Copy the complete current registry when deliberately relocating
 it. The trusted operator/filesystem can defeat history by replacing it, just as
-it can replace server credentials; no disk-rollback attestation is claimed.
+it can replace server credentials; no disk-rollback attestation is claimed. Like
+the authority file, a deliberate relocation or replacement must land by atomic
+rename; the server's own writes already use a `0600` temporary plus file and
+directory fsync.
 
 `serve` holds an exclusive nonwaiting file lock for its lifetime, validates the
 entire proposed principal/resource set against history, and atomically replaces
 changed history using a `0600` temporary file, file fsync and directory fsync
 before accepting connections. `check` validates the proposed transition without
 writing or enrolling anything. Missing, malformed, oversized or locked history
-does not silently reset. Registry capacity is 64 KiB / 1,024 entries, whichever
-is reached first; exhaustion fails closed. No historical record is pruned.
+does not silently reset.
+
+**The operative registry limit is 64 KiB of serialized JSON.** A 1,024-entry
+count cap also exists but is never the limit that binds: an entry is 216 bytes
+at the current shape, so the byte ceiling is reached at about 300 entries -
+roughly two full rotations of the 128-principal maximum. Exhaustion fails closed
+with `cap_exceeded` and writes nothing; the file on disk is unchanged after a
+refused enrollment, and no historical record is ever pruned to make room. An
+operator approaching that ceiling must plan a reviewed registry migration, not a
+reset.
 
 Each entry retains the opaque identity, its never-reused generation, a SHA-256
 fingerprint of the complete current serialized object, and active/retired state.
@@ -188,13 +229,24 @@ Call is accepted by this slice.
 ## Review cleanup fields
 
 - Verdict: implement.
-- Opportunity: one connection-owned `Pinned` object, scoped principal permit and bounded durable identity history.
-- Why: authority checks compare the originally resolved objects; they cannot
-  silently replace them by alias. Permit drop removes active counts on exit.
-- Scope: new server auth/service modules only. Driver containment and resolved source objects remain incomplete phase work.
-  The accept loop delegates the connection exchange to keep lifecycle ownership clear.
-- Validation: targeted authority/TLS readiness tests and server clippy; ordinary
-  legacy workspace checks are separately reported with actual outcomes.
+- Opportunity: one connection-owned `Pinned` object that also owns the
+  authorized operation, one shared private-file reader for every trusted
+  operator file, a classified accept outcome, and bounded durable identity
+  history.
+- Why: authority checks compare the originally resolved objects and cannot
+  silently replace them by alias; the pinned operation removes three duplicated
+  `Operation::Readiness` literals; one reader removes two divergent copies of
+  the file checks, so the authority file can no longer be admitted under weaker
+  rules than the history; the accept classification removes the "any error ends
+  the process" branch. Permit drop removes active counts on exit.
+- Scope: extracted server auth/config/history/service modules and their tests
+  only. Driver containment and resolved source objects remain incomplete phase
+  work. The accept loop still delegates the connection exchange to keep
+  lifecycle ownership clear.
+- Validation: server unit and integration tests (authority, CLI surface,
+  private files, durable history, real synthetic TLS exchanges), workspace
+  clippy with `-D warnings`, `cargo fmt --check`, `cargo test --all-targets`
+  and `git diff --check`; outcomes are reported in the PR.
 
 ## Verification commands
 
@@ -209,9 +261,10 @@ cargo tree -p gaze-lens-server --all-features --edges normal
 cargo tree -p gaze-lens-protocol --all-features --edges normal
 ```
 
-The 18 server cases cover authority, exact CLI command surface, durable history
-and real synthetic TLS exchanges. The readiness fixture asserts that `check`
-does not enroll or modify history. The ordinary suite retains the standalone
+The 31 server cases cover authority, exact CLI command surface, private-file
+admission, durable history, accept-error classification, deadline closure and
+real synthetic TLS exchanges. The readiness fixture asserts that `check` does
+not enroll or modify history. The ordinary suite retains the standalone
 allocation-admission probe under Cargo's existing `harness = false` linkage.
 Normal pre-push hooks remain enabled. Logs and exact final outcomes belong to
 the PR/delivery, not a claim that unimplemented driver gates have passed.
