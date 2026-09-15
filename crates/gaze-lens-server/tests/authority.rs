@@ -55,3 +55,18 @@ fn exact_grant_and_pinned_binding_are_required() {
         Err(Error::Unauthorized)
     );
 }
+#[test]
+fn a_resource_may_not_reuse_a_principal_identity() {
+    // Principals and resources share one nonoverlapping ID namespace, so
+    // `identities` may treat every enrolled ID as distinct and history may
+    // compare the flattened set for equality. A collision must deny at parse,
+    // before any of that runs, rather than at the first History comparison.
+    let collided = state().replace(&"3".repeat(32), &"1".repeat(32));
+    assert!(matches!(
+        Authority::parse(collided.as_bytes()),
+        Err(Error::Unauthorized)
+    ));
+    // The same file with the namespaces kept apart is accepted, so the test
+    // cannot be satisfied by an unrelated parse failure.
+    assert!(Authority::parse(state().as_bytes()).is_ok());
+}
