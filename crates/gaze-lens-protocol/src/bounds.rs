@@ -1,6 +1,6 @@
 //! Admission checks run before materializing DTOs. No I/O or source execution.
 use crate::{Error, Result};
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
 
 pub const FRAME_BYTES: usize = 1_048_576;
 pub const PREPARE_BYTES: usize = 4096;
@@ -94,27 +94,26 @@ pub fn serialized_size<T: serde::Serialize>(value: &T, max: usize) -> Result<usi
 /// Validate exact JSON, including duplicate decoded keys, before DTO allocation.
 /// The scanner retains only bounded object keys. Number lexemes never visit f64.
 pub fn json(bytes: &[u8], max: usize) -> Result<()> {
-    cap(bytes.len(), max)?;
-    let mut scan = Scanner {
-        bytes,
-        at: 0,
-        nodes: 0,
-        scalar_max: SCALAR_BYTES * 2,
-    };
-    scan.value(1)?;
-    scan.space();
-    require(scan.at == bytes.len())
+    scan_json(bytes, max, false, SCALAR_BYTES * 2)
 }
-/// JSON source values use the tighter source-scalar ceiling.
+pub(crate) fn frame_json(bytes: &[u8], max: usize) -> Result<()> {
+    scan_json(bytes, max, true, SCALAR_BYTES)
+}
+/// JSON source values use the source-scalar ceiling.
 pub fn source_json(bytes: &[u8]) -> Result<()> {
-    cap(bytes.len(), RESULT_BYTES)?;
+    scan_json(bytes, RESULT_BYTES, false, SCALAR_BYTES)
+}
+fn scan_json(bytes: &[u8], max: usize, frame: bool, scalar_max: usize) -> Result<()> {
+    cap(bytes.len(), max)?;
+    std::str::from_utf8(bytes).map_err(|_| Error::InvalidRequest)?;
     let mut scan = Scanner {
         bytes,
         at: 0,
         nodes: 0,
-        scalar_max: SCALAR_BYTES,
+        frame,
+        scalar_max,
     };
-    scan.value(1)?;
+    scan.value(1, false, scalar_max)?;
     scan.space();
     require(scan.at == bytes.len())
 }
@@ -122,9 +121,10 @@ struct Scanner<'a> {
     bytes: &'a [u8],
     at: usize,
     nodes: usize,
+    frame: bool,
     scalar_max: usize,
 }
-impl Scanner<'_> {
+impl<'a> Scanner<'a> {
     fn space(&mut self) {
         while self
             .bytes
@@ -138,28 +138,66 @@ impl Scanner<'_> {
         self.nodes += 1;
         cap(self.nodes, MAX_NODES)
     }
-    fn string(&mut self) -> Result<String> {
+    fn hex_quad(&mut self) -> Result<u32> {
+        let mut value = 0;
+        for _ in 0..4 {
+            let b = *self.bytes.get(self.at).ok_or(Error::InvalidRequest)?;
+            self.at += 1;
+            value = value * 16
+                + match b {
+                    b'0'..=b'9' => u32::from(b - b'0'),
+                    b'a'..=b'f' => u32::from(b - b'a' + 10),
+                    b'A'..=b'F' => u32::from(b - b'A' + 10),
+                    _ => return Err(Error::InvalidRequest),
+                };
+        }
+        Ok(value)
+    }
+    // Validate and count decoded UTF-8 bytes without scalar ownership or a
+    // serde scratch buffer. Only duplicate-key tracking later owns escaped keys.
+    fn string(&mut self, max: usize, opaque: bool) -> Result<&'a [u8]> {
         let start = self.at;
         require(self.bytes.get(self.at) == Some(&b'"'))?;
         self.at += 1;
+        let mut decoded = 0;
         loop {
             let b = *self.bytes.get(self.at).ok_or(Error::InvalidRequest)?;
             self.at += 1;
-            if b == b'"' {
-                break;
+            let (len, ascii) = match b {
+                b'"' => break,
+                0..=31 => return Err(Error::InvalidRequest),
+                b'\\' => {
+                    let escape = *self.bytes.get(self.at).ok_or(Error::InvalidRequest)?;
+                    self.at += 1;
+                    match escape {
+                        b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => (1, 0),
+                        b'u' => {
+                            let mut cp = self.hex_quad()?;
+                            if (0xd800..=0xdbff).contains(&cp) {
+                                require(self.bytes.get(self.at..self.at + 2) == Some(b"\\u"))?;
+                                self.at += 2;
+                                let low = self.hex_quad()?;
+                                require((0xdc00..=0xdfff).contains(&low))?;
+                                cp = 0x10000 + ((cp - 0xd800) << 10) + low - 0xdc00;
+                            }
+                            let ch = char::from_u32(cp).ok_or(Error::InvalidRequest)?;
+                            (ch.len_utf8(), if ch.is_ascii() { cp as u8 } else { 0 })
+                        }
+                        _ => return Err(Error::InvalidRequest),
+                    }
+                }
+                _ => (1, b), // Whole input UTF-8 was validated before scanning.
+            };
+            decoded += len;
+            cap(decoded, max)?;
+            if opaque {
+                require(ascii.is_ascii_digit() || (b'a'..=b'f').contains(&ascii))?;
             }
-            if b == b'\\' {
-                self.at += 1;
-            }
-            // An escaped scalar is at most six bytes per decoded byte.
-            cap(self.at - start, self.scalar_max * 6 + 2)?;
         }
-        let s: String = serde_json::from_slice(&self.bytes[start..self.at])
-            .map_err(|_| Error::InvalidRequest)?;
-        cap(s.len(), self.scalar_max)?;
-        Ok(s)
+        require(!opaque || decoded == 32)?;
+        Ok(&self.bytes[start..self.at])
     }
-    fn value(&mut self, depth: usize) -> Result<()> {
+    fn value(&mut self, depth: usize, binding: bool, scalar_max: usize) -> Result<()> {
         cap(depth, MAX_DEPTH)?;
         self.node()?;
         self.space();
@@ -170,28 +208,69 @@ impl Scanner<'_> {
             .ok_or(Error::InvalidRequest)?
         {
             b'"' => {
-                self.string()?;
+                self.string(scalar_max, binding)?;
             }
             b'{' | b'[' => {
                 let object = self.bytes[self.at] == b'{';
                 let end = if object { b'}' } else { b']' };
                 self.at += 1;
                 self.space();
+                // At most MAX_NODES entries across live sets. Unescaped keys
+                // borrow input; total owned decoded key bytes cannot exceed input
+                // bytes. One serde decoding scratch buffer is <= 2*SCALAR_BYTES.
                 let mut keys = BTreeSet::new();
                 if self.bytes.get(self.at) == Some(&end) {
                     self.at += 1;
                     return Ok(());
                 }
                 loop {
+                    let mut field = Cow::Borrowed("");
                     if object {
                         self.node()?;
                         self.space();
-                        require(keys.insert(self.string()?))?;
+                        let key = self.string(SCALAR_BYTES, false)?;
+                        let key = std::str::from_utf8(key).map_err(|_| Error::InvalidRequest)?;
+                        field = if key.as_bytes().contains(&b'\\') {
+                            Cow::Owned(
+                                serde_json::from_str::<String>(key)
+                                    .map_err(|_| Error::InvalidRequest)?,
+                            )
+                        } else {
+                            Cow::Borrowed(&key[1..key.len() - 1])
+                        };
+                        require(!keys.contains(field.as_ref()))?;
                         self.space();
                         require(self.bytes.get(self.at) == Some(&b':'))?;
                         self.at += 1;
                     }
-                    self.value(depth + 1)?;
+                    self.space();
+                    let start = self.at;
+                    let binding_field = binding && object;
+                    if binding_field {
+                        require(self.bytes.get(self.at) == Some(&b'"'))?;
+                    }
+                    let child_binding = self.frame && depth == 1 && field == "binding";
+                    if child_binding {
+                        require(self.bytes.get(self.at) == Some(&b'{'))?;
+                    }
+                    let scalar_max = if binding_field {
+                        32
+                    } else if self.frame && field == "base64" {
+                        SCALAR_BYTES * 2
+                    } else {
+                        self.scalar_max
+                    };
+                    self.value(depth + 1, binding_field || child_binding, scalar_max)?;
+                    if self.frame && depth == 1 {
+                        match field.as_ref() {
+                            "args" => cap(self.at - start, REQUEST_BYTES)?,
+                            "result" => cap(self.at - start, RESULT_BYTES)?,
+                            _ => (),
+                        }
+                    }
+                    if object {
+                        keys.insert(field);
+                    }
                     self.space();
                     match self.bytes.get(self.at) {
                         Some(b',') => self.at += 1,

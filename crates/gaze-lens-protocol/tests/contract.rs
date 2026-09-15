@@ -410,7 +410,6 @@ fn fixed_keyword_window_never_accepts_terms_level_or_limit() {
         json!(["rows"]),
         json!(["bytes", "bytes"]),
         json!(["boundary", "bytes"]),
-        json!(["scan_bytes"]),
     ] {
         let mut r = r.clone();
         r["truncated"] = reasons;

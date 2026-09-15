@@ -49,15 +49,23 @@ macro_rules! closed_object {
         $vis struct $name { $($(#[$field_attr])* $field_vis $field: $ty),* }
         impl<'de> serde::Deserialize<'de> for $name {
             fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-                let raw = <Box<serde_json::value::RawValue> as serde::Deserialize>::deserialize(d)?;
-                if !raw.get().starts_with('{') {
-                    return Err(serde::de::Error::custom("invalid_request"));
-                }
                 #[derive(serde::Deserialize)]
                 #[serde(deny_unknown_fields)]
                 struct Fields { $($(#[$field_attr])* $field: $ty),* }
-                let Fields { $($field),* } = serde_json::from_str(raw.get()).map_err(|_| serde::de::Error::custom("invalid_request"))?;
-                Ok(Self { $($field),* })
+                struct Object;
+                impl<'de> serde::de::Visitor<'de> for Object {
+                    type Value = $name;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str("protocol object")
+                    }
+                    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> std::result::Result<$name, A::Error> {
+                        let Fields { $($field),* } = <Fields as serde::Deserialize>::deserialize(
+                            serde::de::value::MapAccessDeserializer::new(map)
+                        )?;
+                        Ok($name { $($field),* })
+                    }
+                }
+                d.deserialize_map(Object)
             }
         }
     };

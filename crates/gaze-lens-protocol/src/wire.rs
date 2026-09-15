@@ -110,23 +110,25 @@ pub struct Failure {
     pub code: Error,
 }
 }
-crate::closed_object! {
-struct RawCall {
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCall<'a> {
     version: Version,
     id: String,
     operation: Operation,
     binding: DestinationBinding,
-    args: Box<RawValue>,
+    #[serde(borrow)]
+    args: &'a RawValue,
 }
-}
-crate::closed_object! {
-struct RawSuccess {
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSuccess<'a> {
     version: Version,
     id: String,
     operation: Operation,
     binding: DestinationBinding,
-    result: Box<RawValue>,
-}
+    #[serde(borrow)]
+    result: &'a RawValue,
 }
 
 pub struct Call {
@@ -251,20 +253,22 @@ impl Args {
     }
     fn raw(&self) -> Result<Box<RawValue>> {
         match self {
-            Self::Query(v) => raw(v),
-            Self::Schema(v) => raw(v),
-            Self::ListTables(v) | Self::LogWindow(v) | Self::Readiness(v) => raw(v),
-            Self::LogTail(v) => raw(v),
-            Self::LogRegex(v) => raw(v),
-            Self::Inspect(v) => raw(v),
+            Self::Query(v) => raw(v, bounds::REQUEST_BYTES),
+            Self::Schema(v) => raw(v, bounds::REQUEST_BYTES),
+            Self::ListTables(v) | Self::LogWindow(v) | Self::Readiness(v) => {
+                raw(v, bounds::REQUEST_BYTES)
+            }
+            Self::LogTail(v) => raw(v, bounds::REQUEST_BYTES),
+            Self::LogRegex(v) => raw(v, bounds::REQUEST_BYTES),
+            Self::Inspect(v) => raw(v, bounds::REQUEST_BYTES),
         }
     }
 }
-fn raw<T: Serialize>(v: &T) -> Result<Box<RawValue>> {
-    bounds::serialized_size(v, bounds::FRAME_BYTES)?;
+fn raw<T: Serialize>(v: &T, max: usize) -> Result<Box<RawValue>> {
+    bounds::serialized_size(v, max)?;
     serde_json::value::to_raw_value(v).map_err(|_| Error::InvalidRequest)
 }
-fn parse<T: serde::de::DeserializeOwned>(s: &str) -> Result<T> {
+fn parse<'a, T: Deserialize<'a>>(s: &'a str) -> Result<T> {
     serde_json::from_str(s).map_err(|_| Error::InvalidRequest)
 }
 fn args(op: Operation, s: &str) -> Result<Args> {
@@ -588,8 +592,8 @@ fn log_window(w: &Window, lines: &[String], truncated: &[Reason]) -> Result<()> 
             Reason::Boundary,
         ],
     )?;
-    require(!truncated.contains(&Reason::ScanBytes) || w.scanned_bytes == bounds::SCAN_BYTES)?;
-    require(!truncated.contains(&Reason::ScanLines) || w.scanned_lines == bounds::SCAN_LINES)
+    // Effective acquisition ceilings belong to trusted source policy, not this DTO.
+    Ok(())
 }
 impl ResultBody {
     pub fn validate_for(&self, args: &Args) -> Result<()> {
@@ -822,7 +826,7 @@ fn frame(bytes: &[u8], max: usize) -> Result<&str> {
     cap(bytes.len(), max)?;
     require(bytes.last() == Some(&b'\n') && !bytes[..bytes.len() - 1].contains(&b'\n'))?;
     let body = &bytes[..bytes.len() - 1];
-    bounds::json(body, max - 1)?;
+    bounds::frame_json(body, max - 1)?;
     require(body.first() == Some(&b'{') && body.last() == Some(&b'}'))?;
     std::str::from_utf8(body).map_err(|_| Error::InvalidRequest)
 }
@@ -879,7 +883,7 @@ pub fn encode_call(c: &Call) -> Result<Vec<u8>> {
         id: c.id.clone(),
         operation: c.args.operation(),
         binding: c.binding.clone(),
-        args: a,
+        args: &a,
     };
     let out = encode(&raw, bounds::FRAME_BYTES)?;
     decode_call(&out)?;
@@ -905,12 +909,13 @@ pub fn decode_success(bytes: &[u8], call: &Call) -> Result<Success> {
 }
 pub fn encode_success(s: &Success, call: &Call) -> Result<Vec<u8>> {
     s.result.validate_for(&call.args)?;
+    let result = raw(&s.result, bounds::RESULT_BYTES)?;
     let raw = RawSuccess {
         version: Version::V2,
         id: s.id.clone(),
         operation: s.operation,
         binding: s.binding.clone(),
-        result: raw(&s.result)?,
+        result: &result,
     };
     let out = encode(&raw, bounds::FRAME_BYTES)?;
     decode_success(&out, call)?;

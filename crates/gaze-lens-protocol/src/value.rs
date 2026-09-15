@@ -11,13 +11,38 @@ impl ExactJson {
     pub fn parse(bytes: &str) -> Result<Self> {
         bounds::source_json(bytes.as_bytes())?;
         Ok(Self(
-            RawValue::from_string(bytes.to_owned()).map_err(|_| Error::InvalidRequest)?,
+            RawValue::from_string(compact_json(bytes)?).map_err(|_| Error::InvalidRequest)?,
         ))
     }
     pub fn as_str(&self) -> &str {
         self.0.get()
     }
 }
+// Input is already validated. Copy every byte inside strings verbatim, including
+// escapes; only the four insignificant JSON whitespace bytes can be removed.
+fn compact_json(s: &str) -> Result<String> {
+    let mut out = String::new();
+    out.try_reserve_exact(s.len())
+        .map_err(|_| Error::CapExceeded)?;
+    let (mut quoted, mut escaped) = (false, false);
+    for c in s.chars() {
+        if quoted {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                quoted = false;
+            }
+        } else if !matches!(c, ' ' | '\t' | '\r' | '\n') {
+            out.push(c);
+            quoted = c == '"';
+        }
+    }
+    Ok(out)
+}
+
 impl Serialize for ExactJson {
     fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         self.0.serialize(s)
@@ -25,9 +50,8 @@ impl Serialize for ExactJson {
 }
 impl<'de> Deserialize<'de> for ExactJson {
     fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        let raw = Box::<RawValue>::deserialize(d)?;
-        bounds::source_json(raw.get().as_bytes()).map_err(serde::de::Error::custom)?;
-        Ok(Self(raw))
+        let raw = <&RawValue>::deserialize(d)?;
+        Self::parse(raw.get()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -85,7 +109,7 @@ struct Tag {
 }
 impl<'de> Deserialize<'de> for Value {
     fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        let raw = Box::<RawValue>::deserialize(d)?;
+        let raw = <&RawValue>::deserialize(d)?;
         decode(raw.get()).map_err(serde::de::Error::custom)
     }
 }
@@ -332,6 +356,8 @@ pub fn validate_datetime(semantic: Semantic, s: &str) -> Result<()> {
                         && time(t)
                         && matches!(z.as_bytes()[0], b'+' | b'-')
                         && z.as_bytes()[3] == b':'
+                        && z[1..3].bytes().all(|b| b.is_ascii_digit())
+                        && z[4..].bytes().all(|b| b.is_ascii_digit())
                         && z[1..3].parse::<u8>().is_ok_and(|n| n < 24)
                         && z[4..].parse::<u8>().is_ok_and(|n| n < 60)
                         && z != "-00:00"
