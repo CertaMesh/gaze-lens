@@ -1,5 +1,5 @@
 //! Durable identity enrollment; grants are deliberately outside this history.
-use crate::{auth::Authority, private};
+use crate::{auth::Authority, hex, private};
 use gaze_lens_protocol::{Error, Result, bounds};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -134,7 +134,9 @@ impl Ledger {
                 changed = true;
             }
         }
-        bounds::serialized_size(self, 65536)?;
+        // The 64 KiB serialized ceiling, not the 1,024-entry count cap, is the
+        // limit that binds first; see docs/phase2-proof.md.
+        bounds::serialized_size(self, private::FILE_BYTES)?;
         Ok(changed)
     }
 }
@@ -180,9 +182,4 @@ fn persist(path: &Path, ledger: &Ledger) -> Result<()> {
     File::open(directory)
         .and_then(|f| f.sync_all())
         .map_err(|_| Error::Unavailable)
-}
-fn hex(s: &str, n: usize) -> bool {
-    s.len() == n
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }

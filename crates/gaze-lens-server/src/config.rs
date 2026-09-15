@@ -53,7 +53,8 @@ pub async fn check(path: &Path) -> Result<Checked> {
     let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
-    .with_safe_default_protocol_versions()
+    // TLS 1.3 only: the private protocol has no legacy peer to accommodate.
+    .with_protocol_versions(&[&rustls::version::TLS13])
     .map_err(|_| Error::InvalidRequest)?
     .with_no_client_auth()
     .with_single_cert(certs, key)

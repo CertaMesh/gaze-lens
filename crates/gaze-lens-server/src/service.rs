@@ -14,7 +14,7 @@ use gaze_lens_protocol::{
 use std::{
     collections::HashMap,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -256,7 +256,10 @@ struct PrincipalPermit {
 impl PrincipalPermit {
     fn acquire(active: Arc<Mutex<HashMap<String, usize>>>, id: String) -> Result<Self> {
         {
-            let mut counts = active.lock().map_err(|_| Error::InternalFailure)?;
+            // A panic elsewhere must not permanently close admission; the
+            // counts behind the lock are plain integers with no invariant that
+            // a partial update could break.
+            let mut counts = active.lock().unwrap_or_else(PoisonError::into_inner);
             let count = counts.entry(id.clone()).or_default();
             if *count >= bounds::MAX_PRINCIPAL_CALLS {
                 return Err(Error::Unavailable);
@@ -268,9 +271,8 @@ impl PrincipalPermit {
 }
 impl Drop for PrincipalPermit {
     fn drop(&mut self) {
-        if let Ok(mut counts) = self.active.lock()
-            && let Some(count) = counts.get_mut(&self.id)
-        {
+        let mut counts = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = counts.get_mut(&self.id) {
             *count -= 1;
             if *count == 0 {
                 counts.remove(&self.id);

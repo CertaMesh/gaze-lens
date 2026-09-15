@@ -1,4 +1,5 @@
 //! Connection-pinned authority. No source values or credentials are printable.
+use crate::hex;
 use gaze_lens_protocol::{
     Error, Result, bounds,
     wire::{DestinationBinding, Operation, Prepare},
@@ -82,8 +83,11 @@ impl Authority {
         }
         for (i, r) in value.resources.iter().enumerate() {
             bounds::configured_id(&r.alias)?;
+            // Principal and resource IDs share one nonoverlapping namespace;
+            // `identities` may then rely on every enrolled ID being distinct.
             if !hex(&r.id, 32)
                 || !hex(&r.generation, 32)
+                || value.principals.iter().any(|p| p.id == r.id)
                 || value.resources[..i]
                     .iter()
                     .any(|x| x.id == r.id || x.alias == r.alias)
@@ -124,19 +128,25 @@ impl Authority {
                 fingerprint: fingerprint(r)?,
             });
         }
+        // Sorted so an unchanged definition set compares equal across restarts.
         identities.sort_by(|a, b| a.id.cmp(&b.id));
-        if identities.windows(2).any(|p| p[0].id == p[1].id) {
-            return Err(Error::Unauthorized);
-        }
         Ok(identities)
     }
+    /// `p` arrives from `decode_prepare`, which already validated its shape.
     pub fn prepare(&self, p: &Prepare, now: u64) -> Result<Pinned> {
-        gaze_lens_protocol::wire::encode_prepare(p)?;
         let digest = format!("{:x}", Sha256::digest(p.credential.as_bytes()));
+        // Folded rather than found: the comparison count does not depend on
+        // where the matching principal sits in the file.
         let principal = self
             .principals
             .iter()
-            .find(|x| bool::from(x.sha256.as_bytes().ct_eq(digest.as_bytes())))
+            .fold(None, |found, x| {
+                if bool::from(x.sha256.as_bytes().ct_eq(digest.as_bytes())) {
+                    Some(x)
+                } else {
+                    found
+                }
+            })
             .ok_or(Error::Unauthorized)?;
         let resource = self
             .resources
@@ -157,6 +167,8 @@ impl Authority {
         })
     }
     pub fn revalidate(&self, pin: &Pinned, now: u64) -> Result<()> {
+        // Defense in depth behind `History::validate`, which has already
+        // refused any identity-definition change for a running server.
         if !self.principals.iter().any(|p| p == &pin.principal)
             || !self.resources.iter().any(|r| r == &pin.resource)
         {
@@ -178,12 +190,6 @@ impl Authority {
         }
     }
 }
-fn hex(s: &str, n: usize) -> bool {
-    s.len() == n
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
 fn fingerprint<T: Serialize>(value: &T) -> Result<String> {
     let bytes = serde_json::to_vec(value).map_err(|_| Error::InternalFailure)?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
