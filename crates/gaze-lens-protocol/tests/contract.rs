@@ -664,3 +664,11 @@ fn positional_arrays_never_substitute_for_closed_objects() {
     );
     assert!(decode_success(&success(&c,json!({"kind":"inspection","view":"host","collector":"linux","status":"ok","evidence":"os_release","records":[["linux",null,"arm64"]],"page":null,"truncated":[]})),&c).is_err());
 }
+
+#[test]
+fn extra_bytes_poison_a_completed_frame_before_finish() {
+    let mut buffer = bounds::FrameBuffer::new(32).unwrap();
+    assert!(buffer.push(b"{}\n").unwrap());
+    assert!(buffer.push(b"{}\n").is_err());
+    assert!(buffer.finish().is_err());
+}

@@ -276,7 +276,10 @@ impl FrameBuffer {
         })
     }
     pub fn push(&mut self, chunk: &[u8]) -> Result<bool> {
-        require(!self.finished && !self.failed)?;
+        if self.finished || self.failed {
+            self.failed = true;
+            return Err(Error::InvalidRequest);
+        }
         self.failed = true;
         let size = self
             .bytes
